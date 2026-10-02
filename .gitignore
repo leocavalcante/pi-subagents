@@ -2,3 +2,19 @@ node_modules/
 *.tgz
 .env
 .env.*
+
+# Machine-local Pi state, credentials, keys, and execution logs.
+.pi/
+.npmrc
+.netrc
+**/auth.json
+**/credentials*.json
+**/*service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.jsonl
+*.log

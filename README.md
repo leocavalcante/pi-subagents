@@ -8,7 +8,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 
 Requires Pi. Tested with Pi 1.0.0. Pi provides the runtime dependencies, so no build step is needed.
 
-Once this repository is published on GitHub:
+Install from GitHub:
 
 ```sh
 pi install git:github.com/leocavalcante/pi-subagents
