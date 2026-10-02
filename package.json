@@ -1,0 +1,41 @@
+{
+	"name": "pi-subagents",
+	"version": "0.1.0",
+	"description": "Delegate tasks to isolated Pi agents, singly, in parallel, or in a chain.",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/leocavalcante/pi-subagents.git"
+	},
+	"keywords": [
+		"pi-package",
+		"pi",
+		"subagents"
+	],
+	"files": [
+		"index.ts",
+		"agents.ts",
+		"jobs.ts",
+		"LICENSE",
+		"README.md"
+	],
+	"scripts": {
+		"test": "node --test tests/*.test.mjs"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	}
+}

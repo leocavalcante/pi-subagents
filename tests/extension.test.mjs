@@ -1,0 +1,249 @@
+import assert from 'node:assert/strict';
+import { after, afterEach, beforeEach, test } from 'node:test';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { loadExtensions } from './pi-runtime.mjs';
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
+const traceFile = join(sandbox, 'trace.jsonl');
+const oldArgv = process.argv[1];
+const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+process.argv[1] = join(root, 'tests/fixtures/fake-pi.mjs');
+process.env.PI_CODING_AGENT_DIR = join(sandbox, 'agent');
+process.env.SUBAGENT_TEST_TRACE = traceFile;
+mkdirSync(join(sandbox, 'agent/agents'), { recursive: true });
+writeFileSync(join(sandbox, 'agent/agents/worker.md'), '---\nname: worker\ndescription: Test worker\n---\nTest-only instructions.\n');
+writeFileSync(join(sandbox, 'agent/agents/pinned.md'), '---\nname: pinned\ndescription: Pinned worker\nmodel: fake/pinned:high\ntools: [read, bash]\n---\nPinned instructions.\n');
+mkdirSync(join(sandbox, 'project/.pi/agents'), { recursive: true });
+writeFileSync(join(sandbox, 'project/.pi/agents/project.md'), '---\nname: project\ndescription: Project worker\n---\nProject instructions.\n');
+
+let extension, tools, messages;
+const ctx = () => ({ cwd: sandbox, mode: 'rpc', hasUI: false, model: { provider: 'fake', id: 'parent' }, thinkingLevel: 'high' });
+const invoke = (name, params, context = ctx(), signal) => tools.get(name).definition.execute('test-call', params, signal, undefined, context);
+const launch = async params => (await invoke('subagent', { background: true, agent: 'worker', task: 'delay=150', ...params })).details.background.id;
+const status = async id => (await invoke('subagent_jobs', { action: 'status', jobId: id })).details;
+const traces = () => readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+const waitFor = async predicate => {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) { const result = await predicate(); if (result) return result; await sleep(10); }
+  throw new Error('Timed out waiting for test condition');
+};
+const finish = id => waitFor(async () => { const job = await status(id); return job.finishedAt ? job : undefined; });
+const shutdown = async () => {
+  for (const handler of extension.handlers.get('session_shutdown') ?? []) await handler({ type: 'session_shutdown', reason: 'reload' }, ctx());
+};
+
+beforeEach(async () => {
+  writeFileSync(traceFile, '');
+  messages = [];
+  const loaded = await loadExtensions([join(root, 'index.ts')], sandbox);
+  assert.deepEqual(loaded.errors, []);
+  loaded.runtime.sendMessage = (message, options) => messages.push({ message, options });
+  extension = loaded.extensions[0];
+  tools = extension.tools;
+});
+afterEach(async () => {
+  await shutdown();
+  for (const entry of traces()) if (entry.promptFile) assert.equal(existsSync(entry.promptFile), false, 'Temporary prompts must be removed');
+});
+after(() => {
+  process.argv[1] = oldArgv;
+  if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  delete process.env.SUBAGENT_TEST_TRACE;
+  rmSync(sandbox, { recursive: true, force: true });
+});
+
+test('background returns before completion, retains progress, and sends a follow-up', async () => {
+  const started = Date.now();
+  const id = await launch({ task: 'delay=400 main' });
+  assert.ok(Date.now() - started < 300);
+  assert.equal((await status(id)).state, 'running');
+  assert.equal(messages.length, 0);
+  await waitFor(async () => (await status(id)).latest);
+  assert.match((await status(id)).latest.content[0].text, /progress/);
+  const result = await finish(id);
+  assert.equal(result.state, 'completed');
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].message.content, /result: delay=400 main/);
+  assert.deepEqual(messages[0].options, { deliverAs: 'followUp', triggerTurn: true });
+  const child = traces().find(t => t.event === 'start');
+  assert.equal(child.model, 'fake/parent');
+  assert.equal(child.thinking, 'high');
+});
+
+test('background is independent of the launch turn abort signal', async () => {
+  const controller = new AbortController();
+  const started = await invoke('subagent', { background: true, agent: 'worker', task: 'delay=120 independent' }, ctx(), controller.signal);
+  controller.abort();
+  assert.equal((await finish(started.details.background.id)).state, 'completed');
+});
+
+test('foreground still waits and does not create background jobs', async () => {
+  const updates = [];
+  const result = await tools.get('subagent').definition.execute('fg', { agent: 'pinned', task: 'delay=100 foreground' }, undefined, update => updates.push(update), ctx());
+  assert.match(result.content[0].text, /result:/);
+  assert.ok(updates.length > 0);
+  assert.equal(messages.length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).details.jobs.length, 0);
+  const child = traces().find(t => t.event === 'start');
+  assert.equal(child.model, 'fake/pinned:high');
+  assert.equal(child.tools, 'read,bash');
+  assert.equal(child.thinking, undefined);
+});
+
+test('single, parallel, and chained failures report failed jobs', async () => {
+  for (const params of [
+    { agent: 'worker', task: 'fail' },
+    { tasks: [{ agent: 'worker', task: 'ok' }, { agent: 'worker', task: 'fail' }] },
+    { chain: [{ agent: 'worker', task: 'fail' }, { agent: 'worker', task: 'must-not-run' }] },
+  ]) {
+    const launched = await invoke('subagent', { background: true, ...params });
+    assert.equal((await finish(launched.details.background.id)).state, 'failed');
+  }
+  assert.equal(traces().some(t => t.task?.includes('must-not-run')), false);
+  assert.equal(messages.length, 3);
+  for (const { message } of messages) {
+    assert.match(message.content, /failed/);
+    assert.match(message.content, /fixture failure/);
+  }
+});
+
+test('background chains substitute previous output and capture working directory', async () => {
+  const started = await invoke('subagent', {
+    background: true,
+    chain: [{ agent: 'worker', task: 'first' }, { agent: 'worker', task: 'second {previous}', cwd: join(sandbox, 'project') }],
+  });
+  assert.equal((await finish(started.details.background.id)).state, 'completed');
+  const children = traces().filter(t => t.event === 'start');
+  assert.equal(children.length, 2);
+  assert.equal(children[1].task, 'second result: first');
+  assert.equal(children[1].cwd, join(sandbox, 'project'));
+});
+
+test('parallel progress does not count running children as completed', async () => {
+  const started = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=500 progress-check' })) });
+  const id = started.details.background.id;
+  await waitFor(async () => (await status(id)).latest);
+  const progress = (await status(id)).latest;
+  assert.match(progress.content[0].text, /Parallel: 0\/4 done, 4 pending/);
+  assert.ok(progress.details.results.every(r => r.exitCode === -1));
+  assert.equal((await finish(id)).state, 'completed');
+});
+
+test('all foreground and background invocations share a four-process budget', async () => {
+  const batch = prefix => Array.from({ length: 6 }, (_, i) => ({ agent: 'worker', task: `delay=100 ${prefix}-${i}` }));
+  const a = await invoke('subagent', { background: true, tasks: batch('a') });
+  const b = await invoke('subagent', { background: true, tasks: batch('b') });
+  const foreground = invoke('subagent', { agent: 'worker', task: 'delay=100 foreground-budget' });
+  await Promise.all([finish(a.details.background.id), finish(b.details.background.id), foreground]);
+  let active = 0, peak = 0;
+  for (const entry of traces()) {
+    if (entry.event === 'start') { active++; peak = Math.max(peak, active); }
+    if (entry.event === 'end') active--;
+  }
+  assert.equal(active, 0);
+  assert.equal(peak, 4);
+  assert.equal(traces().filter(t => t.event === 'start').length, 13);
+});
+
+test('cancel handles running and queued tasks, with SIGKILL escalation', async () => {
+  const started = await invoke('subagent', { background: true, tasks: Array.from({ length: 8 }, () => ({ agent: 'worker', task: 'delay=10000 stubborn' })) });
+  const id = started.details.background.id;
+  await waitFor(() => traces().filter(t => t.event === 'start').length === 4);
+  const cancel = await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  assert.equal(cancel.details.state, 'canceling');
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  const job = await finish(id);
+  assert.equal(job.state, 'canceled');
+  assert.equal(traces().filter(t => t.event === 'start').length, 4);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].message.content, /canceled/);
+  assert.match(messages[0].message.content, /Canceled by request/);
+  const next = await launch({ task: 'after cancellation' });
+  assert.equal((await finish(next)).state, 'completed');
+});
+
+test('POSIX cancellation kills descendants in the child process group', { skip: process.platform === 'win32' }, async () => {
+  const id = await launch({ task: 'delay=10000 stubborn grandchild' });
+  await waitFor(() => traces().some(t => t.event === 'grandchild'));
+  const descendant = traces().find(t => t.event === 'grandchild').pid;
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  assert.equal((await finish(id)).state, 'canceled');
+  await waitFor(() => {
+    try { return /State:\s+Z/.test(readFileSync(`/proc/${descendant}/status`, 'utf8')); }
+    catch { return true; }
+  });
+});
+
+test('cancellation still escalates after the leader exits and descendants ignore stdio', { skip: process.platform !== 'linux' }, async () => {
+  const id = await launch({ task: 'delay=10000 grandchild-ignored' });
+  await waitFor(() => traces().some(t => t.event === 'grandchild'));
+  const descendant = traces().find(t => t.event === 'grandchild').pid;
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  assert.equal((await finish(id)).state, 'canceled');
+  await waitFor(() => {
+    try { return /State:\s+Z/.test(readFileSync(`/proc/${descendant}/status`, 'utf8')); }
+    catch { return true; }
+  });
+});
+
+test('shutdown waits for background cleanup and does not deliver into a new session', async () => {
+  await launch({ task: 'delay=10000 stubborn shutdown' });
+  await waitFor(() => traces().some(t => t.event === 'start'));
+  await shutdown();
+  assert.equal(messages.length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).details.jobs.length, 0);
+});
+
+test('validation and project permission denial happen before launching a job', async () => {
+  for (const params of [
+    {},
+    { agent: 'missing', task: 'x' },
+    { agent: 'worker', task: 'x', tasks: [{ agent: 'worker', task: 'x' }] },
+    { tasks: Array.from({ length: 9 }, () => ({ agent: 'worker', task: 'x' })) },
+  ]) {
+    const result = await invoke('subagent', { background: true, ...params });
+    assert.equal(result.details.background, undefined);
+  }
+  for (const mode of ['print', 'json']) {
+    const rejected = await invoke('subagent', { background: true, agent: 'worker', task: 'x' }, { ...ctx(), mode });
+    assert.equal(rejected.isError, true);
+    assert.match(rejected.content[0].text, /long-lived/);
+  }
+  let confirmations = 0;
+  const denied = await invoke('subagent', { background: true, agent: 'project', task: 'x', agentScope: 'project' }, {
+    ...ctx(), cwd: join(sandbox, 'project'), mode: 'tui', hasUI: true,
+    isProjectTrusted: () => false, ui: { confirm: async () => { confirmations++; return false; } },
+  });
+  assert.match(denied.content[0].text, /not approved/);
+  assert.equal(confirmations, 1);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).details.jobs.length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'status', jobId: 'missing' })).isError, true);
+});
+
+test('spawn errors remain inspectable and release process slots', async () => {
+  const id = await launch({ cwd: join(sandbox, 'does-not-exist') });
+  const failed = await finish(id);
+  assert.equal(failed.state, 'failed');
+  assert.match(failed.latest.content[0].text, /ENOENT/);
+  const good = await launch({ task: 'good after spawn error' });
+  assert.equal((await finish(good)).state, 'completed');
+});
+
+test('background delivery and status cap large output but preserve full details', async () => {
+  const id = await launch({ task: 'large' });
+  const job = await finish(id);
+  assert.equal(job.latest.content[0].text.length, 40000);
+  assert.match(messages[0].message.content, /Output truncated/);
+  assert.ok(Buffer.byteLength(messages[0].message.content) <= 50 * 1024);
+  assert.equal(messages[0].message.content.includes('\uFFFD'), false);
+  const inspected = (await invoke('subagent_jobs', { action: 'status', jobId: id })).content[0].text;
+  assert.match(inspected, /Output truncated/);
+  assert.ok(Buffer.byteLength(inspected) <= 50 * 1024);
+});
