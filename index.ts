@@ -188,7 +188,7 @@ interface SubagentDetails {
 	projectAgentsDir: string | null;
 	results: SingleResult[];
 	concurrency?: number;
-	background?: { id: string; state: JobState };
+	background?: { id: string; state: JobState; notify: boolean };
 }
 
 type JobResult = AgentToolResult<SubagentDetails>;
@@ -753,6 +753,8 @@ const SubagentParams = Type.Object({
 			default: false,
 		}),
 	),
+	notify: Type.Optional(Type.Boolean({ default: true,
+		description: "Background only: send an automatic completion follow-up. Set false for silent jobs inspected with subagent_jobs. Default: true." })),
 	agent: Type.Optional(
 		Type.String({
 			description: "Name of the agent to invoke (for single mode)",
@@ -802,7 +804,7 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 
 const JobActionSchema = StringEnum(["list", "status", "cancel", "forget", "clear", "output", "wait"] as const);
 const JobMetadataSchema = Type.Object({
-	id: Type.String(), label: Type.String(),
+	id: Type.String(), label: Type.String(), notify: Type.Boolean(),
 	state: StringEnum(["running", "canceling", "completed", "failed", "canceled"] as const),
 	startedAt: Type.String(), finishedAt: Type.Optional(Type.String()),
 	error: Type.Optional(Type.String()), outputEvicted: Type.Optional(Type.Boolean()),
@@ -825,7 +827,7 @@ const JobResponseSchema = Type.Object({
 function jobMetadata(job: JobSnapshot<JobResult>): Static<typeof JobMetadataSchema> {
 	return {
 		id: job.id, label: truncateOutput(job.label, 1024, "..."),
-		state: job.state, startedAt: job.startedAt,
+		state: job.state, notify: job.notify, startedAt: job.startedAt,
 		...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
 		...(job.error ? { error: truncateOutput(job.error, 2048, "...") } : {}),
 		...(job.outputEvicted ? { outputEvicted: true } : {}),
@@ -933,7 +935,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
-		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job. Use output to page through a finished task's captured text or failure diagnosis. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; completions arrive automatically as follow-ups.",
+		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job. Use output to page through a finished task's captured text or failure diagnosis. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
 			action: JobActionSchema,
 			jobId: Type.Optional(Type.String({ description: "Job ID required except for list and clear." })),
@@ -973,7 +975,7 @@ export default function (pi: ExtensionAPI) {
 				const snapshots = listed.map(({ latest: _latest, ...job }) => job);
 				const metadata = listed.map(jobMetadata);
 				return reply(metadata.length
-					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
+					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
 			const waited = params.action === "wait" && params.jobId
@@ -988,9 +990,10 @@ export default function (pi: ExtensionAPI) {
 				return reply(`Forgot finished job ${job.id}.`, { forgotten: job.id }, { forgotten: job.id });
 			}
 			const metadata = jobMetadata(job);
+			const completionHint = job.notify ? "See the completion message." : "Silent jobs do not deliver completion messages.";
 			if (params.action === "output") {
-				if (!job.finishedAt) return fail("Output pages require a finished job. Completions arrive automatically.", job);
-				if (job.outputEvicted) return fail("Captured output was evicted from the job registry. See the completion message.", job);
+				if (!job.finishedAt) return fail("Output pages require a finished job. Use action: wait to await cleanup.", job);
+				if (job.outputEvicted) return fail(`Captured output was evicted from the job registry. ${completionHint}`, job);
 				const taskIndex = params.taskIndex ?? 0;
 				const task = job.latest?.details?.results[taskIndex];
 				if (!task) return fail("No retained task at this taskIndex. Inspect status for resultCount.", job);
@@ -1006,9 +1009,10 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 			const output = job.error ?? (job.outputEvicted
-				? "Captured output was evicted from the job registry to honor its retention budget. See the completion message."
+				? `Captured output was evicted from the job registry to honor its retention budget. ${completionHint}`
 				: job.latest?.content.filter((c) => c.type === "text").map((c) => c.text).join("\n\n") ?? "(awaiting output)");
-			const waitNotice = waited?.timedOut ? "Wait timed out. The job is still active; completion will arrive automatically.\n" : "";
+			const waitNotice = waited?.timedOut ? `Wait timed out. The job is still active; ${job.notify
+				? "completion will arrive automatically." : "no automatic completion message will be sent."}\n` : "";
 			return reply(`${waitNotice}${job.id} ${job.state}: ${job.label}\n\n${output}`, job,
 				{ job: metadata, ...(waited ? { timedOut: waited.timedOut } : {}) });
 		},
@@ -1024,7 +1028,7 @@ export default function (pi: ExtensionAPI) {
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			"Set model or thinking to override agent configuration. Parallel/chain entries override batch defaults.",
-			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically. Use subagent_jobs to inspect or cancel.",
+			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),
@@ -1073,6 +1077,12 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			if (params.notify !== undefined && (typeof params.notify !== "boolean" || !params.background)) {
+				return {
+					content: [{ type: "text", text: "notify applies only to background jobs and must be a boolean." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
 			const batch = hasChain ? params.chain : params.tasks;
 			if (mode !== "single" && !Array.isArray(batch)) {
 				return {
@@ -1413,23 +1423,25 @@ export default function (pi: ExtensionAPI) {
 					: `${mode}: ${(hasChain ? params.chain! : params.tasks!).map((t) => t.agent).join(", ")}`;
 			const job = jobs.start(label, async (jobSignal, update) => boundResultText(
 				reportUsage(await run(jobSignal, (partial) => update(boundResultText(partial)))),
-			));
+			), { notify: params.notify });
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Background job ${job.id} started (${label}). Continue your work; results will arrive automatically. Use subagent_jobs to inspect or cancel.`,
+						text: `Background job ${job.id} started (${label}). ${job.notify
+							? "Continue your work; results will arrive automatically."
+							: "No automatic completion message will be sent."} Use subagent_jobs to inspect, wait, or cancel.`,
 					},
 				],
 				details: {
 					...makeDetails(mode)([]),
-					background: { id: job.id, state: job.state },
+					background: { id: job.id, state: job.state, notify: job.notify },
 				},
 			};
 		}),
 
 		renderCall(args, theme, _context) {
-			const scope = `${stringArg(args.agentScope, "user")}${args.background ? ", background" : ""}`;
+			const scope = `${stringArg(args.agentScope, "user")}${args.background ? ", background" : ""}${args.background && args.notify === false ? ", silent" : ""}`;
 			if (Array.isArray(args.chain) && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +

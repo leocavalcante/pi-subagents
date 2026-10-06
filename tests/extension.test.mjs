@@ -80,6 +80,68 @@ test('background returns before completion, retains progress, and sends a follow
   assert.equal(child.thinking, 'high');
 });
 
+test('silent background jobs work across modes and expose the notification policy', async () => {
+  for (const params of [
+    { agent: 'worker', task: 'silent single' },
+    { tasks: [{ agent: 'worker', task: 'silent parallel' }, { agent: 'worker', task: 'fail' }] },
+    { chain: [{ agent: 'worker', task: 'silent chain' }, { agent: 'worker', task: 'next {previous}' }] },
+  ]) {
+    const launched = await invoke('subagent', { ...params, background: true, notify: false });
+    assert.equal(launched.details.background.notify, false);
+    assert.match(launched.content[0].text, /No automatic completion/);
+    const id = launched.details.background.id;
+    const waited = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
+    assert.equal(waited.structuredContent.job.notify, false);
+    assert.equal(waited.structuredContent.timedOut, false);
+    assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, waited.structuredContent), true);
+    const output = await invoke('subagent_jobs', { action: 'output', jobId: id });
+    assert.notEqual(output.isError, true);
+    const listed = await invoke('subagent_jobs', { action: 'list' });
+    assert.equal(listed.structuredContent.jobs.find(job => job.id === id).notify, false);
+    assert.match(listed.content[0].text, /silent/);
+  }
+  assert.equal(messages.length, 0);
+  await finish(await launch({ task: 'explicit normal notification', notify: true }));
+  assert.equal(messages.length, 1);
+});
+
+test('silent job waits, cancellations and evictions do not promise a completion message', async () => {
+  const id = await launch({ task: 'delay=10000 silent cancel', notify: false });
+  const timed = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 1 });
+  assert.equal(timed.structuredContent.timedOut, true);
+  assert.doesNotMatch(timed.content[0].text, /arrive automatically/);
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  const canceled = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
+  assert.equal(canceled.structuredContent.job.state, 'canceled');
+  assert.equal(messages.length, 0);
+  const heavy = await invoke('subagent', { background: true, notify: false, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'retention-heavy' })) });
+  const heavyId = heavy.details.background.id;
+  const evicted = await invoke('subagent_jobs', { action: 'wait', jobId: heavyId, timeoutMs: 5000 });
+  assert.equal(evicted.structuredContent.job.outputEvicted, true);
+  assert.match(evicted.content[0].text, /Silent jobs do not deliver completion messages/);
+  const page = await invoke('subagent_jobs', { action: 'output', jobId: heavyId });
+  assert.equal(page.isError, true);
+  assert.doesNotMatch(page.content[0].text, /See the completion message/);
+  assert.equal(messages.length, 0);
+});
+
+test('notify is a background-only boolean validated before project approval or execution', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
+  for (const notify of [true, false, null, 'false', 0]) {
+    const foreground = await invoke('subagent', { agent: 'project', task: 'invalid notification', agentScope: 'both', notify }, context);
+    assert.equal(foreground.isError, true);
+    assert.match(foreground.content[0].text, /notify/);
+  }
+  for (const notify of [null, 'false', 0]) {
+    const background = await invoke('subagent', { agent: 'project', task: 'invalid notification', agentScope: 'both', background: true, notify }, context);
+    assert.equal(background.isError, true);
+  }
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+});
+
 test('wait returns a structured final snapshot without polling, extra delivery or billing', async () => {
   const id = await launch({ task: 'delay=200 wait result' });
   const result = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });

@@ -29,6 +29,7 @@ export interface JobSnapshot<T> {
 	id: string;
 	label: string;
 	state: JobState;
+	notify: boolean;
 	startedAt: string;
 	finishedAt?: string;
 	latest?: T;
@@ -73,7 +74,8 @@ export class JobManager<T> {
 		}
 	}
 
-	start(label: string, run: (signal: AbortSignal, update: (result: T) => void) => Promise<T>): JobSnapshot<T> {
+	start(label: string, run: (signal: AbortSignal, update: (result: T) => void) => Promise<T>, options: { notify?: boolean } = {}): JobSnapshot<T> {
+		if (options.notify !== undefined && typeof options.notify !== "boolean") throw new Error("notify must be a boolean.");
 		if (this.closed) throw new Error("Background jobs are unavailable after session shutdown.");
 		const active = [...this.jobs.values()].filter((j) => !j.snapshot.finishedAt).length;
 		if (active >= this.maxActive) throw new Error(`Too many active background jobs. Max is ${this.maxActive}.`);
@@ -81,6 +83,7 @@ export class JobManager<T> {
 			id: randomUUID(),
 			label,
 			state: "running",
+			notify: options.notify ?? true,
 			startedAt: new Date().toISOString(),
 		};
 		const job: Job<T> = {
@@ -111,7 +114,7 @@ export class JobManager<T> {
 				// Keep finished entries in completion order, not launch order.
 				this.jobs.delete(snapshot.id);
 				this.jobs.set(snapshot.id, job);
-				if (!this.closed) {
+				if (!this.closed && snapshot.notify) {
 					try {
 						this.onComplete({ ...snapshot });
 					} catch (error) {

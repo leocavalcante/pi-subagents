@@ -163,7 +163,22 @@ Or ask Pi:
 Run a worker in the background to review authentication while you inspect the tests.
 ```
 
-A finished job sends its result as a follow-up. If the parent is busy, Pi queues it after the current work. If idle, Pi starts a turn to handle the result. Failed and canceled jobs also report back.
+By default, a finished job sends its result as a follow-up. If the parent is busy, Pi queues it after the current work. If idle, Pi starts a turn to handle the result. Failed and canceled jobs also report back.
+
+Set `notify: false` for a silent background job:
+
+```json
+{
+  "agent": "worker",
+  "task": "Review the authentication code without changing files.",
+  "background": true,
+  "notify": false
+}
+```
+
+Silent jobs do not send automatic follow-ups, including failures and cancellations, and do not trigger another parent turn. Results remain available through `subagent_jobs` status, output, and wait. The `notify` flag is background-only, defaults to true, and applies to the whole job in every mode. Launch details and job metadata expose the policy, and the job list marks silent jobs.
+
+Use a silent job with a bounded `wait` when the parent will consume its result explicitly. Silent jobs have the same process, capture, and retention limits. If their output is evicted, there is no completion-message copy to recover.
 
 The `subagent_jobs` tool manages jobs:
 
@@ -177,13 +192,13 @@ The `subagent_jobs` tool manages jobs:
 { "action": "clear" }
 ```
 
-Status returns retained progress or the final result. Job-level error diagnostics are capped at 2 KiB without splitting UTF-8 characters. If both the run and completion delivery throw, the diagnostic keeps both causes. Do not poll continuously; completion messages arrive automatically. Cancellation is idempotent and may briefly show `canceling` while child processes exit.
+Status returns retained progress or the final result. Job-level error diagnostics are capped at 2 KiB without splitting UTF-8 characters. If both the run and completion delivery throw, the diagnostic keeps both causes. Do not poll continuously; non-silent jobs send completion messages automatically. Cancellation is idempotent and may briefly show `canceling` while child processes exit.
 
 `forget` removes one finished job record. `clear` removes all finished records without canceling active jobs. Forgetting an active job is rejected; cancel it and wait for cleanup first. These operations do not erase completion messages or Pi session history.
 
 Background jobs have their own abort controllers. Ctrl+C on the parent's turn does not cancel them. Use `subagent_jobs` to cancel a job. On POSIX, cancellation signals the child's process group, including ordinary tool descendants, and escalates from SIGTERM to SIGKILL after one second. On Windows, it signals the direct child only.
 
-Foreground calls and background jobs share a limit of four direct child processes per extension runtime. There can be up to eight active background jobs, with at most eight tasks in each parallel batch. Tasks waiting for a process slot can also be canceled. The extension retains the latest 32 finished job records for inspection. Finished output in this registry has a shared 32 MiB budget, estimated from serialized message records, task text, stderr, and result text. Oldest output is evicted first; an individually oversized result is not retained. Job state remains available with `outputEvicted: true`, and completion delivery still receives the result before eviction. This registry budget is not a heap-memory limit or a cap on Pi's own session history.
+Foreground calls and background jobs share a limit of four direct child processes per extension runtime. There can be up to eight active background jobs, with at most eight tasks in each parallel batch. Tasks waiting for a process slot can also be canceled. The extension retains the latest 32 finished job records for inspection. Finished output in this registry has a shared 32 MiB budget, estimated from serialized message records, task text, stderr, and result text. Oldest output is evicted first; an individually oversized result is not retained. Job state remains available with `outputEvicted: true`, and enabled completion delivery still receives the result before eviction. This registry budget is not a heap-memory limit or a cap on Pi's own session history.
 
 Completion and status text are capped at 50 KiB including headers and truncation notices, with captured output retained in details. Jobs live only in the current Pi session. Quit, `/reload`, and session replacement cancel active jobs and discard job history. Jobs do not survive a Pi restart.
 
@@ -195,7 +210,7 @@ Use `action: "wait"` when the next operation needs a particular job's result. It
 
 The response includes the same snapshot as status, plus `timedOut`. A completed, failed, or canceled job returns `timedOut: false`. If the wait expires first, it returns the current state with `timedOut: true`; the background job stays active. Unknown or forgotten IDs return an error immediately.
 
-Canceling the waiting tool call only stops the wait. To cancel the job, use `action: "cancel"`. Waiters also finish when session shutdown completes job cleanup. Waiting does not consume a child-process slot, add usage charges, or send an extra completion message. Automatic follow-ups still arrive as usual.
+Canceling the waiting tool call only stops the wait. To cancel the job, use `action: "cancel"`. Waiters also finish when session shutdown completes job cleanup. Waiting does not consume a child-process slot, add usage charges, or send an extra completion message. Automatic follow-ups still arrive as usual unless the job is silent.
 
 In a codemode script:
 
@@ -226,7 +241,7 @@ text(result.output.text);
 store("next-output-offset", result.output.nextOffset);
 ```
 
-Read additional pages only when needed. Completion delivery still arrives automatically, so do not poll for it.
+Read additional pages only when needed. Non-silent jobs send completion messages automatically, so do not poll for them.
 
 ## Usage accounting
 

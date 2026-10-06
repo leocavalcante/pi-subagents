@@ -23,6 +23,37 @@ test('jobs return immediately, record progress, and deliver once', async () => {
   await jobs.shutdown();
 });
 
+test('silent jobs preserve progress, results, retention and waiters without completion delivery', async () => {
+  const delivered = [];
+  const jobs = new JobManager(job => delivered.push(job), value => value === 'bad', 8, 32, { maxBytes: 3, measure: value => value.length });
+  const gate = deferred();
+  const active = jobs.start('silent', async (_signal, update) => { update('progress'); return gate.promise; }, { notify: false });
+  assert.equal(active.notify, false);
+  await tick();
+  assert.equal(jobs.get(active.id).latest, 'progress');
+  const awaited = jobs.wait(active.id, 1000);
+  gate.resolve('bad');
+  const finished = await awaited;
+  assert.equal(finished.job.state, 'failed');
+  assert.equal(finished.job.latest, 'bad');
+  assert.equal(finished.job.notify, false);
+  const huge = jobs.start('evicted silent', async () => 'too large', { notify: false });
+  await jobs.wait(huge.id, 1000);
+  assert.equal(jobs.get(huge.id).outputEvicted, true);
+  const canceled = jobs.start('canceled silent', async () => 'must not run', { notify: false });
+  jobs.cancel(canceled.id);
+  assert.equal((await jobs.wait(canceled.id, 1000)).job.state, 'canceled');
+  const thrown = jobs.start('thrown silent', async () => { throw new Error('silent failure'); }, { notify: false });
+  assert.equal((await jobs.wait(thrown.id, 1000)).job.error, 'silent failure');
+  assert.equal(delivered.length, 0);
+  const normal = jobs.start('default notification', async () => 'ok');
+  await jobs.wait(normal.id, 1000);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].notify, true);
+  assert.throws(() => jobs.start('bad notification', async () => 'ok', { notify: 'false' }), /notify/);
+  await jobs.shutdown();
+});
+
 test('failed results and exceptions are retained without unhandled rejections', async () => {
   const delivered = [];
   const jobs = new JobManager(job => delivered.push(job), result => result === 'bad');
