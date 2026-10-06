@@ -174,9 +174,8 @@ function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
-			for (const part of msg.content) {
-				if (part.type === "text") return part.text;
-			}
+			// Use the last assistant message, not stale text from earlier turns.
+			return msg.content.filter((part) => part.type === "text").map((part) => part.text).join("\n\n");
 		}
 	}
 	return "";
@@ -255,13 +254,18 @@ async function writePromptToTempFile(agentName: string, prompt: string): Promise
 	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
 	const safeName = agentName.replace(/[^\w.-]+/g, "_");
 	const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
-	await withFileMutationQueue(filePath, async () => {
-		await fs.promises.writeFile(filePath, prompt, {
-			encoding: "utf-8",
-			mode: 0o600,
+	try {
+		await withFileMutationQueue(filePath, async () => {
+			await fs.promises.writeFile(filePath, prompt, {
+				encoding: "utf-8",
+				mode: 0o600,
+			});
 		});
-	});
-	return { dir: tmpDir, filePath };
+		return { dir: tmpDir, filePath };
+	} catch (error) {
+		await fs.promises.rm(tmpDir, { recursive: true, force: true });
+		throw error;
+	}
 }
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -328,10 +332,12 @@ async function runSingleAgent(
 	const inheritsDispatchConfig = !agent.model;
 	const model = agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
-	if (inheritsDispatchConfig && dispatchDefaults.thinkingLevel) {
-		args.push("--thinking", dispatchDefaults.thinkingLevel);
+	const thinking = agent.thinking ?? (inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined);
+	if (thinking) args.push("--thinking", thinking);
+	if (agent.tools) {
+		if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+		else args.push("--no-tools");
 	}
-	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
@@ -380,15 +386,17 @@ async function runSingleAgent(
 			args.push("--append-system-prompt", tmpPromptPath);
 		}
 
-		args.push(`Task: ${task}`);
+		// Prompt creation awaits I/O; cancellation may have arrived since acquisition.
+		signal?.throwIfAborted();
 		let wasAborted = false;
+		let protocolError: string | undefined;
 
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
-				cwd: cwd ?? defaultCwd,
+				cwd: cwd ? path.resolve(defaultCwd, cwd) : defaultCwd,
 				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["pipe", "pipe", "pipe"],
 				// On POSIX, cancel the entire group, including tools spawned by the child.
 				detached: process.platform !== "win32",
 			});
@@ -426,6 +434,36 @@ async function runSingleAgent(
 					event = JSON.parse(line);
 				} catch {
 					return;
+				}
+
+				if (!event || typeof event !== "object" || Array.isArray(event)) {
+					protocolError = "Invalid subagent JSON event: expected an object.";
+					return;
+				}
+				if (event.type === "message_end" && event.message?.role === "assistant") {
+					const content = event.message.content;
+					if (!Array.isArray(content) || !content.every((part: any) =>
+						part && typeof part === "object" && (
+							(part.type === "text" && typeof part.text === "string") ||
+							(part.type === "thinking" && typeof part.thinking === "string") ||
+							(part.type === "toolCall" && typeof part.name === "string" &&
+								part.arguments && typeof part.arguments === "object" && !Array.isArray(part.arguments))
+						))) {
+						protocolError = "Invalid subagent JSON event: malformed assistant content.";
+						return;
+					}
+					const usage = event.message.usage;
+					const isCount = (value: unknown) => value === undefined ||
+						(typeof value === "number" && Number.isFinite(value) && value >= 0);
+					if (usage !== undefined && (
+						!usage || typeof usage !== "object" || Array.isArray(usage) ||
+						![usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(isCount) ||
+						(usage.cost !== undefined && (!usage.cost || typeof usage.cost !== "object" ||
+							Array.isArray(usage.cost) || !isCount(usage.cost.total)))
+					)) {
+						protocolError = "Invalid subagent JSON event: malformed assistant usage.";
+						return;
+					}
 				}
 
 				if (event.type === "message_end" && event.message) {
@@ -486,11 +524,16 @@ async function runSingleAgent(
 				// Node emits close after error; let close own cleanup and slot release.
 			});
 
+			// Pi prepends piped stdin to the prompt. This avoids OS argv size limits.
+			// Early startup failures can close stdin; close/error above own the result.
+			proc.stdin.on("error", () => {});
+			proc.stdin.end(`Task: ${task}`);
 			if (signal?.aborted) killProc();
 			else signal?.addEventListener("abort", killProc, { once: true });
 		});
 
-		currentResult.exitCode = exitCode;
+		currentResult.exitCode = protocolError ? 1 : exitCode;
+		if (protocolError) currentResult.errorMessage = protocolError;
 		if (wasAborted) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {
@@ -598,6 +641,71 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
+		name: "subagent_agents",
+		label: "Subagent agents",
+		description: [
+			"List available subagents, descriptions, configuration, and source paths without running them.",
+			"Reports invalid definitions. Defaults to personal agents; use agentScope to include project agents.",
+		].join(" "),
+		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }),
+		outputSchema: Type.Object({
+			agentScope: AgentScopeSchema,
+			agents: Type.Array(Type.Object({
+				name: Type.String(),
+				description: Type.String(),
+				source: StringEnum(["user", "project"] as const),
+				filePath: Type.String(),
+				model: Type.Optional(Type.String()),
+				thinking: Type.Optional(Type.String()),
+				tools: Type.Optional(Type.Array(Type.String())),
+			})),
+			projectAgentsDir: Type.Union([Type.String(), Type.Null()]),
+			diagnostics: Type.Array(Type.Object({
+				filePath: Type.String(),
+				source: StringEnum(["user", "project"] as const),
+				message: Type.String(),
+			})),
+		}),
+		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const agentScope = params.agentScope ?? "user";
+			const discovery = discoverAgents(ctx.cwd, agentScope);
+			const agents = discovery.agents.map((agent) => ({
+				name: agent.name,
+				description: agent.description,
+				source: agent.source,
+				filePath: agent.filePath,
+				...(agent.model !== undefined ? { model: agent.model } : {}),
+				...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
+				...(agent.tools !== undefined ? { tools: agent.tools } : {}),
+			}));
+			const listing = agents.map((a) => {
+				const config = [
+					a.model && `model=${a.model}`,
+					a.thinking && `thinking=${a.thinking}`,
+					a.tools && `tools=${a.tools.length ? a.tools.join(",") : "none"}`,
+				].filter(Boolean).join("; ");
+				return `${a.name} (${a.source}): ${a.description}${config ? ` [${config}]` : ""}\n  ${a.filePath}`;
+			}).join("\n");
+			const warnings = discovery.diagnostics.map((d) => `${d.filePath}: ${d.message}`).join("\n");
+			const details = {
+				agentScope, agents, projectAgentsDir: discovery.projectAgentsDir,
+				diagnostics: discovery.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+			};
+			return {
+				content: [{
+					type: "text" as const,
+					text: truncateParallelOutput(
+						(listing || "No subagents found.") + (warnings ? `\n\nInvalid definitions:\n${warnings}` : ""),
+					),
+				}],
+				details,
+				structuredContent: details,
+			};
+		},
+	});
+
+	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
 		description:
@@ -664,6 +772,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically. Use subagent_jobs to inspect or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
@@ -796,7 +905,7 @@ export default function (pi: ExtensionAPI) {
 
 					for (let i = 0; i < params.chain.length; i++) {
 						const step = params.chain[i];
-						const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
+						const taskWithContext = step.task.replace(/\{previous\}/g, () => previousOutput);
 
 						// Create update callback that includes all previous results
 						const chainUpdate: OnUpdateCallback | undefined = onUpdate
@@ -1158,7 +1267,7 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
+				const successCount = details.results.filter((r) => r.exitCode !== -1 && !isFailedResult(r)).length;
 				const icon = details.results.some((r) => r.exitCode === -1)
 					? theme.fg("warning", "⏳")
 					: successCount === details.results.length
@@ -1179,7 +1288,8 @@ export default function (pi: ExtensionAPI) {
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = r.exitCode === -1 ? theme.fg("warning", "⏳")
+							: isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
@@ -1223,7 +1333,8 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("chain ")) +
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
 				for (const r of details.results) {
-					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const rIcon = r.exitCode === -1 ? theme.fg("warning", "⏳")
+						: isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;

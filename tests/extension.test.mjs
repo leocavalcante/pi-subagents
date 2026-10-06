@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { promises as fsPromises } from 'node:fs';
 import { after, afterEach, beforeEach, test } from 'node:test';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -151,6 +154,39 @@ test('all foreground and background invocations share a four-process budget', as
   assert.equal(traces().filter(t => t.event === 'start').length, 13);
 });
 
+test('cancellation during prompt creation prevents spawning and cleans up the prompt', async t => {
+  let releaseWrite, enteredWrite;
+  const gate = new Promise(resolve => { releaseWrite = resolve; });
+  const entered = new Promise(resolve => { enteredWrite = resolve; });
+  const originalWrite = fsPromises.writeFile;
+  const originalSpawn = childProcess.spawn;
+  const write = t.mock.method(fsPromises, 'writeFile', async (...args) => {
+    enteredWrite();
+    await gate;
+    return originalWrite(...args);
+  });
+  const spawn = t.mock.method(childProcess, 'spawn', (...args) => originalSpawn(...args));
+  syncBuiltinESMExports();
+  try {
+    const id = await launch({ task: 'canceled while writing prompt' });
+    await entered;
+    const promptPath = write.mock.calls[0].arguments[0];
+    await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+    releaseWrite();
+    assert.equal((await finish(id)).state, 'canceled');
+    assert.equal(spawn.mock.callCount(), 0, 'An aborted task must not spawn a child');
+    assert.equal(existsSync(promptPath), false);
+    assert.equal(existsSync(dirname(promptPath)), false);
+    const next = await launch({ task: 'after prompt cancellation' });
+    assert.equal((await finish(next)).state, 'completed');
+  } finally {
+    releaseWrite();
+    write.mock.restore();
+    spawn.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test('cancel handles running and queued tasks, with SIGKILL escalation', async () => {
   const started = await invoke('subagent', { background: true, tasks: Array.from({ length: 8 }, () => ({ agent: 'worker', task: 'delay=10000 stubborn' })) });
   const id = started.details.background.id;
@@ -227,6 +263,40 @@ test('validation and project permission denial happen before launching a job', a
   assert.equal((await invoke('subagent_jobs', { action: 'status', jobId: 'missing' })).isError, true);
 });
 
+test('failed prompt writes remove their temporary directory and release the slot', async t => {
+  let promptPath;
+  const write = t.mock.method(fsPromises, 'writeFile', async file => {
+    promptPath = file;
+    throw new Error('fixture prompt write failure');
+  });
+  try {
+    const id = await launch({ task: 'prompt-write-error' });
+    const failed = await finish(id);
+    assert.equal(failed.state, 'failed');
+    assert.match(failed.error, /prompt write failure/);
+    assert.equal(existsSync(dirname(promptPath)), false);
+  } finally { write.mock.restore(); }
+  assert.equal((await finish(await launch({ task: 'after prompt write error' }))).state, 'completed');
+});
+
+test('malformed child events fail cleanly without crashing or retaining slots', async () => {
+  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage']) {
+    const job = await finish(await launch({ task }));
+    assert.equal(job.state, 'failed');
+    assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
+  }
+  assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');
+});
+
+test('large tasks use stdin and relative cwd resolves from the parent session', async () => {
+  const task = 'x'.repeat(256 * 1024);
+  const result = await invoke('subagent', { agent: 'worker', task, cwd: 'project' });
+  assert.equal(result.isError, undefined);
+  const child = traces().find(t => t.event === 'start');
+  assert.equal(child.task, task);
+  assert.equal(child.cwd, join(sandbox, 'project'));
+});
+
 test('spawn errors remain inspectable and release process slots', async () => {
   const id = await launch({ cwd: join(sandbox, 'does-not-exist') });
   const failed = await finish(id);
@@ -234,6 +304,65 @@ test('spawn errors remain inspectable and release process slots', async () => {
   assert.match(failed.latest.content[0].text, /ENOENT/);
   const good = await launch({ task: 'good after spawn error' });
   assert.equal((await finish(good)).state, 'completed');
+});
+
+test('agent listing is read-only, scoped, and reports invalid files without exposing prompts', async () => {
+  const badFile = join(sandbox, 'agent/agents/broken.md');
+  writeFileSync(badFile, '---\nname: [unterminated\n---\n');
+  try {
+    const result = await invoke('subagent_agents', {});
+    assert.match(result.content[0].text, /worker.*Test worker/);
+    assert.match(result.content[0].text, /broken.md/);
+    assert.deepEqual(result.details.agents.map(a => a.name), ['pinned', 'worker']);
+    assert.ok(result.details.agents.every(a => a.systemPrompt === undefined));
+    assert.equal(result.details.diagnostics.length, 1);
+    assert.deepEqual(result.structuredContent, result.details);
+    const project = await invoke('subagent_agents', { agentScope: 'project' }, { ...ctx(), cwd: join(sandbox, 'project') });
+    assert.deepEqual(project.details.agents.map(a => a.name), ['project']);
+    assert.equal(traces().length, 0);
+  } finally { rmSync(badFile); }
+});
+
+test('agent thinking overrides inheritance and empty tools disable the selection', async () => {
+  const file = join(sandbox, 'agent/agents/limited.md');
+  writeFileSync(file, '---\nname: limited\ndescription: No tools\ntools: []\nthinking: off\n---\nLimited instructions.\n');
+  try {
+    const result = await invoke('subagent', { agent: 'limited', task: 'limited' });
+    assert.equal(result.isError, undefined);
+    const child = traces().find(t => t.event === 'start');
+    assert.equal(child.model, 'fake/parent');
+    assert.equal(child.thinking, 'off');
+    assert.equal(child.noTools, true);
+    writeFileSync(file, '---\nname: limited\ndescription: Pinned thinking\nmodel: fake/pinned:high\nthinking: low\n---\nPinned instructions.\n');
+    await invoke('subagent', { agent: 'limited', task: 'pinned thinking' });
+    const pinned = traces().filter(t => t.event === 'start').at(-1);
+    assert.equal(pinned.model, 'fake/pinned:high');
+    assert.equal(pinned.thinking, 'low');
+  } finally { rmSync(file); }
+});
+
+test('final output includes all text blocks and chain substitution preserves dollar sequences', async () => {
+  const output = await invoke('subagent', { agent: 'worker', task: 'blocks' });
+  assert.equal(output.content[0].text, 'first block\n\nsecond block');
+  assert.equal((await invoke('subagent', { agent: 'worker', task: 'empty-final' })).content[0].text, '(no output)');
+  await invoke('subagent', { chain: [{ agent: 'worker', task: 'dollars' }, { agent: 'worker', task: 'prefix {previous} suffix {previous}' }] });
+  const literal = '$& $$ $` $\' {previous}';
+  assert.equal(traces().filter(t => t.event === 'start').at(-1).task, `prefix ${literal} suffix ${literal}`);
+});
+
+test('chain rendering uses model failure status even on zero exit, and shows pending steps', async () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const render = (result, expanded) => definition.renderResult(result, { expanded }, theme, {}).render(100).join('\n');
+  const updates = [];
+  const result = await definition.execute('chain-failure', { chain: [{ agent: 'worker', task: 'zero-exit fail' }] }, undefined,
+    partial => updates.push([render(partial, false), render(partial, true)]), ctx());
+  assert.equal(result.isError, true);
+  for (const expanded of [false, true]) {
+    assert.match(render(result, expanded), /0\/1 steps/);
+    assert.match(render(result, expanded), /✗/);
+    assert.match(updates[0][Number(expanded)], /⏳/);
+  }
 });
 
 test('background delivery and status cap large output but preserve full details', async () => {

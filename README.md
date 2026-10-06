@@ -6,7 +6,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 
 ## Installation
 
-Requires Pi. Tested with Pi 1.0.0. Pi provides the runtime dependencies, so no build step is needed.
+Requires Pi. Tested with Pi 1.0.4. Pi provides the runtime dependencies, so no build step is needed.
 
 Install from GitHub:
 
@@ -44,11 +44,37 @@ description: General-purpose worker
 Complete the delegated task. Report the changes made and checks run.
 ```
 
-An agent can set `model` and `tools` in its frontmatter. Without `model`, it inherits the parent's active model and thinking level. Without `tools`, it uses Pi's defaults.
+An agent can set `model`, `thinking`, and `tools` in its frontmatter:
+
+```yaml
+model: anthropic/claude-sonnet-4-5
+thinking: high
+tools: [read, bash]
+```
+
+Without `model`, it inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
+
+Without `tools`, it uses Pi's defaults. Both `tools: read, bash` and `tools: [read, bash]` work. Set `tools: []` to disable the initial tool selection. This is not a sandbox; extensions can still change the selection.
+
+Definitions need non-empty `name` and `description` fields. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents.
 
 Project-local definitions live in `.pi/agents/*.md`. The tool loads only personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents. Project definitions override personal definitions of the same name when using `"both"`.
 
 ## Usage
+
+Use `subagent_agents` to list agent descriptions, source paths, model and tool settings, and invalid definitions without running an agent:
+
+```json
+{}
+```
+
+The default scope is `"user"`. To include project definitions:
+
+```json
+{ "agentScope": "both" }
+```
+
+The list is sorted by name and excludes system prompt bodies. Project lookup starts at the parent session's working directory and checks ancestors for the nearest `.pi/agents` directory. A task's `cwd` changes where its child runs, not which definitions it loads.
 
 Ask Pi to delegate:
 
@@ -66,7 +92,7 @@ The `subagent` tool accepts exactly one mode:
 | Parallel | `{ tasks: [{ agent, task }, ...] }` | Up to 8 tasks, 4 concurrent |
 | Chain | `{ chain: [{ agent, task }, ...] }` | Sequential, with `{previous}` substituted into each task |
 
-Use `cwd` to set a working directory. Parallel and chain entries accept their own `cwd`.
+Use `cwd` to set a working directory. Relative paths resolve from the parent session's working directory. Parallel and chain entries accept their own `cwd`. Tasks reach children through stdin, so large prompts do not depend on the operating system's command-line argument limit.
 
 Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Parallel model-visible output is capped at 50 KiB per task; full results remain in tool details.
 
@@ -118,13 +144,15 @@ Authenticate on each machine with Pi's `/login`. Do not put credentials, session
 
 ## Development checks
 
-With Pi installed locally or globally:
+Install the pinned development SDK and test loader locally. This also works when Pi is installed as a standalone binary:
 
 ```sh
+npm ci --ignore-scripts
+npm run check
 npm test
 ```
 
-Set `PI_PACKAGE_DIR` to the Pi package directory if it is installed somewhere else. The tests use fake child processes and make no model calls. They cover dispatch, progress, result delivery, process budgets, cancellation and shutdown, including POSIX descendants and SIGKILL escalation.
+Set `PI_PACKAGE_DIR` to an npm Pi package directory to test against another SDK version. Standalone binary directories fall back to the local development SDK. The tests use fake child processes and make no model calls. They cover agent discovery and configuration, dispatch, output extraction, rendering, process budgets, cancellation and shutdown, including POSIX descendants and SIGKILL escalation. GitHub Actions runs the type check and tests on Linux and Windows with Node.js 22 and 24.
 
 ## Origin and license
 
