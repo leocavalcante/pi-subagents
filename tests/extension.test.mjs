@@ -856,6 +856,69 @@ test('final output includes all text blocks and chain substitution preserves dol
   assert.equal(traces().filter(t => t.event === 'start').at(-1).task, `prefix ${literal} suffix ${literal}`);
 });
 
+test('named chain outputs reuse earlier full captures alongside previous output in one pass', async () => {
+  const updates = [];
+  const result = await tools.get('subagent').definition.execute('named', { chain: [
+    { id: 'initial', agent: 'worker', task: 'blocks' },
+    { id: 'middle', agent: 'worker', task: 'dollars' },
+    { id: 'final', agent: 'worker', task: 'earlier={steps.initial}; recent={previous}; named={steps.middle}' },
+  ] }, undefined, update => updates.push(update), ctx());
+  assert.notEqual(result.isError, true);
+  assert.deepEqual(result.details.results.map(step => step.stepId), ['initial', 'middle', 'final']);
+  const tasks = traces().filter(row => row.event === 'start').map(row => row.task);
+  const dollars = "$& $$ $` $' {previous}";
+  assert.equal(tasks[2], `earlier=first block\n\nsecond block; recent=${dollars}; named=${dollars}`);
+  assert.ok(updates.some(update => update.details.results.some(step => step.stepId === 'middle')));
+});
+
+test('named outputs work in silent background chains and output pages expose step IDs', async () => {
+  const started = await invoke('subagent', { background: true, notify: false, chain: [
+    { id: 'large', agent: 'worker', task: 'large' },
+    { agent: 'worker', task: 'intermediate' },
+    { id: 'reuse', agent: 'worker', task: 'reuse {steps.large}' },
+  ] });
+  const id = started.details.background.id;
+  const finished = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
+  assert.equal(finished.structuredContent.job.state, 'completed');
+  assert.equal(traces().filter(row => row.event === 'start').at(-1).task, 'reuse ' + 'é'.repeat(40000));
+  const output = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 2 });
+  assert.equal(output.structuredContent.output.stepId, 'reuse');
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, output.structuredContent), true);
+  assert.equal(messages.length, 0);
+});
+
+test('invalid chain IDs and references fail preflight before approval or any child launches', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
+  const bad = [
+    [{ id: 'dup', task: 'first' }, { id: 'dup', task: 'second' }],
+    [{ id: 'self', task: '{steps.self}' }],
+    [{ task: '{steps.future}' }, { id: 'future', task: 'second' }],
+    [{ task: 'valid first' }, { task: '{steps.missing}' }],
+    [{ id: '', task: 'first' }], [{ id: 42, task: 'first' }], [{ id: 'x'.repeat(65), task: 'first' }],
+    [{ task: '{steps.invalid name}' }],
+  ];
+  for (const entries of bad) for (const background of [false, true]) {
+    const result = await invoke('subagent', { chain: entries.map(entry => ({ ...entry, agent: 'project' })), background, agentScope: 'both' }, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /chain.*(ID|reference)/i);
+    assert.equal(result.details.results.length, 0);
+  }
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+});
+
+test('empty named output stops the chain without spawning a blank task', async () => {
+  const result = await invoke('subagent', { chain: [
+    { id: 'empty', agent: 'worker', task: 'empty-final' },
+    { agent: 'worker', task: '{steps.empty}' },
+  ] });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /step 2.*empty/);
+  assert.equal(traces().filter(row => row.event === 'start').length, 1);
+});
+
 test('chain size is bounded in the schema and preflight before project approval or job creation', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };

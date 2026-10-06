@@ -96,7 +96,7 @@ The `subagent` tool accepts exactly one mode. Empty arrays, blank tasks, partial
 | --- | --- | --- |
 | Single | `{ agent, task }` | One task |
 | Parallel | `{ tasks: [{ agent, task }, ...] }` | Up to 8 tasks, up to 4 concurrent |
-| Chain | `{ chain: [{ agent, task }, ...] }` | Up to 32 sequential steps, with `{previous}` substituted into each task |
+| Chain | `{ chain: [{ agent, task, id? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
 
 At the first chain step, `{previous}` is an empty string. A first task containing only that placeholder is rejected before approval or launch. If a later substitution makes the task blank, the chain stops at that step without starting another child.
 
@@ -105,6 +105,26 @@ Use `cwd` to set a working directory. Relative paths resolve from the parent ses
 Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Model-facing text is capped at 50 KiB per response, including headers and truncation notices. The same limit applies to progress updates, single tasks, chains, and entire parallel batches. Parallel tasks share the available text budget so every task's status remains visible. Captured results remain in tool details, and chains pass the full captured final text to the next step.
 
 Collapsed tool output shows bounded text previews rather than wrapping an entire long line. Expand with Ctrl+O to see captured final text. All modes show process, protocol, and model failure diagnoses, including stderr when no explicit error message is available. Tool arguments remain compact previews in either view.
+
+## Named chain outputs
+
+Give a chain step an optional `id` to reuse its output in any later step:
+
+```json
+{
+  "chain": [
+    { "id": "review", "agent": "worker", "task": "Review the authentication code without changing files." },
+    { "id": "tests", "agent": "worker", "task": "Inspect the tests without changing files." },
+    { "agent": "worker", "task": "Compare the code review with the test findings. Review: {steps.review}\nTests: {steps.tests}" }
+  ]
+}
+```
+
+`{previous}` still means the immediately preceding step's captured final text. `{steps.ID}` means the captured final text from an earlier step with that ID. IDs are case-sensitive and unique within a chain. Use 1 to 64 ASCII characters: a leading letter, then letters, digits, underscores, or hyphens.
+
+The tool rejects invalid IDs, duplicate IDs, and unknown, self, or forward references before approval or child launch. A failed step still stops the chain. If substitution produces a blank task, the next child does not start.
+
+References use full captured text, not the model-facing preview. Substitution happens once, so placeholders and dollar sequences inside an agent's output stay literal. This works in foreground and background chains, including silent jobs. Captured step results include `stepId`, and output pages include it when present. Pagination still selects steps by zero-based `taskIndex`.
 
 ## Model and thinking overrides
 

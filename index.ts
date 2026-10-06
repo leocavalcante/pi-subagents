@@ -35,6 +35,7 @@ import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } f
 import { assistantMessageError, parseChildEvent } from "./protocol.ts";
 import { MAX_PAGE_BYTES, sliceOutput } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
+import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext } from "./chain.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
@@ -172,6 +173,7 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	stepId?: string;
 	timeoutMs?: number;
 	timedOut?: boolean;
 	capture?: {
@@ -453,7 +455,7 @@ async function runSingleAgent(
 	signal?.throwIfAborted();
 	if (!task.trim()) {
 		currentResult.exitCode = 1;
-		currentResult.errorMessage = "Delegated task is empty after replacing {previous}.";
+		currentResult.errorMessage = "Delegated task is empty after chain context substitution.";
 		return currentResult;
 	}
 
@@ -732,9 +734,11 @@ const TaskItem = Type.Object({
 
 const ChainItem = Type.Object({
 	...DispatchOptions,
+	id: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64,
+		description: "Optional unique step ID. Later tasks reference this output with {steps.ID}." })),
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({
-		description: "Task with optional {previous} placeholder for prior output",
+		description: "Task with {previous} for the preceding output or {steps.ID} for an earlier named step",
 	}),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
@@ -815,7 +819,7 @@ const JobResponseSchema = Type.Object({
 	jobs: Type.Optional(Type.Array(JobMetadataSchema)),
 	job: Type.Optional(JobMetadataSchema),
 	output: Type.Optional(Type.Object({
-		taskIndex: Type.Integer(), agent: Type.String(), exitCode: Type.Integer(),
+		taskIndex: Type.Integer(), agent: Type.String(), exitCode: Type.Integer(), stepId: Type.Optional(Type.String()),
 		text: Type.String(), offset: Type.Integer(), totalBytes: Type.Integer(),
 		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
 	})),
@@ -999,7 +1003,8 @@ export default function (pi: ExtensionAPI) {
 				if (!task) return fail("No retained task at this taskIndex. Inspect status for resultCount.", job);
 				try {
 					const output = { ...sliceOutput(getResultOutput(task), params.offset ?? 0, params.limit ?? 16384),
-						taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode };
+						taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode,
+						...(task.stepId !== undefined ? { stepId: task.stepId } : {}) };
 					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;
 					return reply(`${job.id} task ${taskIndex} [${output.agent}] bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
 						metadata, { job: metadata, output });
@@ -1023,7 +1028,7 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} or {steps.ID} output references).",
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
@@ -1112,7 +1117,12 @@ export default function (pi: ExtensionAPI) {
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
-			if (params.chain && !params.chain[0].task.replace(/\{previous\}/g, "").trim()) {
+			const referenceError = params.chain ? validateChainReferences(params.chain) : undefined;
+			if (referenceError) return {
+				content: [{ type: "text", text: referenceError }],
+				details: makeDetails(mode)([]), isError: true,
+			};
+			if (params.chain && !substituteChainContext(params.chain[0].task, "", new Map()).trim()) {
 				return {
 					content: [{ type: "text", text: "The first chain task is empty after replacing {previous}. There is no previous output at step 1." }],
 					details: makeDetails(mode)([]), isError: true,
@@ -1207,10 +1217,11 @@ export default function (pi: ExtensionAPI) {
 				if (params.chain && params.chain.length > 0) {
 					const results: SingleResult[] = [];
 					let previousOutput = "";
+					const namedOutputs = new Map<string, string>();
 
 					for (let i = 0; i < params.chain.length; i++) {
 						const step = params.chain[i];
-						const taskWithContext = step.task.replace(/\{previous\}/g, () => previousOutput);
+						const taskWithContext = substituteChainContext(step.task, previousOutput, namedOutputs);
 
 						// Create update callback that includes all previous results
 						const chainUpdate: OnUpdateCallback | undefined = onUpdate
@@ -1218,6 +1229,7 @@ export default function (pi: ExtensionAPI) {
 									// Combine completed results with current streaming result
 									const currentResult = partial.details?.results[0];
 									if (currentResult) {
+										if (step.id !== undefined) currentResult.stepId = step.id;
 										const allResults = [...results, currentResult];
 										onUpdate({
 											content: partial.content,
@@ -1242,6 +1254,7 @@ export default function (pi: ExtensionAPI) {
 							chainUpdate,
 							makeDetails("chain"),
 						);
+						if (step.id !== undefined) result.stepId = step.id;
 						results.push(result);
 
 						const isError = isFailedResult(result);
@@ -1259,6 +1272,7 @@ export default function (pi: ExtensionAPI) {
 							};
 						}
 						previousOutput = getFinalOutput(result.messages);
+						if (step.id !== undefined) namedOutputs.set(step.id, previousOutput);
 					}
 					return {
 						content: [
@@ -1450,7 +1464,7 @@ export default function (pi: ExtensionAPI) {
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
 					// Clean up {previous} placeholder for display
-					const cleanTask = stringArg(step?.task, "").replace(/\{previous\}/g, "").trim();
+					const cleanTask = stringArg(step?.task, "").replace(/\{previous\}|\{steps\.[^{}]*\}/g, "").trim();
 					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 					text +=
 						"\n  " +

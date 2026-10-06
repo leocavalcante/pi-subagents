@@ -25,6 +25,7 @@
 		"protocol.ts",
 		"paging.ts",
 		"usage.ts",
+		"chain.ts",
 		"LICENSE",
 		"README.md"
 	],
