@@ -112,4 +112,8 @@ export class MessageCapture<T> {
 	get messages(): T[] {
 		return this.entries.map((entry) => entry.message);
 	}
+
+	get retainedBytes(): number {
+		return this.bytes;
+	}
 }

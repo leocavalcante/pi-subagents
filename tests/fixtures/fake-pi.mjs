@@ -39,6 +39,7 @@ if (task === 'malformed-usage') console.log(JSON.stringify({ type: 'message_end'
 if (task === 'stdout-flood' || task.startsWith('stdout-flood-hang')) await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
 if (task === 'stderr-flood') await write(process.stderr, 'é'.repeat(100 * 1024));
 if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`);
+if (task === 'retention-heavy') for (let i = 0; i < 3; i++) emit('r'.repeat(3 * 1024 * 1024));
 emit('progress: ' + task);
 setTimeout(async () => {
   if (task.includes('crash')) { console.error('fixture crashed before final output'); process.exitCode = 1; }

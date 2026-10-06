@@ -536,6 +536,31 @@ test('chain rendering uses model failure status even on zero exit, and shows pen
   }
 });
 
+test('finished job records can be forgotten or cleared without canceling active jobs', async () => {
+  const active = await launch({ task: 'delay=1500 active record' });
+  const finished = await launch({ task: 'finished record' });
+  await finish(finished);
+  assert.equal((await invoke('subagent_jobs', { action: 'forget', jobId: active })).isError, true);
+  assert.equal((await invoke('subagent_jobs', { action: 'forget', jobId: finished })).details.forgotten, finished);
+  assert.equal((await invoke('subagent_jobs', { action: 'status', jobId: finished })).isError, true);
+  await finish(await launch({ task: 'another finished record' }));
+  assert.equal((await invoke('subagent_jobs', { action: 'clear' })).details.cleared, 1);
+  assert.equal((await status(active)).state, 'running');
+  assert.equal((await finish(active)).state, 'completed');
+});
+
+test('finished registry output is byte-bounded while completion delivery retains the result', async () => {
+  const launched = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'retention-heavy' })) });
+  const id = launched.details.background.id;
+  const job = await finish(id);
+  assert.equal(job.state, 'completed');
+  assert.equal(job.outputEvicted, true);
+  assert.equal(job.latest, undefined);
+  assert.equal(messages[0].message.details.latest.details.results.length, 4);
+  assert.match((await invoke('subagent_jobs', { action: 'status', jobId: id })).content[0].text, /evicted/);
+  assert.match((await invoke('subagent_jobs', { action: 'list' })).content[0].text, /output evicted/);
+});
+
 test('background delivery and status cap large output but preserve full details', async () => {
   const id = await launch({ task: 'large' });
   const job = await finish(id);

@@ -100,6 +100,70 @@ test('completion delivery failures stay inspectable', async () => {
   await jobs.shutdown();
 });
 
+test('finished output retention has a byte budget without dropping job metadata or delivery', async () => {
+  const delivered = [];
+  const jobs = new JobManager(job => delivered.push(job), () => false, 8, 32, { maxBytes: 10, measure: result => Buffer.byteLength(result) });
+  const a = jobs.start('a', async () => 'aaaaaa');
+  await tick();
+  const b = jobs.start('b', async () => 'bbbbbb');
+  await tick();
+  assert.equal(jobs.get(a.id).state, 'completed');
+  assert.equal(jobs.get(a.id).outputEvicted, true);
+  assert.equal(jobs.get(a.id).latest, undefined);
+  assert.equal(jobs.get(b.id).latest, 'bbbbbb');
+  assert.equal(delivered[0].latest, 'aaaaaa');
+  assert.equal(delivered[1].latest, 'bbbbbb');
+  const huge = jobs.start('huge', async () => 'x'.repeat(30));
+  await tick();
+  assert.equal(jobs.get(huge.id).outputEvicted, true);
+  assert.equal(jobs.get(b.id).latest, 'bbbbbb', 'An individually oversized result must not evict useful smaller results');
+  await jobs.shutdown();
+});
+
+test('forget and clear only remove finished jobs', async () => {
+  const jobs = new JobManager(() => {}, () => false);
+  const gate = deferred();
+  const active = jobs.start('active', async () => gate.promise);
+  const finished = jobs.start('finished', async () => 'done');
+  await tick();
+  assert.throws(() => jobs.forget(active.id), /active/);
+  assert.equal(jobs.forget('unknown'), false);
+  assert.equal(jobs.forget(finished.id), true);
+  assert.equal(jobs.get(finished.id), undefined);
+  jobs.start('second finished', async () => 'done');
+  await tick();
+  assert.equal(jobs.clearFinished(), 1);
+  assert.equal(jobs.get(active.id).state, 'running');
+  gate.resolve('done');
+  await tick();
+  assert.equal(jobs.clearFinished(), 1);
+  await jobs.shutdown();
+});
+
+test('late updates cannot restore evicted output after completion', async () => {
+  let update;
+  const jobs = new JobManager(() => {}, () => false, 8, 32, { maxBytes: 0, measure: () => 1 });
+  const job = jobs.start('late', async (_signal, callback) => { update = callback; return 'done'; });
+  await tick();
+  update('late output');
+  assert.equal(jobs.get(job.id).latest, undefined);
+  assert.equal(jobs.get(job.id).outputEvicted, true);
+  await jobs.shutdown();
+});
+
+test('retention measurement failures remain safe and inspectable', async () => {
+  for (const measure of [() => NaN, () => { throw new Error('measurement'); }]) {
+    const jobs = new JobManager(() => {}, () => false, 8, 32, { maxBytes: 10, measure });
+    const job = jobs.start('bad measurement', async () => 'done');
+    await tick();
+    assert.equal(jobs.get(job.id).outputEvicted, true);
+    assert.match(jobs.get(job.id).error, /retention/);
+    await jobs.shutdown();
+  }
+  assert.throws(() => new JobManager(() => {}, () => false, 0), /positive/);
+  assert.throws(() => new JobManager(() => {}, () => false, 8, -1), /non-negative/);
+});
+
 test('process pool shares slots fairly and cancels queued requests', async () => {
   const pool = new ProcessPool(1);
   const release = await pool.acquire();

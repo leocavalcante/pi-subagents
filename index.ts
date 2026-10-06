@@ -36,6 +36,7 @@ import { assistantMessageError } from "./protocol.ts";
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
@@ -168,6 +169,7 @@ interface SingleResult {
 	timedOut?: boolean;
 	capture?: {
 		messagesDropped?: number;
+		retainedMessageBytes?: number;
 		stderrTruncated?: boolean;
 		inheritedPipesClosed?: boolean;
 	};
@@ -182,7 +184,17 @@ interface SubagentDetails {
 }
 
 type JobResult = AgentToolResult<SubagentDetails>;
-type JobToolDetails = JobSnapshot<JobResult> | { jobs: Omit<JobSnapshot<JobResult>, "latest">[] } | undefined;
+type JobToolDetails = JobSnapshot<JobResult> | { jobs: Omit<JobSnapshot<JobResult>, "latest">[] } |
+	{ forgotten: string } | { cleared: number } | undefined;
+
+function estimateJobBytes(result: JobResult): number {
+	let bytes = result.content.reduce((sum, part) => sum + Buffer.byteLength(part.type === "text" ? part.text : part.data), 0);
+	for (const task of result.details?.results ?? []) {
+		bytes += (task.capture?.retainedMessageBytes ?? 0) + Buffer.byteLength(task.task) + Buffer.byteLength(task.stderr);
+		if (task.errorMessage) bytes += Buffer.byteLength(task.errorMessage);
+	}
+	return bytes;
+}
 
 function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -502,6 +514,7 @@ async function runSingleAgent(
 					history.push(msg, Buffer.byteLength(line, "utf8"));
 					currentResult.messages = history.messages;
 					currentResult.capture!.messagesDropped = history.dropped;
+					currentResult.capture!.retainedMessageBytes = history.retainedBytes;
 
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
@@ -525,6 +538,7 @@ async function runSingleAgent(
 					history.push(event.message as Message, Buffer.byteLength(line, "utf8"));
 					currentResult.messages = history.messages;
 					currentResult.capture!.messagesDropped = history.dropped;
+					currentResult.capture!.retainedMessageBytes = history.retainedBytes;
 					emitUpdate();
 				}
 			};
@@ -714,6 +728,7 @@ export default function (pi: ExtensionAPI) {
 			);
 		},
 		(result) => Boolean(result.isError) || Boolean(result.details?.results.some(isFailedResult)),
+		8, 32, { maxBytes: MAX_RETAINED_JOB_BYTES, measure: estimateJobBytes },
 	);
 	pi.on("session_shutdown", async () => {
 		await jobs.shutdown();
@@ -788,12 +803,16 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent_jobs",
 		label: "Subagent jobs",
 		description:
-			"List, inspect, or cancel session-owned background subagent jobs. Status includes the latest progress or final result. Do not poll repeatedly; completions arrive automatically as follow-ups.",
+			"List, inspect, cancel, or forget session-owned background jobs. Clear removes only finished records; it never cancels active jobs. Status includes retained progress or final output. Do not poll repeatedly; completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
-			action: StringEnum(["list", "status", "cancel"] as const),
-			jobId: Type.Optional(Type.String({ description: "Job ID required for status or cancel." })),
+			action: StringEnum(["list", "status", "cancel", "forget", "clear"] as const),
+			jobId: Type.Optional(Type.String({ description: "Job ID required for status, cancel, or forget." })),
 		}),
 		async execute(_id, params): Promise<AgentToolResult<JobToolDetails>> {
+			if (params.action === "clear") {
+				const cleared = jobs.clearFinished();
+				return { content: [{ type: "text", text: `Cleared ${cleared} finished job record(s). Active jobs are unchanged.` }], details: { cleared } };
+			}
 			if (params.action === "list") {
 				const snapshots = jobs.list().map(({ latest: _latest, ...job }) => job);
 				return {
@@ -802,7 +821,7 @@ export default function (pi: ExtensionAPI) {
 							type: "text",
 							text: truncateParallelOutput(
 								snapshots.length
-									? snapshots.map((j) => `${j.id} ${j.state}: ${j.label}`).join("\n")
+									? snapshots.map((j) => `${j.id} ${j.state}: ${j.label}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 									: "No background subagent jobs.",
 							),
 						},
@@ -826,13 +845,17 @@ export default function (pi: ExtensionAPI) {
 					details: undefined,
 					isError: true,
 				};
-			const output =
-				job.error ??
-				job.latest?.content
-					.filter((c) => c.type === "text")
-					.map((c) => c.text)
-					.join("\n\n") ??
-				"(awaiting output)";
+			if (params.action === "forget") {
+				if (!job.finishedAt) return {
+					content: [{ type: "text", text: "Cannot forget an active job. Cancel it and wait for cleanup first." }],
+					details: undefined, isError: true,
+				};
+				jobs.forget(job.id);
+				return { content: [{ type: "text", text: `Forgot finished job ${job.id}.` }], details: { forgotten: job.id } };
+			}
+			const output = job.error ?? (job.outputEvicted
+				? "Captured output was evicted from the job registry to honor its retention budget. See the completion message."
+				: job.latest?.content.filter((c) => c.type === "text").map((c) => c.text).join("\n\n") ?? "(awaiting output)");
 			return {
 				content: [
 					{
