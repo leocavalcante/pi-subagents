@@ -827,7 +827,7 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent agents",
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
-			"Reports invalid definitions. Defaults to personal agents; use agentScope to include project agents.",
+			"Reports invalid and duplicate definitions. Defaults to personal agents; use agentScope to include project agents.",
 		].join(" "),
 		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }),
 		outputSchema: Type.Object({
@@ -878,7 +878,7 @@ export default function (pi: ExtensionAPI) {
 				content: [{
 					type: "text" as const,
 					text: truncateOutput(
-						(listing || "No subagents found.") + (warnings ? `\n\nInvalid definitions:\n${warnings}` : ""),
+						(listing || "No subagents found.") + (warnings ? `\n\nDefinition diagnostics:\n${warnings}` : ""),
 					),
 				}],
 				details,

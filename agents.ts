@@ -72,6 +72,7 @@ function parseToolList(value: unknown): string[] | undefined {
 
 function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics: AgentDiagnostic[]): AgentConfig[] {
 	const agents: AgentConfig[] = [];
+	const sourceFiles = new Map<string, string>();
 
 	if (!fs.existsSync(dir)) {
 		return agents;
@@ -116,7 +117,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 			if (thinking !== undefined && !THINKING_LEVELS.includes(thinking as ThinkingLevel)) {
 				throw new Error(`thinking must be one of: ${THINKING_LEVELS.join(", ")}.`);
 			}
-			agents.push({
+			const agent: AgentConfig = {
 				name: frontmatter.name.trim(),
 				description: frontmatter.description.trim(),
 				tools: parseToolList(frontmatter.tools),
@@ -125,7 +126,12 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 				systemPrompt: body,
 				source,
 				filePath,
-			});
+			};
+			const previous = sourceFiles.get(agent.name);
+			if (previous) diagnostics.push({ filePath, source,
+				message: `Duplicate agent name. This definition overrides ${previous}.` });
+			sourceFiles.set(agent.name, filePath);
+			agents.push(agent);
 		} catch (error) {
 			diagnostics.push({ filePath, source, message: error instanceof Error ? error.message : "Unable to load agent." });
 		}
