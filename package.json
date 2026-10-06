@@ -18,6 +18,7 @@
 		"agents.ts",
 		"jobs.ts",
 		"capture.ts",
+		"protocol.ts",
 		"LICENSE",
 		"README.md"
 	],

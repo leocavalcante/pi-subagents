@@ -18,10 +18,24 @@ const emit = (text, stopReason = 'stop') => console.log(JSON.stringify({
     usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
   },
 }));
+const write = (stream, text) => new Promise((resolve, reject) => stream.write(text, error => error ? reject(error) : resolve()));
+if (['silent-exit', 'junk-exit', 'session-only-exit'].includes(task)) {
+  if (task === 'junk-exit') await write(process.stdout, 'not JSON\n');
+  if (task === 'session-only-exit') await write(process.stdout, '{"type":"session"}\n');
+  trace({ event: 'end', task });
+  process.exit(0);
+}
+if (task === 'malformed-json') console.log('{"type":');
+if (task === 'malformed-metadata') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: {} } }));
+if (task === 'malformed-pending') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'pending' } }));
+if (task === 'retry-recovered') emit('transient error', 'error');
+if (task === 'redacted-thinking') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', redacted: true, thinkingSignature: 'opaque' }], stopReason: 'stop' } }));
+if (task === 'odd-tool-args') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: ['bash', 'read', 'write', 'edit', 'ls', 'find', 'grep'].map(name => ({ type: 'toolCall', id: name, name, arguments: { command: 42, path: {}, pattern: 42, content: 42, offset: null, limit: {} } })), stopReason: 'toolUse' } }));
+if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result_end', message: { role: 'assistant' } }));
+if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
 if (task === 'malformed-null') console.log('null');
 if (task === 'malformed-content') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant' } }));
 if (task === 'malformed-usage') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], usage: { cost: { total: 'bad' } } } }));
-const write = (stream, text) => new Promise((resolve, reject) => stream.write(text, error => error ? reject(error) : resolve()));
 if (task === 'stdout-flood' || task.startsWith('stdout-flood-hang')) await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
 if (task === 'stderr-flood') await write(process.stderr, 'é'.repeat(100 * 1024));
 if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`);

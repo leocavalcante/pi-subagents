@@ -8,5 +8,5 @@
 		"allowImportingTsExtensions": true,
 		"skipLibCheck": true
 	},
-	"include": ["index.ts", "agents.ts", "jobs.ts", "capture.ts"]
+	"include": ["index.ts", "agents.ts", "jobs.ts", "capture.ts", "protocol.ts"]
 }

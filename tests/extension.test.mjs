@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { promises as fsPromises } from 'node:fs';
 import { after, afterEach, beforeEach, test } from 'node:test';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -406,13 +406,57 @@ test('failed prompt writes remove their temporary directory and release the slot
 });
 
 test('malformed child events fail cleanly without crashing or retaining slots', async () => {
-  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage']) {
+  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-json', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message']) {
     const job = await finish(await launch({ task }));
     assert.equal(job.state, 'failed');
     assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
     assert.match(job.latest.content[0].text, /^Agent failed:/);
   }
   assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');
+});
+
+test('zero exit without a completed assistant message fails cleanly', async () => {
+  for (const task of ['silent-exit', 'junk-exit', 'session-only-exit']) {
+    const job = await finish(await launch({ task }));
+    assert.equal(job.state, 'failed');
+    assert.match(job.latest.content[0].text, /assistant message|malformed JSON/);
+  }
+});
+
+test('successful retry clears stale errors and redacted thinking remains valid', async () => {
+  for (const task of ['retry-recovered', 'redacted-thinking']) {
+    const result = await invoke('subagent', { agent: 'worker', task });
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details.results[0].errorMessage, undefined);
+  }
+});
+
+test('renderers tolerate partial calls and invalid tool argument types', async () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  for (const args of [{ chain: [{}] }, { tasks: [{}] }, { task: 42, agent: {} }]) {
+    assert.doesNotThrow(() => definition.renderCall(args, theme, {}).render(80));
+  }
+  const result = await invoke('subagent', { agent: 'worker', task: 'odd-tool-args' });
+  for (const expanded of [false, true]) assert.doesNotThrow(() => definition.renderResult(result, { expanded }, theme, {}).render(80));
+  const original = result.details.results[0];
+  const neighborPath = `${homedir()}-backup/file`;
+  const neighbor = { ...result, details: { ...result.details, results: [{ ...original, messages: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'read', name: 'read', arguments: { path: neighborPath } }] }] }] } };
+  assert.ok(definition.renderResult(neighbor, { expanded: false }, theme, {}).render(120).join('\n').includes(neighborPath));
+});
+
+test('all modes and agent names are validated before foreground children start', async () => {
+  for (const params of [
+    { agent: 'worker', tasks: [{ agent: 'worker', task: 'x' }] },
+    { task: 'x', chain: [{ agent: 'worker', task: 'x' }] },
+    { agent: 'worker', task: 'x', chain: [] },
+    { tasks: [] }, { agent: 'worker', task: '  ' },
+    { chain: [{ agent: 'worker', task: 'x' }, { agent: 'missing', task: 'x' }] },
+  ]) {
+    const result = await invoke('subagent', params);
+    assert.equal(result.isError, true);
+  }
+  assert.equal(traces().length, 0);
 });
 
 test('large tasks use stdin and relative cwd resolves from the parent session', async () => {

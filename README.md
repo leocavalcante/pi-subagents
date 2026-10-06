@@ -84,7 +84,7 @@ Run two workers in parallel: one to inspect authentication, one to inspect tests
 Use a chain: worker reviews the code, then worker evaluates the findings.
 ```
 
-The `subagent` tool accepts exactly one mode:
+The `subagent` tool accepts exactly one mode. Empty arrays, blank tasks, partial single-task parameters, and unknown agents are rejected before any child starts:
 
 | Mode | Parameters | Execution |
 | --- | --- | --- |
@@ -161,6 +161,8 @@ Each child has bounded output capture:
 - Message history retains at most 128 recent messages and 16 MiB of source JSON records. Evicting earlier messages does not change aggregate usage totals.
 
 Results and tool details report capture truncation. These are capture limits, separate from the 50 KiB model-visible output limit. Discarded records and evicted history are not preserved elsewhere.
+
+A zero exit code alone is not success. The child must emit a completed assistant message. Invalid JSONL or malformed assistant metadata fails the task without crashing the parent. Redacted thinking blocks are supported, and a successful retry clears errors from earlier attempts.
 
 After a child exits, its output pipes get one second to drain. If inherited handles keep the pipes open, the extension cleans up the POSIX process group with SIGTERM and SIGKILL, then closes its pipe ends. Windows closes the inherited pipes but does not terminate descendants. Results report this cleanup instead of waiting indefinitely for `close`.
 

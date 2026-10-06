@@ -31,6 +31,7 @@ import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { JobManager, ProcessPool, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
+import { assistantMessageError } from "./protocol.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -71,6 +72,10 @@ function formatUsageStats(
 	return parts.join(" ");
 }
 
+function stringArg(value: unknown, fallback = "..."): string {
+	return typeof value === "string" ? value : fallback;
+}
+
 function formatToolCall(
 	toolName: string,
 	args: Record<string, unknown>,
@@ -78,20 +83,20 @@ function formatToolCall(
 ): string {
 	const shortenPath = (p: string) => {
 		const home = os.homedir();
-		return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
+		return p === home || p.startsWith(`${home}${path.sep}`) ? `~${p.slice(home.length)}` : p;
 	};
 
 	switch (toolName) {
 		case "bash": {
-			const command = (args.command as string) || "...";
+			const command = stringArg(args.command) || "...";
 			const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
 			return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
 		}
 		case "read": {
-			const rawPath = (args.file_path || args.path || "...") as string;
+			const rawPath = stringArg(args.file_path ?? args.path);
 			const filePath = shortenPath(rawPath);
-			const offset = args.offset as number | undefined;
-			const limit = args.limit as number | undefined;
+			const offset = typeof args.offset === "number" && Number.isInteger(args.offset) ? args.offset : undefined;
+			const limit = typeof args.limit === "number" && Number.isInteger(args.limit) ? args.limit : undefined;
 			let text = themeFg("accent", filePath);
 			if (offset !== undefined || limit !== undefined) {
 				const startLine = offset ?? 1;
@@ -101,30 +106,30 @@ function formatToolCall(
 			return themeFg("muted", "read ") + text;
 		}
 		case "write": {
-			const rawPath = (args.file_path || args.path || "...") as string;
+			const rawPath = stringArg(args.file_path ?? args.path);
 			const filePath = shortenPath(rawPath);
-			const content = (args.content || "") as string;
+			const content = stringArg(args.content, "");
 			const lines = content.split("\n").length;
 			let text = themeFg("muted", "write ") + themeFg("accent", filePath);
 			if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
 			return text;
 		}
 		case "edit": {
-			const rawPath = (args.file_path || args.path || "...") as string;
+			const rawPath = stringArg(args.file_path ?? args.path);
 			return themeFg("muted", "edit ") + themeFg("accent", shortenPath(rawPath));
 		}
 		case "ls": {
-			const rawPath = (args.path || ".") as string;
+			const rawPath = stringArg(args.path, ".");
 			return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));
 		}
 		case "find": {
-			const pattern = (args.pattern || "*") as string;
-			const rawPath = (args.path || ".") as string;
+			const pattern = stringArg(args.pattern, "*");
+			const rawPath = stringArg(args.path, ".");
 			return themeFg("muted", "find ") + themeFg("accent", pattern) + themeFg("dim", ` in ${shortenPath(rawPath)}`);
 		}
 		case "grep": {
-			const pattern = (args.pattern || "") as string;
-			const rawPath = (args.path || ".") as string;
+			const pattern = stringArg(args.pattern, "");
+			const rawPath = stringArg(args.path, ".");
 			return (
 				themeFg("muted", "grep ") + themeFg("accent", `/${pattern}/`) + themeFg("dim", ` in ${shortenPath(rawPath)}`)
 			);
@@ -470,6 +475,7 @@ async function runSingleAgent(
 				try {
 					event = JSON.parse(line);
 				} catch {
+					protocolError = "Invalid subagent JSON event: malformed JSON.";
 					return;
 				}
 
@@ -477,28 +483,16 @@ async function runSingleAgent(
 					protocolError = "Invalid subagent JSON event: expected an object.";
 					return;
 				}
-				if (event.type === "message_end" && event.message?.role === "assistant") {
-					const content = event.message.content;
-					if (!Array.isArray(content) || !content.every((part: any) =>
-						part && typeof part === "object" && (
-							(part.type === "text" && typeof part.text === "string") ||
-							(part.type === "thinking" && typeof part.thinking === "string") ||
-							(part.type === "toolCall" && typeof part.name === "string" &&
-								part.arguments && typeof part.arguments === "object" && !Array.isArray(part.arguments))
-						))) {
-						protocolError = "Invalid subagent JSON event: malformed assistant content.";
-						return;
-					}
-					const usage = event.message.usage;
-					const isCount = (value: unknown) => value === undefined ||
-						(typeof value === "number" && Number.isFinite(value) && value >= 0);
-					if (usage !== undefined && (
-						!usage || typeof usage !== "object" || Array.isArray(usage) ||
-						![usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(isCount) ||
-						(usage.cost !== undefined && (!usage.cost || typeof usage.cost !== "object" ||
-							Array.isArray(usage.cost) || !isCount(usage.cost.total)))
-					)) {
-						protocolError = "Invalid subagent JSON event: malformed assistant usage.";
+				const isMessageEnd = event.type === "message_end" || event.type === "tool_result_end";
+				if (isMessageEnd && (!event.message || typeof event.message !== "object" ||
+					Array.isArray(event.message) || typeof event.message.role !== "string")) {
+					protocolError = "Invalid subagent JSON event: malformed message.";
+					return;
+				}
+				if (isMessageEnd && event.message.role === "assistant") {
+					const error = assistantMessageError(event.message);
+					if (error) {
+						protocolError = `Invalid subagent JSON event: ${error}.`;
 						return;
 					}
 				}
@@ -522,7 +516,7 @@ async function runSingleAgent(
 						}
 						if (!currentResult.model && msg.model) currentResult.model = msg.model;
 						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+						currentResult.errorMessage = msg.errorMessage;
 					}
 					emitUpdate();
 				}
@@ -600,6 +594,9 @@ async function runSingleAgent(
 			else signal?.addEventListener("abort", killProc, { once: true });
 		});
 
+		if (exitCode === 0 && !wasAborted && !timedOut && currentResult.usage.turns === 0) {
+			protocolError ??= "Subagent exited without a completed assistant message.";
+		}
 		currentResult.exitCode = protocolError || timedOut ? 1 : exitCode;
 		if (timedOut) currentResult.timedOut = true;
 		const failureCauses = [timedOut ? `Subagent timed out after ${timeoutMs} ms.` : undefined, protocolError];
@@ -666,11 +663,14 @@ const SubagentParams = Type.Object({
 	tasks: Type.Optional(
 		Type.Array(TaskItem, {
 			description: "Array of {agent, task} for parallel execution",
+			minItems: 1,
+			maxItems: MAX_PARALLEL_TASKS,
 		}),
 	),
 	chain: Type.Optional(
 		Type.Array(ChainItem, {
 			description: "Array of {agent, task} for sequential execution",
+			minItems: 1,
 		}),
 	),
 	agentScope: Type.Optional(AgentScopeSchema),
@@ -870,9 +870,9 @@ export default function (pi: ExtensionAPI) {
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
-			const hasChain = (params.chain?.length ?? 0) > 0;
-			const hasTasks = (params.tasks?.length ?? 0) > 0;
-			const hasSingle = Boolean(params.agent && params.task);
+			const hasChain = params.chain !== undefined;
+			const hasTasks = params.tasks !== undefined;
+			const hasSingle = params.agent !== undefined || params.task !== undefined;
 			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 
 			const makeDetails =
@@ -899,6 +899,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			const requested = hasChain ? params.chain! : hasTasks ? params.tasks! : [{ agent: params.agent!, task: params.task! }];
+			if (!requested.length || requested.some((item) =>
+				typeof item?.agent !== "string" || !item.agent.trim() || typeof item?.task !== "string" || !item.task.trim())) {
+				return {
+					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
 			const deadlines = [params.timeoutMs, ...(params.tasks ?? []).map((t) => t.timeoutMs),
 				...(params.chain ?? []).map((t) => t.timeoutMs)];
 			if (deadlines.some((value) => value !== undefined &&
@@ -933,8 +941,7 @@ export default function (pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
-			if (params.background) {
-				const requested = hasChain ? params.chain! : hasTasks ? params.tasks! : [{ agent: params.agent! }];
+			{
 				const unknown = requested.find((r) => !agents.some((a) => a.name === r.agent));
 				if (unknown)
 					return {
@@ -1216,8 +1223,8 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme, _context) {
-			const scope = `${args.agentScope ?? "user"}${args.background ? ", background" : ""}`;
-			if (args.chain && args.chain.length > 0) {
+			const scope = `${stringArg(args.agentScope, "user")}${args.background ? ", background" : ""}`;
+			if (Array.isArray(args.chain) && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `chain (${args.chain.length} steps)`) +
@@ -1225,32 +1232,34 @@ export default function (pi: ExtensionAPI) {
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
 					// Clean up {previous} placeholder for display
-					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
+					const cleanTask = stringArg(step?.task, "").replace(/\{previous\}/g, "").trim();
 					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 					text +=
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
-						theme.fg("accent", step.agent) +
+						theme.fg("accent", stringArg(step?.agent)) +
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
-			if (args.tasks && args.tasks.length > 0) {
+			if (Array.isArray(args.tasks) && args.tasks.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
-					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+					const task = stringArg(t?.task, "");
+					const preview = task.length > 40 ? `${task.slice(0, 40)}...` : task;
+					text += `\n  ${theme.fg("accent", stringArg(t?.agent))}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
-			const agentName = args.agent || "...";
-			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
+			const agentName = stringArg(args.agent);
+			const task = stringArg(args.task);
+			const preview = task.length > 60 ? `${task.slice(0, 60)}...` : task;
 			let text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
