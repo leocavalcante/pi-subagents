@@ -168,6 +168,7 @@ The `subagent_jobs` tool manages jobs:
 ```json
 { "action": "list" }
 { "action": "status", "jobId": "<job ID>" }
+{ "action": "output", "jobId": "<finished job ID>", "taskIndex": 0, "offset": 0, "limit": 16384 }
 { "action": "cancel", "jobId": "<job ID>" }
 { "action": "forget", "jobId": "<finished job ID>" }
 { "action": "clear" }
@@ -184,6 +185,25 @@ Foreground calls and background jobs share a limit of four direct child processe
 Completion and status text are capped at 50 KiB including headers and truncation notices, with captured output retained in details. Jobs live only in the current Pi session. Quit, `/reload`, and session replacement cancel active jobs and discard job history. Jobs do not survive a Pi restart.
 
 Background execution requires a long-lived TUI or RPC session. Print and JSON modes must use foreground execution so they do not exit with unfinished work.
+
+## Read captured job output
+
+After a job finishes, `action: "output"` reads a page of a task's captured final text or failure diagnosis. `taskIndex` is zero-based and defaults to 0. For a parallel batch or chain, use the task's position in the original request. Status reports `resultCount` while results are retained.
+
+`offset` is a UTF-8 byte offset, not a character count. Start at 0 and use the returned `nextOffset` until it is `null`. `limit` is 4 to 32768 bytes, with a default of 16384. Pages never split a UTF-8 character. Active jobs, unavailable captures, invalid indices, and offsets inside a character return an error. Evicted output cannot be recovered from this registry.
+
+Job operations also return structured data to codemode scripts. List returns `{ action, jobs }`, inspection returns `{ action, job }`, and output adds an `output` page. Errors include `error`. Job metadata contains state and timestamps but no full message capture. Page responses do not copy the full capture into session history again.
+
+For a completed job:
+
+```js
+const result = await tools.subagent_jobs({ action: "output", jobId: "<job ID>", taskIndex: 0 });
+if (result.error) throw new Error(result.error);
+text(result.output.text);
+store("next-output-offset", result.output.nextOffset);
+```
+
+Read additional pages only when needed. Completion delivery still arrives automatically, so do not poll for it.
 
 ## Output capture and cleanup
 

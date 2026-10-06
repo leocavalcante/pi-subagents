@@ -23,6 +23,7 @@
 		"jobs.ts",
 		"capture.ts",
 		"protocol.ts",
+		"paging.ts",
 		"LICENSE",
 		"README.md"
 	],

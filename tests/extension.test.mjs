@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { loadExtensions } from './pi-runtime.mjs';
+import { Value } from 'typebox/value';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
@@ -674,6 +675,10 @@ test('finished registry output is byte-bounded while completion delivery retains
   assert.equal(messages[0].message.details.latest.details.results.length, 4);
   assert.match((await invoke('subagent_jobs', { action: 'status', jobId: id })).content[0].text, /evicted/);
   assert.match((await invoke('subagent_jobs', { action: 'list' })).content[0].text, /output evicted/);
+  const page = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.equal(page.isError, true);
+  assert.match(page.structuredContent.error, /evicted/);
+  assert.equal(page.structuredContent.job.outputEvicted, true);
 });
 
 test('single and chain responses cap text without truncating captured data or chain input', async () => {
@@ -710,6 +715,78 @@ test('streaming text uses the same budget as the completed result', async () => 
   assert.ok(updates.every(p => Buffer.byteLength(p.content[0].text) <= 50 * 1024));
   assert.match(updates.at(-1).content[0].text, /Output truncated/);
   assert.equal(updates.at(-1).details.results[0].messages.at(-1).content[0].text.length, 40000);
+});
+
+test('job output pages retrieve text beyond the truncated completion summary', async () => {
+  const id = await launch({ task: 'large' });
+  await finish(id);
+  let offset = 0, output = '';
+  do {
+    const result = await invoke('subagent_jobs', { action: 'output', jobId: id, offset, limit: 32768 });
+    assert.notEqual(result.isError, true);
+    assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);
+    const page = result.structuredContent.output;
+    output += page.text;
+    if (page.nextOffset === null) break;
+    offset = page.nextOffset;
+  } while (true);
+  assert.equal(output, 'é'.repeat(40000));
+});
+
+test('structured job responses exclude full captures and support selecting batch output', async () => {
+  const launched = await invoke('subagent', { background: true, tasks: [{ agent: 'worker', task: 'first' }, { agent: 'worker', task: 'second' }] });
+  const id = launched.details.background.id;
+  await finish(id);
+  const listed = await invoke('subagent_jobs', { action: 'list' });
+  assert.ok(tools.get('subagent_jobs').definition.outputSchema);
+  assert.equal(listed.structuredContent.jobs[0].id, id);
+  assert.equal(listed.structuredContent.jobs[0].latest, undefined);
+  const inspected = await invoke('subagent_jobs', { action: 'status', jobId: id });
+  assert.equal(inspected.structuredContent.job.resultCount, 2);
+  assert.equal(inspected.structuredContent.job.latest, undefined);
+  const output = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 1 });
+  assert.equal(output.structuredContent.output.text, 'result: second');
+  assert.equal(output.structuredContent.output.taskIndex, 1);
+  const forgotten = await invoke('subagent_jobs', { action: 'forget', jobId: id });
+  assert.equal(forgotten.structuredContent.forgotten, id);
+  assert.equal((await invoke('subagent_jobs', { action: 'clear' })).structuredContent.cleared, 0);
+  const missing = await invoke('subagent_jobs', { action: 'status', jobId: id });
+  assert.equal(missing.isError, true);
+  assert.match(missing.structuredContent.error, /Unknown/);
+  for (const response of [listed, inspected, output, forgotten, missing, await invoke('subagent_jobs', { action: 'clear' })]) {
+    assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, response.structuredContent), true);
+  }
+  assert.equal(output.details.latest, undefined, 'Output pages must not duplicate full captures into session history');
+});
+
+test('output pages reject active jobs and expose failed-job diagnoses after completion', async () => {
+  const id = await launch({ task: 'delay=10000 hold' });
+  const active = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.equal(active.isError, true);
+  assert.match(active.structuredContent.error, /finished job/);
+  const canceled = await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  assert.equal(canceled.structuredContent.job.id, id);
+  await finish(id);
+  const failed = await launch({ task: 'zero-exit fail' });
+  await finish(failed);
+  const output = await invoke('subagent_jobs', { action: 'output', jobId: failed });
+  assert.notEqual(output.isError, true, 'Reading a failed task is not an inspection failure');
+  assert.equal(output.structuredContent.job.state, 'failed');
+  assert.equal(output.structuredContent.output.text, 'fixture failure');
+});
+
+test('invalid output queries do not mutate jobs or launch children', async () => {
+  const id = await launch({ task: 'small result' });
+  await finish(id);
+  for (const query of [{ offset: -1 }, { offset: 1.5 }, { limit: 3 }, { limit: 32769 }, { taskIndex: -1 }, { taskIndex: 1 }, { offset: 999999 }]) {
+    const result = await invoke('subagent_jobs', { action: 'output', jobId: id, ...query });
+    assert.equal(result.isError, true);
+    assert.ok(result.structuredContent.error);
+  }
+  const misuse = await invoke('subagent_jobs', { action: 'cancel', jobId: id, offset: 1 });
+  assert.equal(misuse.isError, true);
+  assert.equal((await status(id)).state, 'completed');
+  assert.equal(traces().filter(t => t.event === 'start').length, 1);
 });
 
 test('background delivery and status cap large output but preserve full details', async () => {

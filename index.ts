@@ -28,11 +28,12 @@ import {
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, THINKING_LEVELS } from "./agents.ts";
 import { JobManager, ProcessPool, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, parseChildEvent } from "./protocol.ts";
+import { MAX_PAGE_BYTES, sliceOutput } from "./paging.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -750,6 +751,38 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 	));
 }
 
+const JobActionSchema = StringEnum(["list", "status", "cancel", "forget", "clear", "output"] as const);
+const JobMetadataSchema = Type.Object({
+	id: Type.String(), label: Type.String(),
+	state: StringEnum(["running", "canceling", "completed", "failed", "canceled"] as const),
+	startedAt: Type.String(), finishedAt: Type.Optional(Type.String()),
+	error: Type.Optional(Type.String()), outputEvicted: Type.Optional(Type.Boolean()),
+	resultCount: Type.Optional(Type.Integer()),
+});
+const JobResponseSchema = Type.Object({
+	action: JobActionSchema,
+	jobs: Type.Optional(Type.Array(JobMetadataSchema)),
+	job: Type.Optional(JobMetadataSchema),
+	output: Type.Optional(Type.Object({
+		taskIndex: Type.Integer(), agent: Type.String(), exitCode: Type.Integer(),
+		text: Type.String(), offset: Type.Integer(), totalBytes: Type.Integer(),
+		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
+	})),
+	forgotten: Type.Optional(Type.String()), cleared: Type.Optional(Type.Integer()),
+	error: Type.Optional(Type.String()),
+});
+
+function jobMetadata(job: JobSnapshot<JobResult>): Static<typeof JobMetadataSchema> {
+	return {
+		id: job.id, label: truncateOutput(job.label, 1024, "..."),
+		state: job.state, startedAt: job.startedAt,
+		...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
+		...(job.error ? { error: truncateOutput(job.error, 2048, "...") } : {}),
+		...(job.outputEvicted ? { outputEvicted: true } : {}),
+		...(job.latest?.details ? { resultCount: job.latest.details.results.length } : {}),
+	};
+}
+
 export default function (pi: ExtensionAPI) {
 	const pool = new ProcessPool(MAX_CONCURRENCY);
 	const jobs = new JobManager<JobResult>(
@@ -850,69 +883,74 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
-		description:
-			"List, inspect, cancel, or forget session-owned background jobs. Clear removes only finished records; it never cancels active jobs. Status includes retained progress or final output. Do not poll repeatedly; completions arrive automatically as follow-ups.",
+		description: "List, inspect, cancel, or forget session-owned background jobs. Use output to page through a finished task's captured text or failure diagnosis. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
-			action: StringEnum(["list", "status", "cancel", "forget", "clear"] as const),
-			jobId: Type.Optional(Type.String({ description: "Job ID required for status, cancel, or forget." })),
+			action: JobActionSchema,
+			jobId: Type.Optional(Type.String({ description: "Job ID required except for list and clear." })),
+			taskIndex: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: zero-based task index. Default: 0." })),
+			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: UTF-8 byte offset. Default: 0. Use nextOffset from the previous page." })),
+			limit: Type.Optional(Type.Integer({ minimum: 4, maximum: MAX_PAGE_BYTES, description: "Output only: maximum page bytes, from 4 to 32768. Default: 16384." })),
 		}),
+		outputSchema: JobResponseSchema,
 		async execute(_id, params): Promise<AgentToolResult<JobToolDetails>> {
+			const reply = (text: string, details: JobToolDetails, data: Omit<Static<typeof JobResponseSchema>, "action">, isError = false): AgentToolResult<JobToolDetails> => ({
+				content: [{ type: "text", text: truncateOutput(text) }], details,
+				structuredContent: { action: params.action, ...data }, ...(isError ? { isError: true } : {}),
+			});
+			const fail = (error: string, job?: JobSnapshot<JobResult>) =>
+				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job) } : {}) }, true);
+			if (params.action !== "output" && [params.taskIndex, params.offset, params.limit].some((v) => v !== undefined)) {
+				return fail("taskIndex, offset, and limit apply only to action: output.");
+			}
+			if (params.action === "output" && (
+				(params.taskIndex !== undefined && (!Number.isSafeInteger(params.taskIndex) || params.taskIndex < 0)) ||
+				(params.offset !== undefined && (!Number.isSafeInteger(params.offset) || params.offset < 0)) ||
+				(params.limit !== undefined && (!Number.isInteger(params.limit) || params.limit < 4 || params.limit > MAX_PAGE_BYTES)))) {
+				return fail("Invalid output query. Use non-negative integer taskIndex/offset and a limit between 4 and 32768.");
+			}
 			if (params.action === "clear") {
 				const cleared = jobs.clearFinished();
-				return { content: [{ type: "text", text: `Cleared ${cleared} finished job record(s). Active jobs are unchanged.` }], details: { cleared } };
+				return reply(`Cleared ${cleared} finished job record(s). Active jobs are unchanged.`, { cleared }, { cleared });
 			}
 			if (params.action === "list") {
-				const snapshots = jobs.list().map(({ latest: _latest, ...job }) => job);
-				return {
-					content: [
-						{
-							type: "text",
-							text: truncateOutput(
-								snapshots.length
-									? snapshots.map((j) => `${j.id} ${j.state}: ${j.label}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
-									: "No background subagent jobs.",
-							),
-						},
-					],
-					details: { jobs: snapshots },
-				};
+				const listed = jobs.list();
+				const snapshots = listed.map(({ latest: _latest, ...job }) => job);
+				const metadata = listed.map(jobMetadata);
+				return reply(metadata.length
+					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
+					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
 			const job = params.jobId
-				? params.action === "cancel"
-					? jobs.cancel(params.jobId)
-					: jobs.get(params.jobId)
+				? params.action === "cancel" ? jobs.cancel(params.jobId) : jobs.get(params.jobId)
 				: undefined;
-			if (!job)
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Unknown or missing job ID. Use action: list to see jobs.",
-						},
-					],
-					details: undefined,
-					isError: true,
-				};
+			if (!job) return fail("Unknown or missing job ID. Use action: list to see jobs.");
 			if (params.action === "forget") {
-				if (!job.finishedAt) return {
-					content: [{ type: "text", text: "Cannot forget an active job. Cancel it and wait for cleanup first." }],
-					details: undefined, isError: true,
-				};
+				if (!job.finishedAt) return fail("Cannot forget an active job. Cancel it and wait for cleanup first.", job);
 				jobs.forget(job.id);
-				return { content: [{ type: "text", text: `Forgot finished job ${job.id}.` }], details: { forgotten: job.id } };
+				return reply(`Forgot finished job ${job.id}.`, { forgotten: job.id }, { forgotten: job.id });
+			}
+			const metadata = jobMetadata(job);
+			if (params.action === "output") {
+				if (!job.finishedAt) return fail("Output pages require a finished job. Completions arrive automatically.", job);
+				if (job.outputEvicted) return fail("Captured output was evicted from the job registry. See the completion message.", job);
+				const taskIndex = params.taskIndex ?? 0;
+				const task = job.latest?.details?.results[taskIndex];
+				if (!task) return fail("No retained task at this taskIndex. Inspect status for resultCount.", job);
+				try {
+					const output = { ...sliceOutput(getResultOutput(task), params.offset ?? 0, params.limit ?? 16384),
+						taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode };
+					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;
+					return reply(`${job.id} task ${taskIndex} [${output.agent}] bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
+						metadata, { job: metadata, output });
+				} catch (error) {
+					if (!(error instanceof RangeError)) throw error;
+					return fail(error.message, job);
+				}
 			}
 			const output = job.error ?? (job.outputEvicted
 				? "Captured output was evicted from the job registry to honor its retention budget. See the completion message."
 				: job.latest?.content.filter((c) => c.type === "text").map((c) => c.text).join("\n\n") ?? "(awaiting output)");
-			return {
-				content: [
-					{
-						type: "text",
-						text: truncateOutput(`${job.id} ${job.state}: ${job.label}\n\n${output}`),
-					},
-				],
-				details: job,
-			};
+			return reply(`${job.id} ${job.state}: ${job.label}\n\n${output}`, job, { job: metadata });
 		},
 	});
 
