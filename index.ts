@@ -28,7 +28,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import { type AgentConfig, type AgentScope, discoverAgents, THINKING_LEVELS } from "./agents.ts";
 import { JobManager, ProcessPool, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, parseChildEvent } from "./protocol.ts";
@@ -327,6 +327,11 @@ interface DispatchDefaults {
 	thinkingLevel?: ThinkingLevel;
 }
 
+interface DispatchOverrides {
+	model?: string;
+	thinking?: ThinkingLevel;
+}
+
 async function runSingleAgent(
 	defaultCwd: string,
 	pool: ProcessPool,
@@ -335,6 +340,7 @@ async function runSingleAgent(
 	agentName: string,
 	task: string,
 	cwd: string | undefined,
+	overrides: DispatchOverrides,
 	timeoutMs: number | undefined,
 	step: number | undefined,
 	signal: AbortSignal | undefined,
@@ -366,10 +372,10 @@ async function runSingleAgent(
 	}
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	const inheritsDispatchConfig = !agent.model;
-	const model = agent.model ?? dispatchDefaults.model;
+	const inheritsDispatchConfig = !overrides.model && !agent.model;
+	const model = overrides.model?.trim() ?? agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
-	const thinking = agent.thinking ?? (inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined);
+	const thinking = overrides.thinking ?? agent.thinking ?? (inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined);
 	if (thinking) args.push("--thinking", thinking);
 	if (agent.tools) {
 		if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
@@ -641,7 +647,13 @@ const TimeoutSchema = Type.Integer({
 	description: "Per-task runtime deadline in milliseconds, starting at child spawn. Queue time excluded. No deadline by default.",
 });
 
+const DispatchOptions = {
+	model: Type.Optional(Type.String({ minLength: 1, description: "Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes." })),
+	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." })),
+};
+
 const TaskItem = Type.Object({
+	...DispatchOptions,
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	timeoutMs: Type.Optional(TimeoutSchema),
@@ -649,6 +661,7 @@ const TaskItem = Type.Object({
 });
 
 const ChainItem = Type.Object({
+	...DispatchOptions,
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({
 		description: "Task with optional {previous} placeholder for prior output",
@@ -663,6 +676,7 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 });
 
 const SubagentParams = Type.Object({
+	...DispatchOptions,
 	background: Type.Optional(
 		Type.Boolean({
 			description: "Return a job ID immediately and deliver results later. TUI/RPC only. Default: false.",
@@ -882,6 +896,7 @@ export default function (pi: ExtensionAPI) {
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
+			"Set model or thinking to override agent configuration. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically. Use subagent_jobs to inspect or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
@@ -943,6 +958,15 @@ export default function (pi: ExtensionAPI) {
 				typeof item?.agent !== "string" || !item.agent.trim() || typeof item?.task !== "string" || !item.task.trim())) {
 				return {
 					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+			const configurations: DispatchOverrides[] = [params, ...(params.tasks ?? []), ...(params.chain ?? [])];
+			if (configurations.some((item) =>
+				(item.model !== undefined && (typeof item.model !== "string" || !item.model.trim())) ||
+				(item.thinking !== undefined && !THINKING_LEVELS.includes(item.thinking)))) {
+				return {
+					content: [{ type: "text", text: `model must be a non-empty string; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
@@ -1066,6 +1090,7 @@ export default function (pi: ExtensionAPI) {
 							step.agent,
 							taskWithContext,
 							step.cwd,
+							{ model: step.model ?? params.model, thinking: step.thinking ?? params.thinking },
 							step.timeoutMs ?? params.timeoutMs,
 							i + 1,
 							signal,
@@ -1151,6 +1176,7 @@ export default function (pi: ExtensionAPI) {
 							t.agent,
 							t.task,
 							t.cwd,
+							{ model: t.model ?? params.model, thinking: t.thinking ?? params.thinking },
 							t.timeoutMs ?? params.timeoutMs,
 							undefined,
 							signal,
@@ -1197,6 +1223,7 @@ export default function (pi: ExtensionAPI) {
 						params.agent,
 						params.task,
 						params.cwd,
+						params,
 						params.timeoutMs,
 						undefined,
 						signal,

@@ -102,6 +102,23 @@ Use `cwd` to set a working directory. Relative paths resolve from the parent ses
 
 Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Parallel model-visible output is capped at 50 KiB per task; captured results remain in tool details.
 
+## Model and thinking overrides
+
+Set `model` or `thinking` on a call without editing the agent definition:
+
+```json
+{
+  "agent": "worker",
+  "task": "Review the authentication tests without changing files.",
+  "model": "anthropic/claude-sonnet-4-5",
+  "thinking": "low"
+}
+```
+
+Parallel and chain entries accept the same fields. Each field resolves independently, with precedence: entry, top-level call, agent frontmatter, then parent session. Parent thinking is inherited only when the model is also inherited from the parent. If neither the call nor the agent sets `thinking`, an explicit model uses Pi's model default or model suffix instead.
+
+Model selectors support Pi's `provider/id` and `:thinking` syntax. A resolved `thinking` setting overrides a model suffix. These options work in foreground and background modes and leave the agent's tools and project approval unchanged.
+
 ## Batch concurrency
 
 Parallel mode accepts `concurrency` from 1 to 4, with a default of 4. Use `concurrency: 1` to run independent tasks serially without chaining their output. All batches still share the same four-process budget; this option never raises it. Single and chain modes reject this option.

@@ -561,6 +561,47 @@ test('agent thinking overrides inheritance and empty tools disable the selection
   } finally { rmSync(file); }
 });
 
+test('per-call model and thinking overrides take precedence without broadening tools', async () => {
+  const result = await invoke('subagent', { agent: 'pinned', task: 'overrides', model: ' fake/override:medium ', thinking: 'low' });
+  const first = traces().find(t => t.event === 'start');
+  assert.equal(first.model, 'fake/override:medium');
+  assert.equal(first.thinking, 'low');
+  assert.equal(first.tools, 'read,bash');
+  assert.equal(result.details.results[0].model, 'fake/override:medium');
+  await invoke('subagent', { agent: 'worker', task: 'explicit model', model: 'fake/explicit:low' });
+  assert.equal(traces().filter(t => t.event === 'start').at(-1).thinking, undefined);
+  await invoke('subagent', { agent: 'worker', task: 'thinking only', thinking: 'off' });
+  const last = traces().filter(t => t.event === 'start').at(-1);
+  assert.equal(last.model, 'fake/parent');
+  assert.equal(last.thinking, 'off');
+});
+
+test('parallel and background chain entries override batch model and thinking defaults', async () => {
+  const entries = [{ agent: 'pinned', task: 'batch default' }, { agent: 'worker', task: 'entry override', model: 'fake/entry', thinking: 'off' }];
+  await invoke('subagent', { tasks: entries, model: 'fake/batch', thinking: 'medium' });
+  const starts = traces().filter(t => t.event === 'start');
+  assert.equal(starts.find(t => t.task === 'batch default').model, 'fake/batch');
+  assert.equal(starts.find(t => t.task === 'batch default').thinking, 'medium');
+  assert.equal(starts.find(t => t.task === 'entry override').model, 'fake/entry');
+  assert.equal(starts.find(t => t.task === 'entry override').thinking, 'off');
+  const launched = await invoke('subagent', { background: true, chain: entries, model: 'fake/chain', thinking: 'low' });
+  assert.equal((await finish(launched.details.background.id)).state, 'completed');
+  const chain = traces().filter(t => t.event === 'start').slice(2);
+  assert.deepEqual(chain.map(t => [t.model, t.thinking]), [['fake/chain', 'low'], ['fake/entry', 'off']]);
+});
+
+test('invalid dispatch overrides fail before project approval or any child launch', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
+  for (const overrides of [{ model: '' }, { model: '  ' }, { model: 42 }, { thinking: 'invalid' }, { thinking: null }]) {
+    for (const params of [{ agent: 'project', task: 'x', ...overrides }, { tasks: [{ agent: 'project', task: 'x', ...overrides }] }, { chain: [{ agent: 'project', task: 'x', ...overrides }] }]) {
+      assert.equal((await invoke('subagent', { ...params, agentScope: 'both' }, context)).isError, true);
+    }
+  }
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+});
+
 test('final output includes all text blocks and chain substitution preserves dollar sequences', async () => {
   const output = await invoke('subagent', { agent: 'worker', task: 'blocks' });
   assert.equal(output.content[0].text, 'first block\n\nsecond block');

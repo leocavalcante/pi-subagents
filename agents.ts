@@ -48,7 +48,7 @@ type AgentFrontmatter = {
 	thinking?: unknown;
 };
 
-const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 
 /**
  * Normalize a frontmatter `tools` value to a list of tool names.
