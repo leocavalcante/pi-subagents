@@ -22,7 +22,7 @@ if (task === 'malformed-null') console.log('null');
 if (task === 'malformed-content') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant' } }));
 if (task === 'malformed-usage') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], usage: { cost: { total: 'bad' } } } }));
 const write = (stream, text) => new Promise((resolve, reject) => stream.write(text, error => error ? reject(error) : resolve()));
-if (task === 'stdout-flood') await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
+if (task === 'stdout-flood' || task.startsWith('stdout-flood-hang')) await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
 if (task === 'stderr-flood') await write(process.stderr, 'é'.repeat(100 * 1024));
 if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`);
 emit('progress: ' + task);

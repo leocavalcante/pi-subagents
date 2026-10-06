@@ -601,11 +601,9 @@ async function runSingleAgent(
 		});
 
 		currentResult.exitCode = protocolError || timedOut ? 1 : exitCode;
-		if (timedOut) {
-			currentResult.timedOut = true;
-			currentResult.errorMessage = `Subagent timed out after ${timeoutMs} ms.`;
-		}
-		if (protocolError) currentResult.errorMessage = protocolError;
+		if (timedOut) currentResult.timedOut = true;
+		const failureCauses = [timedOut ? `Subagent timed out after ${timeoutMs} ms.` : undefined, protocolError];
+		if (failureCauses.some(Boolean)) currentResult.errorMessage = failureCauses.filter(Boolean).join(" ");
 		if (wasAborted) throw new Error("Subagent was aborted");
 		return currentResult;
 	} finally {
@@ -1166,7 +1164,7 @@ export default function (pi: ExtensionAPI) {
 							content: [
 								{
 									type: "text",
-									text: `Agent ${result.stopReason || "failed"}: ${errorMsg}`,
+									text: `Agent failed: ${errorMsg}`,
 								},
 							],
 							details: makeDetails("single")([result]),

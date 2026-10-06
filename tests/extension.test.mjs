@@ -294,6 +294,14 @@ test('task deadlines fail rather than cancel jobs and release the process slot',
   assert.equal((await finish(await launch({ task: 'after deadline' }))).state, 'completed');
 });
 
+test('a deadline after oversized output reports both failure causes', async () => {
+  const job = await finish(await launch({ task: 'stdout-flood-hang delay=10000 stubborn', timeoutMs: 1500 }));
+  assert.equal(job.state, 'failed');
+  assert.equal(job.latest.details.results[0].timedOut, true);
+  assert.match(job.latest.content[0].text, /timed out after 1500 ms/);
+  assert.match(job.latest.content[0].text, /JSON record.*exceeded/);
+});
+
 test('deadlines start after acquiring a slot, not while queued', async () => {
   const occupying = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=800 occupy' })) });
   await waitFor(() => traces().filter(t => t.event === 'start').length === 4);
@@ -402,6 +410,7 @@ test('malformed child events fail cleanly without crashing or retaining slots', 
     const job = await finish(await launch({ task }));
     assert.equal(job.state, 'failed');
     assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
+    assert.match(job.latest.content[0].text, /^Agent failed:/);
   }
   assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');
 });
