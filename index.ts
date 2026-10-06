@@ -34,6 +34,7 @@ import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } f
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
+const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
@@ -158,6 +159,8 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	timeoutMs?: number;
+	timedOut?: boolean;
 	capture?: {
 		messagesDropped?: number;
 		stderrTruncated?: boolean;
@@ -314,6 +317,7 @@ async function runSingleAgent(
 	agentName: string,
 	task: string,
 	cwd: string | undefined,
+	timeoutMs: number | undefined,
 	step: number | undefined,
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
@@ -375,6 +379,7 @@ async function runSingleAgent(
 		},
 		model,
 		step,
+		timeoutMs,
 	};
 
 	const emitUpdate = () => {
@@ -404,6 +409,7 @@ async function runSingleAgent(
 		// Prompt creation awaits I/O; cancellation may have arrived since acquisition.
 		signal?.throwIfAborted();
 		let wasAborted = false;
+		let timedOut = false;
 		let protocolError: string | undefined;
 		const history = new MessageCapture<Message>();
 		const stderr = new TextCapture();
@@ -422,6 +428,7 @@ async function runSingleAgent(
 			let closed = false;
 			let settled = false;
 			let drainTimer: NodeJS.Timeout | undefined;
+			let deadlineTimer: NodeJS.Timeout | undefined;
 			let escalation: Promise<void> | undefined;
 			const closePipes = () => {
 				proc.stdin.destroy();
@@ -535,6 +542,7 @@ async function runSingleAgent(
 				if (settled) return;
 				settled = true;
 				clearTimeout(drainTimer);
+				clearTimeout(deadlineTimer);
 				signal?.removeEventListener("abort", killProc);
 				const complete = () => {
 					reader.finish();
@@ -556,6 +564,7 @@ async function runSingleAgent(
 
 			proc.on("exit", (code) => {
 				leaderExited = true;
+				clearTimeout(deadlineTimer);
 				// close also waits for inherited pipe handles. Give normal output a
 				// drain window, then clean up descendants and close our pipe ends.
 				drainTimer = setTimeout(() => {
@@ -575,6 +584,14 @@ async function runSingleAgent(
 				// Node emits close after error; let close own cleanup and slot release.
 			});
 
+			if (timeoutMs !== undefined) {
+				deadlineTimer = setTimeout(() => {
+					if (wasAborted || leaderExited || closed) return;
+					timedOut = true;
+					terminateGroup();
+				}, timeoutMs);
+			}
+
 			// Pi prepends piped stdin to the prompt. This avoids OS argv size limits.
 			// Early startup failures can close stdin; close/error above own the result.
 			proc.stdin.on("error", () => {});
@@ -583,7 +600,11 @@ async function runSingleAgent(
 			else signal?.addEventListener("abort", killProc, { once: true });
 		});
 
-		currentResult.exitCode = protocolError ? 1 : exitCode;
+		currentResult.exitCode = protocolError || timedOut ? 1 : exitCode;
+		if (timedOut) {
+			currentResult.timedOut = true;
+			currentResult.errorMessage = `Subagent timed out after ${timeoutMs} ms.`;
+		}
 		if (protocolError) currentResult.errorMessage = protocolError;
 		if (wasAborted) throw new Error("Subagent was aborted");
 		return currentResult;
@@ -604,9 +625,16 @@ async function runSingleAgent(
 	}
 }
 
+const TimeoutSchema = Type.Integer({
+	minimum: 1,
+	maximum: MAX_TIMEOUT_MS,
+	description: "Per-task runtime deadline in milliseconds, starting at child spawn. Queue time excluded. No deadline by default.",
+});
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
+	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
@@ -615,6 +643,7 @@ const ChainItem = Type.Object({
 	task: Type.String({
 		description: "Task with optional {previous} placeholder for prior output",
 	}),
+	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
@@ -647,6 +676,7 @@ const SubagentParams = Type.Object({
 		}),
 	),
 	agentScope: Type.Optional(AgentScopeSchema),
+	timeoutMs: Type.Optional(TimeoutSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({
 			description: "Prompt before running project-local agents. Default: true.",
@@ -824,6 +854,7 @@ export default function (pi: ExtensionAPI) {
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
+			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it. Queue time is excluded.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically. Use subagent_jobs to inspect or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
@@ -870,6 +901,16 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			const deadlines = [params.timeoutMs, ...(params.tasks ?? []).map((t) => t.timeoutMs),
+				...(params.chain ?? []).map((t) => t.timeoutMs)];
+			if (deadlines.some((value) => value !== undefined &&
+				(!Number.isInteger(value) || value < 1 || value > MAX_TIMEOUT_MS))) {
+				return {
+					content: [{ type: "text", text: `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.` }],
+					details: makeDetails(mode)([]),
+					isError: true,
+				};
+			}
 			if (params.tasks && params.tasks.length > MAX_PARALLEL_TASKS) {
 				return {
 					content: [
@@ -981,6 +1022,7 @@ export default function (pi: ExtensionAPI) {
 							step.agent,
 							taskWithContext,
 							step.cwd,
+							step.timeoutMs ?? params.timeoutMs,
 							i + 1,
 							signal,
 							chainUpdate,
@@ -1065,6 +1107,7 @@ export default function (pi: ExtensionAPI) {
 							t.agent,
 							t.task,
 							t.cwd,
+							t.timeoutMs ?? params.timeoutMs,
 							undefined,
 							signal,
 							// Per-task update callback
@@ -1110,6 +1153,7 @@ export default function (pi: ExtensionAPI) {
 						params.agent,
 						params.task,
 						params.cwd,
+						params.timeoutMs,
 						undefined,
 						signal,
 						onUpdate,

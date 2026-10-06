@@ -229,7 +229,7 @@ test('cancellation still escalates after the leader exits and descendants ignore
 });
 
 test('inherited pipes cannot retain a completed child or process slot indefinitely', { skip: process.platform !== 'linux' }, async () => {
-  const id = await launch({ task: 'orphan grandchild' });
+  const id = await launch({ task: 'orphan grandchild', timeoutMs: 500 });
   try {
     await waitFor(() => traces().some(t => t.event === 'grandchild'));
     const descendant = traces().find(t => t.event === 'grandchild').pid;
@@ -281,6 +281,69 @@ test('bounded history keeps the final answer and usage from evicted messages', a
     ).render(100).join('\n');
     assert.match(rendered, /Capture notice/);
   }
+});
+
+test('task deadlines fail rather than cancel jobs and release the process slot', async () => {
+  const job = await finish(await launch({ task: 'delay=10000 stubborn deadline', timeoutMs: 300 }));
+  assert.equal(job.state, 'failed');
+  assert.equal(job.latest.isError, true);
+  assert.match(job.latest.content[0].text, /timed out after 300 ms/);
+  assert.equal(job.latest.details.results[0].timedOut, true);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0].message.content, /failed/);
+  assert.equal((await finish(await launch({ task: 'after deadline' }))).state, 'completed');
+});
+
+test('deadlines start after acquiring a slot, not while queued', async () => {
+  const occupying = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=800 occupy' })) });
+  await waitFor(() => traces().filter(t => t.event === 'start').length === 4);
+  const queued = await launch({ task: 'delay=50 queued deadline', timeoutMs: 500 });
+  await Promise.all([finish(occupying.details.background.id), finish(queued)]);
+  assert.equal((await status(queued)).state, 'completed');
+  const entries = traces();
+  const queuedStart = entries.findIndex(t => t.event === 'start' && t.task.includes('queued deadline'));
+  assert.ok(entries.slice(0, queuedStart).some(t => t.event === 'end' && t.task.includes('occupy')));
+});
+
+test('parallel and chain entries override the default per-task deadline', async () => {
+  const parallel = await invoke('subagent', {
+    timeoutMs: 100,
+    tasks: [{ agent: 'worker', task: 'delay=10000 timeout' }, { agent: 'worker', task: 'delay=200 allowed', timeoutMs: 2000 }],
+  });
+  assert.equal(parallel.isError, true);
+  assert.equal(parallel.details.results[0].timedOut, true);
+  assert.equal(parallel.details.results[1].exitCode, 0);
+  const chain = await invoke('subagent', {
+    timeoutMs: 2000,
+    chain: [{ agent: 'worker', task: 'first' }, { agent: 'worker', task: 'delay=10000 timeout', timeoutMs: 100 }, { agent: 'worker', task: 'deadline-must-not-run' }],
+  });
+  assert.equal(chain.isError, true);
+  assert.match(chain.content[0].text, /Chain stopped at step 2/);
+  assert.equal(traces().some(t => t.task?.includes('deadline-must-not-run')), false);
+});
+
+test('explicit cancellation takes precedence over an upcoming deadline', async () => {
+  const id = await launch({ task: 'delay=10000 stubborn canceled deadline', timeoutMs: 1000 });
+  await waitFor(() => traces().some(t => t.event === 'start'));
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  const job = await finish(id);
+  assert.equal(job.state, 'canceled');
+  assert.match(messages[0].message.content, /Canceled by request/);
+});
+
+test('invalid deadlines fail validation before launching any child', async () => {
+  for (const timeoutMs of [0, -1, 1.5, NaN, Infinity, 86400001]) {
+    for (const params of [
+      { agent: 'worker', task: 'invalid deadline', timeoutMs },
+      { tasks: [{ agent: 'worker', task: 'invalid deadline', timeoutMs }] },
+      { chain: [{ agent: 'worker', task: 'invalid deadline', timeoutMs }] },
+    ]) {
+      const result = await invoke('subagent', params);
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /timeoutMs/);
+    }
+  }
+  assert.equal(traces().length, 0);
 });
 
 test('shutdown waits for background cleanup and does not deliver into a new session', async () => {

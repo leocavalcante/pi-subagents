@@ -96,6 +96,24 @@ Use `cwd` to set a working directory. Relative paths resolve from the parent ses
 
 Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Parallel model-visible output is capped at 50 KiB per task; captured results remain in tool details.
 
+## Task deadlines
+
+Set `timeoutMs` to bound a child's runtime:
+
+```json
+{
+  "agent": "worker",
+  "task": "Review authentication without changing files.",
+  "timeoutMs": 120000
+}
+```
+
+There is no deadline by default. Values must be whole milliseconds between 1 and 86400000, up to 24 hours. The timer starts at child spawn; permission prompts, prompt-file preparation, and waiting for a process slot do not count.
+
+For parallel and chain modes, a top-level `timeoutMs` is the default for each child, not a deadline for the entire batch. An entry's `timeoutMs` overrides that default. Deadlines also work with background execution.
+
+A timeout terminates the child using the same process-group cleanup as cancellation and returns a failed result with `timedOut: true` in details. Cleanup can take an additional second for SIGKILL escalation. Background jobs report `failed`, not `canceled`. Chains stop at the timed-out step; other parallel tasks continue. Explicit user cancellation still reports `canceled`.
+
 ## Background execution
 
 Add `background: true` to any mode. The tool returns a job ID immediately, allowing the parent to continue working. For example:
@@ -164,7 +182,7 @@ npm run check
 npm test
 ```
 
-Set `PI_PACKAGE_DIR` to an npm Pi package directory to test against another SDK version. Standalone binary directories fall back to the local development SDK. The tests use fake child processes and make no model calls. They cover agent discovery and configuration, dispatch, output extraction, rendering, process budgets, cancellation and shutdown, including POSIX descendants and SIGKILL escalation. GitHub Actions runs the type check and tests on Linux and Windows with Node.js 22 and 24.
+Set `PI_PACKAGE_DIR` to an npm Pi package directory to test against another SDK version. Standalone binary directories fall back to the local development SDK. The tests use fake child processes and make no model calls. They cover agent discovery and configuration, dispatch, output limits, rendering, process budgets, deadlines, cancellation and shutdown, including POSIX descendants and SIGKILL escalation. GitHub Actions runs the type check and tests on Linux and Windows with Node.js 22 and 24.
 
 ## Origin and license
 
