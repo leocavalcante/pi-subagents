@@ -17,6 +17,7 @@
 		"index.ts",
 		"agents.ts",
 		"jobs.ts",
+		"capture.ts",
 		"LICENSE",
 		"README.md"
 	],

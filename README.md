@@ -94,7 +94,7 @@ The `subagent` tool accepts exactly one mode:
 
 Use `cwd` to set a working directory. Relative paths resolve from the parent session's working directory. Parallel and chain entries accept their own `cwd`. Tasks reach children through stdin, so large prompts do not depend on the operating system's command-line argument limit.
 
-Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Parallel model-visible output is capped at 50 KiB per task; full results remain in tool details.
+Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Parallel model-visible output is capped at 50 KiB per task; captured results remain in tool details.
 
 ## Background execution
 
@@ -130,9 +130,21 @@ Background jobs have their own abort controllers. Ctrl+C on the parent's turn do
 
 Foreground calls and background jobs share a limit of four direct child processes per extension runtime. There can be up to eight active background jobs, with at most eight tasks in each parallel batch. Tasks waiting for a process slot can also be canceled. The extension retains the latest 32 finished jobs for inspection.
 
-Completion and status text are capped at 50 KiB including headers and truncation notices, with full output retained in details. Jobs live only in the current Pi session. Quit, `/reload`, and session replacement cancel active jobs and discard job history. Jobs do not survive a Pi restart.
+Completion and status text are capped at 50 KiB including headers and truncation notices, with captured output retained in details. Jobs live only in the current Pi session. Quit, `/reload`, and session replacement cancel active jobs and discard job history. Jobs do not survive a Pi restart.
 
 Background execution requires a long-lived TUI or RPC session. Print and JSON modes must use foreground execution so they do not exit with unfinished work.
+
+## Output capture and cleanup
+
+Each child has bounded output capture:
+
+- JSONL records can be up to 8 MiB in UTF-8. An oversized record fails the task, is discarded through the next newline, and does not stop stream draining.
+- Stderr retains its first 64 KiB, including a truncation notice. Further stderr is drained and discarded.
+- Message history retains at most 128 recent messages and 16 MiB of source JSON records. Evicting earlier messages does not change aggregate usage totals.
+
+Results and tool details report capture truncation. These are capture limits, separate from the 50 KiB model-visible output limit. Discarded records and evicted history are not preserved elsewhere.
+
+After a child exits, its output pipes get one second to drain. If inherited handles keep the pipes open, the extension cleans up the POSIX process group with SIGTERM and SIGKILL, then closes its pipe ends. Windows closes the inherited pipes but does not terminate descendants. Results report this cleanup instead of waiting indefinitely for `close`.
 
 ## Security
 

@@ -30,6 +30,7 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { JobManager, ProcessPool, type JobSnapshot, type JobState } from "./jobs.ts";
+import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -157,6 +158,11 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	capture?: {
+		messagesDropped?: number;
+		stderrTruncated?: boolean;
+		inheritedPipesClosed?: boolean;
+	};
 }
 
 interface SubagentDetails {
@@ -189,18 +195,27 @@ function isFailedResult(result: SingleResult): boolean {
 	);
 }
 
+function getCaptureNotice(result: SingleResult): string {
+	const notices: string[] = [];
+	if (result.capture?.messagesDropped) notices.push(`${result.capture.messagesDropped} earlier messages omitted from captured history.`);
+	if (result.capture?.stderrTruncated) notices.push("stderr capture truncated at 64 KiB.");
+	if (result.capture?.inheritedPipesClosed) notices.push("Inherited output pipes were closed after the child exited.");
+	return notices.length ? `[Capture notice: ${notices.join(" ")}]` : "";
+}
+
 function getResultOutput(result: SingleResult): string {
-	if (isFailedResult(result)) {
-		return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
-	}
-	return getFinalOutput(result.messages) || "(no output)";
+	const output = isFailedResult(result)
+		? result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)"
+		: getFinalOutput(result.messages) || "(no output)";
+	const notice = getCaptureNotice(result);
+	return output + (notice ? `\n\n${notice}` : "");
 }
 
 function truncateParallelOutput(output: string): string {
 	const bytes = Buffer.from(output, "utf8");
 	if (bytes.length <= PER_TASK_OUTPUT_CAP) return output;
 
-	const notice = "\n\n[Output truncated. Full output preserved in tool details.]";
+	const notice = "\n\n[Output truncated. Captured output preserved in tool details.]";
 	let end = PER_TASK_OUTPUT_CAP - Buffer.byteLength(notice, "utf8");
 	// Do not split a multibyte character. The notice itself is inside the cap.
 	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
@@ -390,6 +405,9 @@ async function runSingleAgent(
 		signal?.throwIfAborted();
 		let wasAborted = false;
 		let protocolError: string | undefined;
+		const history = new MessageCapture<Message>();
+		const stderr = new TextCapture();
+		currentResult.capture = {};
 
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
@@ -400,12 +418,19 @@ async function runSingleAgent(
 				// On POSIX, cancel the entire group, including tools spawned by the child.
 				detached: process.platform !== "win32",
 			});
-			let buffer = "";
-			let exited = false;
+			let leaderExited = false;
+			let closed = false;
+			let settled = false;
+			let drainTimer: NodeJS.Timeout | undefined;
 			let escalation: Promise<void> | undefined;
+			const closePipes = () => {
+				proc.stdin.destroy();
+				proc.stdout.destroy();
+				proc.stderr.destroy();
+			};
 			const killGroup = (killSignal: NodeJS.Signals) => {
 				// A POSIX group may still have descendants after its leader exits.
-				if (!proc.pid || (process.platform === "win32" && exited)) return;
+				if (!proc.pid || (process.platform === "win32" && leaderExited)) return;
 				try {
 					if (process.platform !== "win32") process.kill(-proc.pid, killSignal);
 					else proc.kill(killSignal);
@@ -413,18 +438,23 @@ async function runSingleAgent(
 					if ((error as NodeJS.ErrnoException).code !== "ESRCH") proc.kill(killSignal);
 				}
 			};
-			const killProc = () => {
-				if (wasAborted || exited) return;
-				wasAborted = true;
+			const terminateGroup = () => {
+				if (escalation) return;
 				killGroup("SIGTERM");
-				// Do not release the slot until escalation, even if the leader closes
-				// its pipes early. Descendants with ignored stdio can still be alive.
+				// Keep the slot until escalation even if the leader closes early.
 				escalation = new Promise<void>((done) => {
 					setTimeout(() => {
 						killGroup("SIGKILL");
+						// Escaped descendants can also hold pipes; never wait on those forever.
+						closePipes();
 						done();
 					}, 1000);
 				});
+			};
+			const killProc = () => {
+				if (wasAborted || closed) return;
+				wasAborted = true;
+				terminateGroup();
 			};
 
 			const processLine = (line: string) => {
@@ -468,7 +498,9 @@ async function runSingleAgent(
 
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message as Message;
-					currentResult.messages.push(msg);
+					history.push(msg, Buffer.byteLength(line, "utf8"));
+					currentResult.messages = history.messages;
+					currentResult.capture!.messagesDropped = history.dropped;
 
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
@@ -489,34 +521,53 @@ async function runSingleAgent(
 				}
 
 				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
+					history.push(event.message as Message, Buffer.byteLength(line, "utf8"));
+					currentResult.messages = history.messages;
+					currentResult.capture!.messagesDropped = history.dropped;
 					emitUpdate();
 				}
 			};
 
-			// Preserve UTF-8 characters split across pipe chunks.
-			proc.stdout.setEncoding("utf8");
-			proc.stderr.setEncoding("utf8");
-			proc.stdout.on("data", (data) => {
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-				for (const line of lines) processLine(line);
+			const reader = new JsonLineCapture(processLine, () => {
+				protocolError = `Subagent JSON record exceeded ${MAX_JSON_RECORD_BYTES / (1024 * 1024)} MiB; oversized record discarded.`;
 			});
-
-			proc.stderr.on("data", (data) => {
-				currentResult.stderr += data.toString();
-			});
-
-			proc.on("close", (code) => {
-				exited = true;
+			const finish = (code: number | null) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(drainTimer);
 				signal?.removeEventListener("abort", killProc);
-				const finish = () => {
-					if (buffer.trim()) processLine(buffer);
+				const complete = () => {
+					reader.finish();
 					resolve(code ?? 1);
 				};
-				if (escalation) void escalation.then(finish);
-				else finish();
+				if (escalation) void escalation.then(complete);
+				else complete();
+			};
+
+			// Preserve UTF-8 characters split across pipe chunks, but bound each record.
+			proc.stdout.setEncoding("utf8");
+			proc.stderr.setEncoding("utf8");
+			proc.stdout.on("data", (data: string) => reader.append(data));
+			proc.stderr.on("data", (data: string) => {
+				stderr.append(data);
+				currentResult.stderr = stderr.text;
+				currentResult.capture!.stderrTruncated = stderr.truncated;
+			});
+
+			proc.on("exit", (code) => {
+				leaderExited = true;
+				// close also waits for inherited pipe handles. Give normal output a
+				// drain window, then clean up descendants and close our pipe ends.
+				drainTimer = setTimeout(() => {
+					if (closed) return;
+					currentResult.capture!.inheritedPipesClosed = true;
+					terminateGroup();
+					void escalation!.then(() => finish(code));
+				}, 1000);
+			});
+			proc.on("close", (code) => {
+				closed = true;
+				finish(code);
 			});
 
 			proc.on("error", (error) => {
@@ -957,7 +1008,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: getFinalOutput(results[results.length - 1].messages) || "(no output)",
+								text: getResultOutput(results[results.length - 1]),
 							},
 						],
 						details: makeDetails("chain")(results),
@@ -1082,7 +1133,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: getFinalOutput(result.messages) || "(no output)",
+								text: getResultOutput(result),
 							},
 						],
 						details: makeDetails("single")([result]),
@@ -1225,6 +1276,8 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 					}
+					const captureNotice = getCaptureNotice(r);
+					if (captureNotice) container.addChild(new Text(theme.fg("warning", captureNotice), 0, 0));
 					const usageStr = formatUsageStats(r.usage, r.model);
 					if (usageStr) {
 						container.addChild(new Spacer(1));
@@ -1241,6 +1294,8 @@ export default function (pi: ExtensionAPI) {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 					if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				}
+				const captureNotice = getCaptureNotice(r);
+				if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
 				const usageStr = formatUsageStats(r.usage, r.model);
 				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
 				return new Text(text, 0, 0);
@@ -1314,6 +1369,8 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
+						const captureNotice = getCaptureNotice(r);
+						if (captureNotice) container.addChild(new Text(theme.fg("warning", captureNotice), 0, 0));
 						const stepUsage = formatUsageStats(r.usage, r.model);
 						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
 					}
@@ -1339,6 +1396,8 @@ export default function (pi: ExtensionAPI) {
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					const captureNotice = getCaptureNotice(r);
+					if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
 				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
@@ -1390,6 +1449,8 @@ export default function (pi: ExtensionAPI) {
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
 
+						const captureNotice = getCaptureNotice(r);
+						if (captureNotice) container.addChild(new Text(theme.fg("warning", captureNotice), 0, 0));
 						const taskUsage = formatUsageStats(r.usage, r.model);
 						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
 					}
@@ -1416,6 +1477,8 @@ export default function (pi: ExtensionAPI) {
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					const captureNotice = getCaptureNotice(r);
+					if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
 				}
 				if (!isRunning) {
 					const usageStr = formatUsageStats(aggregateUsage(details.results));

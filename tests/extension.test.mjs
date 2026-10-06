@@ -228,6 +228,61 @@ test('cancellation still escalates after the leader exits and descendants ignore
   });
 });
 
+test('inherited pipes cannot retain a completed child or process slot indefinitely', { skip: process.platform !== 'linux' }, async () => {
+  const id = await launch({ task: 'orphan grandchild' });
+  try {
+    await waitFor(() => traces().some(t => t.event === 'grandchild'));
+    const descendant = traces().find(t => t.event === 'grandchild').pid;
+    const job = await finish(id);
+    assert.equal(job.state, 'completed');
+    assert.equal(job.latest.details.results[0].capture.inheritedPipesClosed, true);
+    assert.match(job.latest.content[0].text, /Inherited output pipes/);
+    await waitFor(() => {
+      try { return /State:\s+Z/.test(readFileSync(`/proc/${descendant}/status`, 'utf8')); }
+      catch { return true; }
+    });
+    assert.equal((await finish(await launch({ task: 'after inherited pipes' }))).state, 'completed');
+  } finally {
+    await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+    await finish(id);
+  }
+});
+
+test('stdout records and stderr are bounded while both streams continue draining', async () => {
+  for (const task of ['stdout-flood', 'stdout-flood-unterminated']) {
+    const job = await finish(await launch({ task }));
+    assert.equal(job.state, 'failed');
+    assert.match(job.latest.content[0].text, /JSON record.*exceeded/);
+    assert.ok(JSON.stringify(job.latest.details).length < 10000);
+  }
+  const stderrJob = await finish(await launch({ task: 'stderr-flood' }));
+  assert.equal(stderrJob.state, 'completed');
+  const result = stderrJob.latest.details.results[0];
+  assert.equal(result.capture.stderrTruncated, true);
+  assert.ok(Buffer.byteLength(result.stderr) <= 64 * 1024);
+  assert.match(result.stderr, /stderr capture truncated/);
+  assert.equal(result.stderr.includes('\uFFFD'), false);
+  assert.match(stderrJob.latest.content[0].text, /Capture notice/);
+});
+
+test('bounded history keeps the final answer and usage from evicted messages', async () => {
+  const job = await finish(await launch({ task: 'history-flood' }));
+  assert.equal(job.state, 'completed');
+  const result = job.latest.details.results[0];
+  assert.ok(result.messages.length <= 128);
+  assert.ok(result.capture.messagesDropped > 0);
+  assert.equal(result.usage.turns, 202);
+  assert.match(job.latest.content[0].text, /result: history-flood/);
+  assert.match(job.latest.content[0].text, /earlier messages omitted/);
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  for (const mode of ['single', 'chain', 'parallel']) for (const expanded of [false, true]) {
+    const rendered = tools.get('subagent').definition.renderResult(
+      { ...job.latest, details: { ...job.latest.details, mode } }, { expanded }, theme, {},
+    ).render(100).join('\n');
+    assert.match(rendered, /Capture notice/);
+  }
+});
+
 test('shutdown waits for background cleanup and does not deliver into a new session', async () => {
   await launch({ task: 'delay=10000 stubborn shutdown' });
   await waitFor(() => traces().some(t => t.event === 'start'));
