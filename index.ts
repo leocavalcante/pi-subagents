@@ -22,6 +22,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
+	type ToolDefinition,
 	getAgentDir,
 	getMarkdownTheme,
 	withFileMutationQueue,
@@ -38,7 +39,7 @@ const MAX_CONCURRENCY = 4;
 const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
 const COLLAPSED_ITEM_COUNT = 10;
-const PER_TASK_OUTPUT_CAP = 50 * 1024;
+const MODEL_TEXT_CAP = 50 * 1024;
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -232,15 +233,21 @@ function getResultOutput(result: SingleResult): string {
 	return output + (notice ? `\n\n${notice}` : "");
 }
 
-function truncateParallelOutput(output: string): string {
+function truncateOutput(output: string, budget = MODEL_TEXT_CAP,
+	notice = "\n\n[Output truncated. Captured output preserved in tool details.]"): string {
+	if (Buffer.byteLength(output, "utf8") <= budget) return output;
 	const bytes = Buffer.from(output, "utf8");
-	if (bytes.length <= PER_TASK_OUTPUT_CAP) return output;
-
-	const notice = "\n\n[Output truncated. Captured output preserved in tool details.]";
-	let end = PER_TASK_OUTPUT_CAP - Buffer.byteLength(notice, "utf8");
+	// An unusually long header can consume a batch's entire body allowance.
+	if (budget < Buffer.byteLength(notice, "utf8")) return "";
+	let end = budget - Buffer.byteLength(notice, "utf8");
 	// Do not split a multibyte character. The notice itself is inside the cap.
 	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
 	return bytes.subarray(0, end).toString("utf8") + notice;
+}
+
+function boundResultText(result: JobResult): JobResult {
+	return { ...result, content: result.content.map((part) => part.type === "text"
+		? { ...part, text: truncateOutput(part.text) } : part) };
 }
 
 type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
@@ -721,6 +728,14 @@ const SubagentParams = Type.Object({
 	),
 });
 
+type SubagentExecute = ToolDefinition<typeof SubagentParams, SubagentDetails>["execute"];
+
+function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
+	return async (id, params, signal, onUpdate, ctx) => boundResultText(await execute(
+		id, params, signal, onUpdate ? (partial) => onUpdate(boundResultText(partial)) : undefined, ctx,
+	));
+}
+
 export default function (pi: ExtensionAPI) {
 	const pool = new ProcessPool(MAX_CONCURRENCY);
 	const jobs = new JobManager<JobResult>(
@@ -737,7 +752,7 @@ export default function (pi: ExtensionAPI) {
 			pi.sendMessage(
 				{
 					customType: "subagent-background",
-					content: truncateParallelOutput(
+					content: truncateOutput(
 						`Background subagent job ${job.id} ${job.state} (${job.label}).\n\n${output}`,
 					),
 					display: true,
@@ -808,7 +823,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{
 					type: "text" as const,
-					text: truncateParallelOutput(
+					text: truncateOutput(
 						(listing || "No subagents found.") + (warnings ? `\n\nInvalid definitions:\n${warnings}` : ""),
 					),
 				}],
@@ -838,7 +853,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: truncateParallelOutput(
+							text: truncateOutput(
 								snapshots.length
 									? snapshots.map((j) => `${j.id} ${j.state}: ${j.label}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 									: "No background subagent jobs.",
@@ -879,7 +894,7 @@ export default function (pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: truncateParallelOutput(`${job.id} ${job.state}: ${job.label}\n\n${output}`),
+						text: truncateOutput(`${job.id} ${job.state}: ${job.label}\n\n${output}`),
 					},
 				],
 				details: job,
@@ -903,7 +918,7 @@ export default function (pi: ExtensionAPI) {
 		].join(" "),
 		parameters: SubagentParams,
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		execute: boundedSubagentExecute(async (_toolCallId, params, signal, onUpdate, ctx) => {
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const dispatchDefaults: DispatchDefaults = {
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
@@ -1195,18 +1210,21 @@ export default function (pi: ExtensionAPI) {
 					});
 
 					const successCount = results.filter((r) => !isFailedResult(r)).length;
-					const summaries = results.map((r) => {
-						const output = truncateParallelOutput(getResultOutput(r));
+					const header = `Parallel: ${successCount}/${results.length} succeeded\n\n`;
+					const separator = "\n\n---\n\n";
+					const headings = results.map((r) => {
 						const status = isFailedResult(r)
-							? `failed${r.stopReason && r.stopReason !== "end" ? ` (${r.stopReason})` : ""}`
-							: "completed";
-						return `### [${r.agent}] ${status}\n\n${output}`;
+							? `failed${r.stopReason ? ` (${r.stopReason})` : ""}` : "completed";
+						return `### [${truncateOutput(r.agent, 256, "...")}] ${status}\n\n`;
 					});
+					const overhead = Buffer.byteLength(header + headings.join(separator));
+					const bodyBudget = Math.max(0, Math.floor((MODEL_TEXT_CAP - overhead) / results.length));
+					const summaries = results.map((r, i) => headings[i] + truncateOutput(getResultOutput(r), bodyBudget));
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n---\n\n")}`,
+								text: header + summaries.join(separator),
 							},
 						],
 						details: makeDetails("parallel")(results),
@@ -1273,7 +1291,9 @@ export default function (pi: ExtensionAPI) {
 				mode === "single"
 					? params.agent!
 					: `${mode}: ${(hasChain ? params.chain! : params.tasks!).map((t) => t.agent).join(", ")}`;
-			const job = jobs.start(label, run);
+			const job = jobs.start(label, async (jobSignal, update) => boundResultText(
+				await run(jobSignal, (partial) => update(boundResultText(partial))),
+			));
 			return {
 				content: [
 					{
@@ -1286,7 +1306,7 @@ export default function (pi: ExtensionAPI) {
 					background: { id: job.id, state: job.state },
 				},
 			};
-		},
+		}),
 
 		renderCall(args, theme, _context) {
 			const scope = `${stringArg(args.agentScope, "user")}${args.background ? ", background" : ""}`;

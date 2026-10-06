@@ -651,10 +651,47 @@ test('finished registry output is byte-bounded while completion delivery retains
   assert.match((await invoke('subagent_jobs', { action: 'list' })).content[0].text, /output evicted/);
 });
 
+test('single and chain responses cap text without truncating captured data or chain input', async () => {
+  for (const params of [{ agent: 'worker', task: 'large' }, { chain: [{ agent: 'worker', task: 'large' }] }, { agent: 'worker', task: 'large-error fail' }]) {
+    const result = await invoke('subagent', params);
+    assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);
+    assert.match(result.content[0].text, /Output truncated/);
+    assert.equal(result.content[0].text.includes('\uFFFD'), false);
+    assert.equal(result.details.results.at(-1).messages.at(-1).content[0].text.length, 40000);
+  }
+  await invoke('subagent', { chain: [{ agent: 'worker', task: 'large' }, { agent: 'worker', task: 'prefix {previous}' }] });
+  assert.equal(traces().filter(t => t.event === 'start').at(-1).task, 'prefix ' + 'é'.repeat(40000));
+});
+
+test('parallel responses share a total text budget and keep every captured result', async () => {
+  const result = await invoke('subagent', { tasks: Array.from({ length: 8 }, () => ({ agent: 'worker', task: 'large' })) });
+  assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);
+  assert.match(result.content[0].text, /8\/8 succeeded/);
+  assert.match(result.content[0].text, /Output truncated/);
+  assert.equal(result.details.results.length, 8);
+  assert.ok(result.details.results.every(r => r.messages.at(-1).content[0].text.length === 40000));
+  assert.equal(result.content[0].text.match(/### \[worker\] completed/g).length, 8);
+  const mixed = await invoke('subagent', { tasks: Array.from({ length: 8 }, (_, i) => ({ agent: 'worker', task: i === 7 ? 'large fail' : 'large' })) });
+  assert.match(mixed.content[0].text, /7\/8 succeeded/);
+  assert.match(mixed.content[0].text, /fixture failure/);
+  assert.ok(Buffer.byteLength(mixed.content[0].text) <= 50 * 1024);
+});
+
+test('streaming text uses the same budget as the completed result', async () => {
+  const updates = [];
+  const definition = tools.get('subagent').definition;
+  await definition.execute('bounded-stream', { agent: 'worker', task: 'large' }, undefined, partial => updates.push(partial), ctx());
+  assert.ok(updates.length > 0);
+  assert.ok(updates.every(p => Buffer.byteLength(p.content[0].text) <= 50 * 1024));
+  assert.match(updates.at(-1).content[0].text, /Output truncated/);
+  assert.equal(updates.at(-1).details.results[0].messages.at(-1).content[0].text.length, 40000);
+});
+
 test('background delivery and status cap large output but preserve full details', async () => {
   const id = await launch({ task: 'large' });
   const job = await finish(id);
-  assert.equal(job.latest.content[0].text.length, 40000);
+  assert.equal(job.latest.details.results[0].messages.at(-1).content[0].text.length, 40000);
+  assert.ok(Buffer.byteLength(job.latest.content[0].text) <= 50 * 1024);
   assert.match(messages[0].message.content, /Output truncated/);
   assert.ok(Buffer.byteLength(messages[0].message.content) <= 50 * 1024);
   assert.equal(messages[0].message.content.includes('\uFFFD'), false);

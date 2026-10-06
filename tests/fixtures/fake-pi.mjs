@@ -14,7 +14,7 @@ if (task.includes('grandchild')) {
 }
 const emit = (text, stopReason = 'stop') => console.log(JSON.stringify({
   type: 'message_end', message: { role: 'assistant', content: (Array.isArray(text) ? text : [text]).map(text => ({ type: 'text', text })),
-    model: 'fake', stopReason, ...(stopReason === 'error' ? { errorMessage: 'fixture failure' } : {}),
+    model: 'fake', stopReason, ...(stopReason === 'error' ? { errorMessage: task === 'large-error fail' ? 'é'.repeat(40000) : 'fixture failure' } : {}),
     usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
   },
 }));
