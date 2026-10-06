@@ -464,6 +464,8 @@ async function runSingleAgent(
 	};
 
 	const release = await pool.acquire(signal);
+	let setupPhase = "preparing system prompt";
+	let childCreated = false;
 	try {
 		signal?.throwIfAborted();
 		if (agent.systemPrompt.trim()) {
@@ -482,6 +484,7 @@ async function runSingleAgent(
 		const stderr = new TextCapture();
 		currentResult.capture = {};
 
+		setupPhase = "launching child process";
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
@@ -491,6 +494,7 @@ async function runSingleAgent(
 				// On POSIX, cancel the entire group, including tools spawned by the child.
 				detached: process.platform !== "win32",
 			});
+			childCreated = true;
 			let leaderExited = false;
 			let closed = false;
 			let settled = false;
@@ -672,6 +676,15 @@ async function runSingleAgent(
 		const failureCauses = [timedOut ? `Subagent timed out after ${timeoutMs} ms.` : undefined, protocolError];
 		if (failureCauses.some(Boolean)) currentResult.errorMessage = failureCauses.filter(Boolean).join(" ");
 		if (wasAborted) throw new Error("Subagent was aborted");
+		return currentResult;
+	} catch (error) {
+		// Cancellation still aborts the whole operation. Only pre-spawn failures
+		// become task results; do not disguise unrelated execution errors as setup.
+		if (signal?.aborted || childCreated) throw error;
+		const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+		const diagnostic = typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? ` (${code})` : "";
+		currentResult.exitCode = 1;
+		currentResult.errorMessage = `Subagent setup failed while ${setupPhase}${diagnostic}.`;
 		return currentResult;
 	} finally {
 		release();

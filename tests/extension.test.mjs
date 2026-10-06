@@ -501,10 +501,61 @@ test('failed prompt writes remove their temporary directory and release the slot
     const id = await launch({ task: 'prompt-write-error' });
     const failed = await finish(id);
     assert.equal(failed.state, 'failed');
-    assert.match(failed.error, /prompt write failure/);
+    assert.match(failed.latest.content[0].text, /setup failed.*preparing system prompt/);
     assert.equal(existsSync(dirname(promptPath)), false);
   } finally { write.mock.restore(); }
   assert.equal((await finish(await launch({ task: 'after prompt write error' }))).state, 'completed');
+});
+
+test('setup failures return task-level results and preserve independent or earlier work', async t => {
+  const originalWrite = fsPromises.writeFile;
+  const write = t.mock.method(fsPromises, 'writeFile', async (...args) => {
+    if (String(args[0]).endsWith('prompt-pinned.md')) {
+      throw Object.assign(new Error('private prompt payload'), { code: 'EACCES' });
+    }
+    return originalWrite(...args);
+  });
+  try {
+    for (const params of [
+      { agent: 'pinned', task: 'setup single' },
+      { concurrency: 1, tasks: [{ agent: 'worker', task: 'before setup' }, { agent: 'pinned', task: 'setup parallel' }, { agent: 'worker', task: 'after setup' }] },
+      { chain: [{ agent: 'worker', task: 'before setup chain' }, { agent: 'pinned', task: 'setup chain' }, { agent: 'worker', task: 'never setup chain' }] },
+    ]) {
+      const result = await invoke('subagent', params);
+      assert.equal(result.isError, true);
+      const failed = result.details.results.find(task => task.agent === 'pinned');
+      assert.equal(failed.exitCode, 1);
+      assert.equal(failed.usage.turns, 0);
+      assert.match(failed.errorMessage, /setup failed.*preparing system prompt.*EACCES/);
+      assert.equal(JSON.stringify(result).includes('private prompt payload'), false);
+      assert.equal(result.details.results.length, params.tasks ? 3 : params.chain ? 2 : 1);
+      assert.equal(result.usage.input, params.tasks ? 4 : params.chain ? 2 : 0);
+      assert.ok(result.details.results.filter(task => task.agent === 'worker').every(task => task.exitCode === 0));
+    }
+    assert.equal(traces().some(task => task.task?.includes('never setup chain')), false);
+  } finally { write.mock.restore(); }
+  assert.notEqual((await invoke('subagent', { agent: 'pinned', task: 'after setup restore' })).isError, true);
+});
+
+test('synchronous spawn failures remain inspectable and do not discard sibling results', async t => {
+  const originalSpawn = childProcess.spawn;
+  const spawn = t.mock.method(childProcess, 'spawn', (...args) => {
+    if (args[1].includes('fake/pinned:high')) throw Object.assign(new Error('private spawn payload'), { code: 'ERR_INVALID_ARG_VALUE' });
+    return originalSpawn(...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    const id = await launch({ agent: undefined, task: undefined, tasks: [{ agent: 'pinned', task: 'bad spawn' }, { agent: 'worker', task: 'good spawn' }] });
+    const job = await finish(id);
+    assert.equal(job.state, 'failed');
+    assert.equal(job.latest.details.results.length, 2);
+    assert.match(job.latest.details.results[0].errorMessage, /setup failed.*launching child process.*ERR_INVALID_ARG_VALUE/);
+    assert.equal(job.latest.details.results[1].exitCode, 0);
+    assert.equal(job.latest.usage.input, 2);
+    const page = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 0 });
+    assert.match(page.structuredContent.output.text, /setup failed/);
+    assert.equal(JSON.stringify(page).includes('private spawn payload'), false);
+  } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
 });
 
 test('malformed child events fail cleanly without crashing or retaining slots', async () => {
