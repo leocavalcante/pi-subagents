@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { assistantMessageError } = await jiti.import('../protocol.ts');
+const { assistantMessageError, parseChildEvent } = await jiti.import('../protocol.ts');
 const message = extra => ({ content: [{ type: 'text', text: 'answer' }], stopReason: 'stop', ...extra });
+
+test('JSON nesting is bounded without counting brackets inside escaped strings', () => {
+  const value = { text: '[{\\\\\\"'.repeat(300), nested: { ok: true } };
+  assert.deepEqual(parseChildEvent(JSON.stringify(value)), value);
+  assert.doesNotThrow(() => parseChildEvent('['.repeat(128) + '0' + ']'.repeat(128)));
+  assert.throws(() => parseChildEvent('['.repeat(129) + '0' + ']'.repeat(129)), /nesting exceeded 128/);
+  assert.throws(() => parseChildEvent('{bad}'), SyntaxError);
+});
 
 test('accepts completed messages, redacted thinking, and arbitrary tool arguments', () => {
   assert.equal(assistantMessageError(message()), undefined);

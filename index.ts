@@ -31,7 +31,7 @@ import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { JobManager, ProcessPool, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
-import { assistantMessageError } from "./protocol.ts";
+import { assistantMessageError, parseChildEvent } from "./protocol.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -486,9 +486,9 @@ async function runSingleAgent(
 				if (!line.trim()) return;
 				let event: any;
 				try {
-					event = JSON.parse(line);
-				} catch {
-					protocolError = "Invalid subagent JSON event: malformed JSON.";
+					event = parseChildEvent(line);
+				} catch (error) {
+					protocolError = error instanceof RangeError ? error.message : "Invalid subagent JSON event: malformed JSON.";
 					return;
 				}
 

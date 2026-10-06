@@ -26,6 +26,10 @@ if (['silent-exit', 'junk-exit', 'session-only-exit'].includes(task)) {
   process.exit(0);
 }
 if (task === 'malformed-json') console.log('{"type":');
+if (task === 'deep-json') {
+  const nested = '['.repeat(20000) + '0' + ']'.repeat(20000);
+  console.log('{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"deep","name":"opaque","arguments":{"nested":' + nested + '}}],"stopReason":"stop"}}');
+}
 if (task === 'malformed-metadata') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: {} } }));
 if (task === 'malformed-pending') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'pending' } }));
 if (task === 'retry-recovered') emit('transient error', 'error');

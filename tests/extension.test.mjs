@@ -454,6 +454,16 @@ test('malformed child events fail cleanly without crashing or retaining slots', 
   assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');
 });
 
+test('deep JSON cannot overflow renderer or session serialization stacks', async () => {
+  const result = await invoke('subagent', { agent: 'worker', task: 'deep-json' });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /nesting/);
+  assert.doesNotThrow(() => JSON.stringify(result));
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  assert.doesNotThrow(() => tools.get('subagent').definition.renderResult(result, { expanded: true }, theme, {}).render(80));
+  assert.notEqual((await invoke('subagent', { agent: 'worker', task: 'next' })).isError, true);
+});
+
 test('zero exit without a completed assistant message fails cleanly', async () => {
   for (const task of ['silent-exit', 'junk-exit', 'session-only-exit']) {
     const job = await finish(await launch({ task }));
