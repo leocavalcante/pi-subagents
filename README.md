@@ -96,7 +96,7 @@ The `subagent` tool accepts exactly one mode. Empty arrays, blank tasks, partial
 | --- | --- | --- |
 | Single | `{ agent, task }` | One task |
 | Parallel | `{ tasks: [{ agent, task }, ...] }` | Up to 8 tasks, up to 4 concurrent |
-| Chain | `{ chain: [{ agent, task }, ...] }` | Sequential, with `{previous}` substituted into each task |
+| Chain | `{ chain: [{ agent, task }, ...] }` | Up to 32 sequential steps, with `{previous}` substituted into each task |
 
 At the first chain step, `{previous}` is an empty string. A first task containing only that placeholder is rejected before approval or launch. If a later substitution makes the task blank, the chain stops at that step without starting another child.
 

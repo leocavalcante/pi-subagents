@@ -37,6 +37,7 @@ import { MAX_PAGE_BYTES, sliceOutput } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
 
 const MAX_PARALLEL_TASKS = 8;
+const MAX_CHAIN_STEPS = 32;
 const MAX_CONCURRENCY = 4;
 const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
@@ -767,8 +768,9 @@ const SubagentParams = Type.Object({
 	),
 	chain: Type.Optional(
 		Type.Array(ChainItem, {
-			description: "Array of {agent, task} for sequential execution",
+			description: "Array of {agent, task} for sequential execution, up to 32 steps",
 			minItems: 1,
+			maxItems: MAX_CHAIN_STEPS,
 		}),
 	),
 	agentScope: Type.Optional(AgentScopeSchema),
@@ -1060,6 +1062,20 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			const batch = hasChain ? params.chain : params.tasks;
+			if (mode !== "single" && !Array.isArray(batch)) {
+				return {
+					content: [{ type: "text", text: "tasks and chain must be arrays of tasks." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+			const taskLimit = hasChain ? MAX_CHAIN_STEPS : MAX_PARALLEL_TASKS;
+			if (batch && batch.length > taskLimit) {
+				return {
+					content: [{ type: "text", text: `Too many ${hasChain ? "chain steps" : "parallel tasks"} (${batch.length}). Max is ${taskLimit}.` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
 			if (params.concurrency !== undefined && (mode !== "parallel" || !Number.isInteger(params.concurrency) ||
 				params.concurrency < 1 || params.concurrency > MAX_CONCURRENCY)) {
 				return {
@@ -1096,18 +1112,6 @@ export default function (pi: ExtensionAPI) {
 				(!Number.isInteger(value) || value < 1 || value > MAX_TIMEOUT_MS))) {
 				return {
 					content: [{ type: "text", text: `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.` }],
-					details: makeDetails(mode)([]),
-					isError: true,
-				};
-			}
-			if (params.tasks && params.tasks.length > MAX_PARALLEL_TASKS) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
-						},
-					],
 					details: makeDetails(mode)([]),
 					isError: true,
 				};

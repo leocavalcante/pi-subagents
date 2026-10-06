@@ -739,6 +739,31 @@ test('final output includes all text blocks and chain substitution preserves dol
   assert.equal(traces().filter(t => t.event === 'start').at(-1).task, `prefix ${literal} suffix ${literal}`);
 });
 
+test('chain size is bounded in the schema and preflight before project approval or job creation', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
+  const chain = Array.from({ length: 33 }, () => ({ agent: 'project', task: 'do not launch' }));
+  const schema = tools.get('subagent').definition.parameters;
+  assert.equal(Value.Check(schema, { chain }), false);
+  assert.equal(Value.Check(schema, { chain: chain.slice(0, 32) }), true);
+  for (const background of [false, true]) {
+    const result = await invoke('subagent', { chain, background, agentScope: 'both' }, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Too many chain steps.*33.*32/);
+    assert.equal(result.details.background, undefined);
+  }
+  for (const key of ['chain', 'tasks']) for (const value of [null, {}, 'invalid']) {
+    const result = await invoke('subagent', { [key]: value });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /must be arrays/);
+  }
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).details.jobs.length, 0);
+  const accepted = await invoke('subagent', { chain: Array.from({ length: 32 }, (_, i) => ({ agent: 'worker', task: i ? 'never run' : 'fail' })) });
+  assert.match(accepted.content[0].text, /Chain stopped at step 1/);
+});
+
 test('empty initial chain context fails before project approval or launching a child', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
