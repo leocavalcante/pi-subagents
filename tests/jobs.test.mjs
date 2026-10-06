@@ -34,6 +34,36 @@ test('failed results and exceptions are retained without unhandled rejections', 
   await jobs.shutdown();
 });
 
+test('unprintable thrown values cannot reject job cleanup or leave stale running states', async () => {
+  const malformedError = new Error();
+  Object.defineProperty(malformedError, 'message', { get() { throw new Error('getter failed'); } });
+  const delivered = [];
+  const jobs = new JobManager(job => delivered.push(job), () => false);
+  const values = [Object.create(null), malformedError, { toString() { throw new Error('coercion failed'); } }];
+  const ids = values.map(value => jobs.start('malformed error', async () => { throw value; }).id);
+  await tick();
+  for (const id of ids) {
+    assert.equal(jobs.get(id).state, 'failed');
+    assert.match(jobs.get(id).error, /Unable to describe thrown value/);
+    assert.ok(jobs.get(id).finishedAt);
+  }
+  assert.equal(delivered.length, 3);
+  await jobs.shutdown();
+});
+
+test('job diagnostics are UTF-8 bounded and retain the run failure when delivery also fails', async () => {
+  const jobs = new JobManager(() => { throw new Error('delivery failed'); }, () => false);
+  const first = jobs.start('two failures', async () => { throw new Error('run failed'); });
+  const large = jobs.start('large failure', async () => { throw new Error('😀'.repeat(10000)); });
+  await tick();
+  assert.match(jobs.get(first.id).error, /run failed/);
+  assert.match(jobs.get(first.id).error, /Completion delivery failed: delivery failed/);
+  assert.ok(Buffer.byteLength(jobs.get(large.id).error) <= 2048);
+  assert.equal(jobs.get(large.id).error.includes('�'), false);
+  assert.match(jobs.get(large.id).error, /truncated/);
+  await jobs.shutdown();
+});
+
 test('cancel-before-start avoids execution; repeated cancellation is safe', async () => {
   const jobs = new JobManager(() => {}, () => false);
   let ran = false;

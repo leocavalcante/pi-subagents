@@ -1,5 +1,26 @@
 import { randomUUID } from "node:crypto";
 
+const MAX_DIAGNOSTIC_BYTES = 2048;
+
+function boundedDiagnostic(text: string, limit = MAX_DIAGNOSTIC_BYTES): string {
+	// A short UTF-16 prefix is sufficient for the byte cap. Avoid encoding an
+	// arbitrarily large thrown message just to keep its first few characters.
+	const bytes = Buffer.from(text.slice(0, limit + 1), "utf8");
+	if (text.length <= limit && bytes.length <= limit) return text;
+	const notice = "\n[diagnostic truncated]";
+	let end = limit - Buffer.byteLength(notice);
+	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+	return bytes.subarray(0, end).toString("utf8") + notice;
+}
+
+function describeThrown(error: unknown): string {
+	try {
+		return boundedDiagnostic(error instanceof Error ? String(error.message) : String(error));
+	} catch {
+		return "Unable to describe thrown value.";
+	}
+}
+
 export type JobState = "running" | "canceling" | "completed" | "failed" | "canceled";
 
 export interface JobSnapshot<T> {
@@ -74,7 +95,7 @@ export class JobManager<T> {
 						? "failed"
 						: "completed";
 			} catch (error) {
-				snapshot.error = error instanceof Error ? error.message : String(error);
+				snapshot.error = describeThrown(error);
 				snapshot.state = job.controller.signal.aborted ? "canceled" : "failed";
 			} finally {
 				snapshot.finishedAt = new Date().toISOString();
@@ -85,7 +106,10 @@ export class JobManager<T> {
 					try {
 						this.onComplete({ ...snapshot });
 					} catch (error) {
-						snapshot.error = `Completion delivery failed: ${error instanceof Error ? error.message : String(error)}`;
+						const delivery = `Completion delivery failed: ${describeThrown(error)}`;
+						snapshot.error = snapshot.error
+							? boundedDiagnostic(snapshot.error, 1023) + "\n" + boundedDiagnostic(delivery, 1024)
+							: boundedDiagnostic(delivery);
 					}
 				}
 				if (this.retention && snapshot.latest !== undefined) {
