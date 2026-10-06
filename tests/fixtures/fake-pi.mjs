@@ -25,6 +25,20 @@ if (['silent-exit', 'junk-exit', 'session-only-exit'].includes(task)) {
   trace({ event: 'end', task });
   process.exit(0);
 }
+if (task === 'nested-usage') {
+  const message = { role: 'toolResult', toolCallId: 'nested', toolName: 'nested', content: [], isError: false,
+    usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cacheWrite1h: 5, reasoning: 7, totalTokens: 100,
+      cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 } } };
+  console.log(JSON.stringify({ type: 'message_end', message }));
+  console.log(JSON.stringify({ type: 'tool_result_end', message }));
+}
+if (task === 'malformed-cost-component' || task === 'malformed-nested-usage') console.log(JSON.stringify({
+  type: 'message_end', message: { role: task === 'malformed-nested-usage' ? 'toolResult' : 'assistant',
+    content: [], stopReason: 'stop', usage: { cost: { input: 'private payload', total: 0 } } }
+}));
+if (task === 'usage-overflow') for (let i = 0; i < 2; i++) console.log(JSON.stringify({
+  type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', usage: { input: 1e308 } }
+}));
 if (task === 'malformed-json') console.log('{"type":');
 if (task === 'deep-json') {
   const nested = '['.repeat(20000) + '0' + ']'.repeat(20000);

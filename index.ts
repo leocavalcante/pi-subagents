@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Message } from "@earendil-works/pi-ai";
+import type { Message, Usage } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	CONFIG_DIR_NAME,
@@ -34,6 +34,7 @@ import { JobManager, ProcessPool, type JobSnapshot, type JobState } from "./jobs
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, parseChildEvent } from "./protocol.ts";
 import { MAX_PAGE_BYTES, sliceOutput } from "./paging.ts";
+import { normalizeUsage, sumUsage } from "./usage.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -165,6 +166,7 @@ interface SingleResult {
 	messages: Message[];
 	stderr: string;
 	usage: UsageStats;
+	reportedUsage?: Usage;
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
@@ -189,6 +191,18 @@ interface SubagentDetails {
 }
 
 type JobResult = AgentToolResult<SubagentDetails>;
+
+function reportUsage(result: JobResult): JobResult {
+	try {
+		const usage = sumUsage((result.details?.results ?? []).flatMap((task) => task.reportedUsage ? [task.reportedUsage] : []));
+		return { ...result, usage };
+	} catch {
+		return {
+			...result, isError: true,
+			content: [{ type: "text", text: "Unable to report cumulative subagent usage: totals exceed finite numeric limits." }, ...result.content],
+		};
+	}
+}
 type JobToolDetails = JobSnapshot<JobResult> | { jobs: Omit<JobSnapshot<JobResult>, "latest">[] } |
 	{ forgotten: string } | { cleared: number } | undefined;
 
@@ -547,6 +561,19 @@ async function runSingleAgent(
 
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message as Message;
+					if ((msg.role === "assistant" || msg.role === "toolResult") && msg.usage !== undefined) {
+						try {
+							const usage = sumUsage([currentResult.reportedUsage ?? normalizeUsage(undefined), normalizeUsage(msg.usage)]);
+							currentResult.reportedUsage = usage;
+							Object.assign(currentResult.usage, {
+								input: usage.input, output: usage.output, cacheRead: usage.cacheRead,
+								cacheWrite: usage.cacheWrite, cost: usage.cost.total,
+							});
+						} catch (error) {
+							protocolError = error instanceof Error ? error.message : "Malformed subagent usage.";
+							return;
+						}
+					}
 					history.push(msg, Buffer.byteLength(line, "utf8"));
 					currentResult.messages = history.messages;
 					currentResult.capture!.messagesDropped = history.dropped;
@@ -555,14 +582,7 @@ async function runSingleAgent(
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
 						const usage = msg.usage;
-						if (usage) {
-							currentResult.usage.input += usage.input || 0;
-							currentResult.usage.output += usage.output || 0;
-							currentResult.usage.cacheRead += usage.cacheRead || 0;
-							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
-						}
+						if (usage) currentResult.usage.contextTokens = usage.totalTokens ?? normalizeUsage(usage).totalTokens;
 						if (!currentResult.model && msg.model) currentResult.model = msg.model;
 						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
 						currentResult.errorMessage = msg.errorMessage;
@@ -1350,14 +1370,14 @@ export default function (pi: ExtensionAPI) {
 				};
 			};
 
-			if (!params.background) return run(signal, onUpdate);
+			if (!params.background) return reportUsage(await run(signal, onUpdate));
 			signal?.throwIfAborted();
 			const label =
 				mode === "single"
 					? params.agent!
 					: `${mode}: ${(hasChain ? params.chain! : params.tasks!).map((t) => t.agent).join(", ")}`;
 			const job = jobs.start(label, async (jobSignal, update) => boundResultText(
-				await run(jobSignal, (partial) => update(boundResultText(partial))),
+				reportUsage(await run(jobSignal, (partial) => update(boundResultText(partial)))),
 			));
 			return {
 				content: [

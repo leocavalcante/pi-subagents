@@ -100,6 +100,68 @@ test('foreground still waits and does not create background jobs', async () => {
   assert.equal(child.thinking, undefined);
 });
 
+test('foreground results report cumulative SDK usage for every mode including failed steps', async () => {
+  for (const params of [
+    { agent: 'worker', task: 'usage' },
+    { tasks: [{ agent: 'worker', task: 'usage' }, { agent: 'worker', task: 'zero-exit fail' }] },
+    { chain: [{ agent: 'worker', task: 'usage' }, { agent: 'worker', task: 'zero-exit fail' }, { agent: 'worker', task: 'never run' }] },
+  ]) {
+    const updates = [];
+    const result = await tools.get('subagent').definition.execute('usage', params, undefined, update => updates.push(update), ctx());
+    const tasks = result.details.results.length;
+    assert.equal(result.usage.input, tasks * 2);
+    assert.equal(result.usage.output, tasks * 2);
+    assert.equal(result.usage.totalTokens, tasks * 4);
+    assert.deepEqual(result.usage.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+    assert.ok(updates.every(update => update.usage === undefined), 'Progress is not a billable result');
+  }
+});
+
+test('nested tool usage counts once and does not change assistant context or turn counts', async () => {
+  const result = await invoke('subagent', { agent: 'worker', task: 'nested-usage' });
+  assert.equal(result.usage.input, 12);
+  assert.equal(result.usage.output, 22);
+  assert.equal(result.usage.totalTokens, 104);
+  assert.equal(result.usage.cacheWrite1h, 5);
+  assert.equal(result.usage.reasoning, 7, 'Reasoning is a subset of output, not additional tokens');
+  assert.equal(result.usage.cost.total, 1);
+  assert.equal(result.usage.cost.cacheWrite, 0.4);
+  assert.equal(result.details.results[0].usage.turns, 2);
+  assert.equal(result.details.results[0].usage.contextTokens, 2);
+  assert.equal(result.details.results[0].usage.cost, 1);
+});
+
+test('history eviction preserves billable usage while background inspections never bill again', async () => {
+  const launched = await invoke('subagent', { agent: 'worker', task: 'history-flood', background: true });
+  assert.equal(launched.usage, undefined);
+  const job = await finish(launched.details.background.id);
+  assert.equal(job.latest.usage.totalTokens, 404);
+  assert.ok(job.latest.details.results[0].capture.messagesDropped > 0);
+  for (const action of ['status', 'output', 'list']) {
+    const inspected = await invoke('subagent_jobs', { action, ...(action === 'list' ? {} : { jobId: job.id }) });
+    assert.equal(inspected.usage, undefined);
+  }
+});
+
+test('invalid cost components, nested usage and aggregate overflow fail without echoing payloads', async () => {
+  for (const task of ['malformed-cost-component', 'malformed-nested-usage', 'usage-overflow']) {
+    const result = await invoke('subagent', { agent: 'worker', task });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /usage/);
+    assert.equal(result.content[0].text.includes('private payload'), false);
+    assert.ok(Number.isFinite(result.usage.input));
+  }
+});
+
+test('overflow across a batch preserves captures without returning non-finite usage', async () => {
+  const result = await invoke('subagent', { tasks: [{ agent: 'worker', task: 'usage-overflow' }, { agent: 'worker', task: 'usage-overflow' }] });
+  assert.equal(result.isError, true);
+  assert.equal(result.usage, undefined);
+  assert.match(result.content[0].text, /cumulative.*usage/);
+  assert.equal(result.details.results.length, 2);
+  assert.ok(result.details.results.every(task => Number.isFinite(task.reportedUsage.input)));
+});
+
 test('single, parallel, and chained failures report failed jobs', async () => {
   for (const params of [
     { agent: 'worker', task: 'fail' },

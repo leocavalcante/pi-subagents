@@ -1,3 +1,5 @@
+import { usageError } from "./usage.ts";
+
 /** Bound structural nesting before parsing, so captured values remain safe to serialize. */
 export function parseChildEvent(line: string): unknown {
 	let depth = 0;
@@ -42,13 +44,6 @@ export function assistantMessageError(message: unknown): string | undefined {
 		if (message[field] !== undefined && typeof message[field] !== "string") return `malformed assistant ${field}`;
 	}
 
-	const usage = message.usage;
-	const isCount = (value: unknown) => value === undefined ||
-		(typeof value === "number" && Number.isFinite(value) && value >= 0);
-	if (usage !== undefined && (!isObject(usage) ||
-		![usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(isCount) ||
-		(usage.cost !== undefined && (!isObject(usage.cost) || !isCount(usage.cost.total))))) {
-		return "malformed assistant usage";
-	}
+	if (usageError(message.usage)) return "malformed assistant usage";
 	return undefined;
 }

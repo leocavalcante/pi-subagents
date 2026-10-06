@@ -207,6 +207,14 @@ store("next-output-offset", result.output.nextOffset);
 
 Read additional pages only when needed. Completion delivery still arrives automatically, so do not poll for it.
 
+## Usage accounting
+
+Foreground results report cumulative child token and cost totals through Pi's standard tool-result `usage` field. This includes completed assistant attempts and nested model usage in canonical `message_end` tool results, even when a task fails or earlier message history is evicted. Legacy `tool_result_end` copies do not add usage again. Reasoning tokens and one-hour cache writes are subsets, not additional tokens.
+
+Background totals remain in retained job details; they are not added to Pi's session statistics. Launch acknowledgements, progress updates, and job inspection never report billable usage again. Parent-aborted foreground calls do not return a billable tool result.
+
+Malformed usage and arithmetic overflow fail the task without exposing provider payloads. An overflow while combining batch totals marks the response as an error and preserves individual captures, but omits aggregate usage.
+
 ## Output capture and cleanup
 
 Each child has bounded output capture:
