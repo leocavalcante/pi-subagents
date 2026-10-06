@@ -35,6 +35,7 @@ if (task === 'malformed-pending') console.log(JSON.stringify({ type: 'message_en
 if (task === 'retry-recovered') emit('transient error', 'error');
 if (task === 'redacted-thinking') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', redacted: true, thinkingSignature: 'opaque' }], stopReason: 'stop' } }));
 if (task === 'odd-tool-args') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: ['bash', 'read', 'write', 'edit', 'ls', 'find', 'grep'].map(name => ({ type: 'toolCall', id: name, name, arguments: { command: 42, path: {}, pattern: 42, content: 42, offset: null, limit: {} } })), stopReason: 'toolUse' } }));
+if (task === 'long-path') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'long-read', name: 'read', arguments: { path: '/' + 'p'.repeat(40000) } }], stopReason: 'toolUse' } }));
 if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result_end', message: { role: 'assistant' } }));
 if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
 if (task === 'malformed-null') console.log('null');

@@ -102,6 +102,8 @@ Use `cwd` to set a working directory. Relative paths resolve from the parent ses
 
 Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Model-facing text is capped at 50 KiB per response, including headers and truncation notices. The same limit applies to progress updates, single tasks, chains, and entire parallel batches. Parallel tasks share the available text budget so every task's status remains visible. Captured results remain in tool details, and chains pass the full captured final text to the next step.
 
+Collapsed tool output shows bounded text previews rather than wrapping an entire long line. Expand with Ctrl+O to see captured final text. All modes show process, protocol, and model failure diagnoses, including stderr when no explicit error message is available. Tool arguments remain compact previews in either view.
+
 ## Model and thinking overrides
 
 Set `model` or `thinking` on a call without editing the agent definition:
@@ -115,7 +117,7 @@ Set `model` or `thinking` on a call without editing the agent definition:
 }
 ```
 
-Parallel and chain entries accept the same fields. Each field resolves independently, with precedence: entry, top-level call, agent frontmatter, then parent session. Parent thinking is inherited only when the model is also inherited from the parent. If neither the call nor the agent sets `thinking`, an explicit model uses Pi's model default or model suffix instead.
+Parallel and chain entries accept the same fields. Each field resolves independently, with precedence: entry, top-level call, agent frontmatter, then parent session. Parent thinking is inherited only when the model is also inherited from the parent. If neither the call nor the agent sets `thinking`, an explicit model uses Pi's configured default or model suffix instead.
 
 Model selectors support Pi's `provider/id` and `:thinking` syntax. A resolved `thinking` setting overrides a model suffix. These options work in foreground and background modes and leave the agent's tools and project approval unchanged.
 

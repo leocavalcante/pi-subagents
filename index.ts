@@ -85,13 +85,14 @@ function formatToolCall(
 ): string {
 	const shortenPath = (p: string) => {
 		const home = os.homedir();
-		return p === home || p.startsWith(`${home}${path.sep}`) ? `~${p.slice(home.length)}` : p;
+		const shortened = p === home || p.startsWith(`${home}${path.sep}`) ? `~${p.slice(home.length)}` : p;
+		return truncateOutput(shortened, 512, "...");
 	};
 
 	switch (toolName) {
 		case "bash": {
 			const command = stringArg(args.command) || "...";
-			const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
+			const preview = truncateOutput(command, 120, "...");
 			return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
 		}
 		case "read": {
@@ -111,7 +112,8 @@ function formatToolCall(
 			const rawPath = stringArg(args.file_path ?? args.path);
 			const filePath = shortenPath(rawPath);
 			const content = stringArg(args.content, "");
-			const lines = content.split("\n").length;
+			let lines = 1;
+			for (let i = 0; i < content.length; i++) if (content.charCodeAt(i) === 10) lines++;
 			let text = themeFg("muted", "write ") + themeFg("accent", filePath);
 			if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
 			return text;
@@ -125,12 +127,12 @@ function formatToolCall(
 			return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));
 		}
 		case "find": {
-			const pattern = stringArg(args.pattern, "*");
+			const pattern = truncateOutput(stringArg(args.pattern, "*"), 512, "...");
 			const rawPath = stringArg(args.path, ".");
 			return themeFg("muted", "find ") + themeFg("accent", pattern) + themeFg("dim", ` in ${shortenPath(rawPath)}`);
 		}
 		case "grep": {
-			const pattern = stringArg(args.pattern, "");
+			const pattern = truncateOutput(stringArg(args.pattern, ""), 512, "...");
 			const rawPath = stringArg(args.path, ".");
 			return (
 				themeFg("muted", "grep ") + themeFg("accent", `/${pattern}/`) + themeFg("dim", ` in ${shortenPath(rawPath)}`)
@@ -138,8 +140,8 @@ function formatToolCall(
 		}
 		default: {
 			const argsStr = JSON.stringify(args);
-			const preview = argsStr.length > 50 ? `${argsStr.slice(0, 50)}...` : argsStr;
-			return themeFg("accent", toolName) + themeFg("dim", ` ${preview}`);
+			const preview = truncateOutput(argsStr, 256, "...");
+			return themeFg("accent", truncateOutput(toolName, 256, "...")) + themeFg("dim", ` ${preview}`);
 		}
 	}
 }
@@ -243,6 +245,18 @@ function truncateOutput(output: string, budget = MODEL_TEXT_CAP,
 	// Do not split a multibyte character. The notice itself is inside the cap.
 	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
 	return bytes.subarray(0, end).toString("utf8") + notice;
+}
+
+function previewText(text: string): string {
+	const lines = text.split("\n", 4);
+	const notice = "\n[Preview truncated. Ctrl+O to expand.]";
+	const preview = lines.length > 3 ? lines.slice(0, 3).join("\n") + notice : text;
+	return truncateOutput(preview, 1024, notice);
+}
+
+function getFailureReason(result: SingleResult): string {
+	if (!isFailedResult(result)) return "";
+	return result.errorMessage || result.stderr || `Subagent failed (${result.stopReason ?? `exit code ${result.exitCode}`}).`;
 }
 
 function boundResultText(result: JobResult): JobResult {
@@ -1370,7 +1384,7 @@ export default function (pi: ExtensionAPI) {
 				if (skipped > 0) text += theme.fg("muted", `... ${skipped} earlier items\n`);
 				for (const item of toShow) {
 					if (item.type === "text") {
-						const preview = expanded ? item.text : item.text.split("\n").slice(0, 3).join("\n");
+						const preview = expanded ? item.text : previewText(item.text);
 						text += `${theme.fg("toolOutput", preview)}\n`;
 					} else {
 						text += `${theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme))}\n`;
@@ -1392,8 +1406,8 @@ export default function (pi: ExtensionAPI) {
 					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
-					if (isError && r.errorMessage)
-						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
+					const failure = getFailureReason(r);
+					if (failure) container.addChild(new Text(theme.fg("error", `Error: ${truncateOutput(failure)}`), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
 					container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
@@ -1425,7 +1439,7 @@ export default function (pi: ExtensionAPI) {
 
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
-				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+				if (isError) text += `\n${theme.fg("error", `Error: ${previewText(getFailureReason(r))}`)}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
@@ -1490,6 +1504,8 @@ export default function (pi: ExtensionAPI) {
 							new Text(`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						const failure = getFailureReason(r);
+						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${truncateOutput(failure)}`), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1531,6 +1547,8 @@ export default function (pi: ExtensionAPI) {
 						: isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+					const failure = getFailureReason(r);
+					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(failure)}`)}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 					const captureNotice = getCaptureNotice(r);
@@ -1570,6 +1588,8 @@ export default function (pi: ExtensionAPI) {
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0));
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						const failure = getFailureReason(r);
+						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${truncateOutput(failure)}`), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -1611,6 +1631,8 @@ export default function (pi: ExtensionAPI) {
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+					const failure = getFailureReason(r);
+					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(failure)}`)}`;
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;

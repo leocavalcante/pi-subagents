@@ -626,6 +626,31 @@ test('chain rendering uses model failure status even on zero exit, and shows pen
   }
 });
 
+test('all render modes show model, process, and protocol failure diagnoses', async () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  for (const [task, diagnosis] of [['crash', /fixture crashed/], ['zero-exit fail', /fixture failure/], ['stdout-flood', /oversized record discarded/]]) {
+    for (const params of [{ agent: 'worker', task }, { chain: [{ agent: 'worker', task }] }, { tasks: [{ agent: 'worker', task }] }]) {
+      const result = await invoke('subagent', params);
+      for (const expanded of [false, true]) {
+        assert.match(definition.renderResult(result, { expanded }, theme, {}).render(100).join('\n'), diagnosis);
+      }
+    }
+  }
+});
+
+test('collapsed rendering bounds long lines, error messages, and tool paths', async () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  for (const task of ['large', 'large-error fail', 'long-path']) {
+    const result = await invoke('subagent', { agent: 'worker', task });
+    const preview = definition.renderResult(result, { expanded: false }, theme, {}).render(80).join('\n');
+    assert.ok(Buffer.byteLength(preview) < 4096);
+    assert.equal(preview.includes('\uFFFD'), false);
+    if (task === 'large') assert.ok(definition.renderResult(result, { expanded: true }, theme, {}).render(80).length > 100);
+  }
+});
+
 test('finished job records can be forgotten or cleared without canceling active jobs', async () => {
   const active = await launch({ task: 'delay=1500 active record' });
   const finished = await launch({ task: 'finished record' });
