@@ -1,9 +1,13 @@
 {
-	"name": "pi-subagents",
+	"name": "@leocavalcante/pi-subagents",
 	"version": "0.1.0",
 	"description": "Delegate tasks to isolated Pi agents, singly, in parallel, or in a chain.",
 	"type": "module",
 	"license": "MIT",
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/leocavalcante/pi-subagents.git"
