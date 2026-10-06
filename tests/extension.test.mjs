@@ -154,6 +154,45 @@ test('all foreground and background invocations share a four-process budget', as
   assert.equal(traces().filter(t => t.event === 'start').length, 13);
 });
 
+test('parallel concurrency can be lowered without changing result order', async () => {
+  for (const concurrency of [1, 2]) {
+    writeFileSync(traceFile, '');
+    const tasks = Array.from({ length: 4 }, (_, i) => ({ agent: 'worker', task: `delay=150 controlled-${i}` }));
+    const result = await invoke('subagent', { tasks, concurrency });
+    assert.equal(result.isError, false);
+    assert.equal(result.details.concurrency, concurrency);
+    assert.deepEqual(result.details.results.map(r => r.task), tasks.map(t => t.task));
+    let active = 0, peak = 0;
+    for (const entry of traces()) {
+      if (entry.event === 'start') peak = Math.max(peak, ++active);
+      if (entry.event === 'end') active--;
+    }
+    assert.equal(active, 0);
+    assert.equal(peak, concurrency);
+  }
+});
+
+test('invalid or inapplicable concurrency limits fail before launching children', async () => {
+  for (const concurrency of [0, -1, 1.5, 5, NaN, Infinity]) {
+    const result = await invoke('subagent', { tasks: [{ agent: 'worker', task: 'x' }], concurrency });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /concurrency/);
+  }
+  for (const params of [{ agent: 'worker', task: 'x' }, { chain: [{ agent: 'worker', task: 'x' }] }]) {
+    assert.equal((await invoke('subagent', { ...params, concurrency: 2 })).isError, true);
+  }
+  assert.equal(traces().length, 0);
+});
+
+test('canceling a serialized parallel job never starts its remaining tasks', async () => {
+  const launched = await invoke('subagent', { background: true, concurrency: 1, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=10000 stubborn serial' })) });
+  const id = launched.details.background.id;
+  await waitFor(() => traces().some(t => t.event === 'start'));
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  assert.equal((await finish(id)).state, 'canceled');
+  assert.equal(traces().filter(t => t.event === 'start').length, 1);
+});
+
 test('cancellation during prompt creation prevents spawning and cleans up the prompt', async t => {
   let releaseWrite, enteredWrite;
   const gate = new Promise(resolve => { releaseWrite = resolve; });

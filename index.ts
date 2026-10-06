@@ -180,6 +180,7 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+	concurrency?: number;
 	background?: { id: string; state: JobState };
 }
 
@@ -688,6 +689,10 @@ const SubagentParams = Type.Object({
 		}),
 	),
 	agentScope: Type.Optional(AgentScopeSchema),
+	concurrency: Type.Optional(Type.Integer({
+		minimum: 1, maximum: MAX_CONCURRENCY, default: MAX_CONCURRENCY,
+		description: "Parallel mode only: maximum simultaneous tasks in this batch, from 1 to 4. Shared process budget still applies.",
+	})),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({
@@ -876,6 +881,7 @@ export default function (pi: ExtensionAPI) {
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it. Queue time is excluded.",
+			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically. Use subagent_jobs to inspect or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
@@ -897,6 +903,8 @@ export default function (pi: ExtensionAPI) {
 			const hasTasks = params.tasks !== undefined;
 			const hasSingle = params.agent !== undefined || params.task !== undefined;
 			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+			const concurrency = Number.isInteger(params.concurrency) && params.concurrency! >= 1 && params.concurrency! <= MAX_CONCURRENCY
+				? params.concurrency! : MAX_CONCURRENCY;
 
 			const makeDetails =
 				(mode: "single" | "parallel" | "chain") =>
@@ -905,6 +913,7 @@ export default function (pi: ExtensionAPI) {
 					agentScope,
 					projectAgentsDir: discovery.projectAgentsDir,
 					results,
+					...(mode === "parallel" ? { concurrency } : {}),
 				});
 
 			if (modeCount !== 1) {
@@ -922,6 +931,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			if (params.concurrency !== undefined && (mode !== "parallel" || !Number.isInteger(params.concurrency) ||
+				params.concurrency < 1 || params.concurrency > MAX_CONCURRENCY)) {
+				return {
+					content: [{ type: "text", text: `concurrency applies only to parallel mode and must be an integer from 1 to ${MAX_CONCURRENCY}.` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
 			const requested = hasChain ? params.chain! : hasTasks ? params.tasks! : [{ agent: params.agent!, task: params.task! }];
 			if (!requested.length || requested.some((item) =>
 				typeof item?.agent !== "string" || !item.agent.trim() || typeof item?.task !== "string" || !item.task.trim())) {
@@ -1126,7 +1142,7 @@ export default function (pi: ExtensionAPI) {
 						}
 					};
 
-					const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
+					const results = await mapWithConcurrencyLimit(params.tasks, concurrency, async (t, index) => {
 						const result = await runSingleAgent(
 							defaultCwd,
 							pool,
@@ -1270,7 +1286,7 @@ export default function (pi: ExtensionAPI) {
 			if (Array.isArray(args.tasks) && args.tasks.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
+					theme.fg("accent", `parallel (${args.tasks.length} tasks, limit ${Number.isInteger(args.concurrency) ? args.concurrency : MAX_CONCURRENCY})`) +
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
 					const task = stringArg(t?.task, "");
