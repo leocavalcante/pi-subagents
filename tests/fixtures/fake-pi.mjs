@@ -36,7 +36,7 @@ if (task === 'malformed-cost-component' || task === 'malformed-nested-usage') co
   type: 'message_end', message: { role: task === 'malformed-nested-usage' ? 'toolResult' : 'assistant',
     content: [], stopReason: 'stop', usage: { cost: { input: 'private payload', total: 0 } } }
 }));
-if (task === 'usage-overflow') for (let i = 0; i < 2; i++) console.log(JSON.stringify({
+if (task === 'usage-overflow' || task === 'large-usage') for (let i = 0; i < (task === 'large-usage' ? 1 : 2); i++) console.log(JSON.stringify({
   type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', usage: { input: 1e308 } }
 }));
 if (task === 'malformed-json') console.log('{"type":');

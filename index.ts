@@ -275,8 +275,15 @@ function getFailureReason(result: SingleResult): string {
 }
 
 function boundResultText(result: JobResult): JobResult {
-	return { ...result, content: result.content.map((part) => part.type === "text"
-		? { ...part, text: truncateOutput(part.text) } : part) };
+	let remaining = MODEL_TEXT_CAP;
+	let textParts = result.content.filter((part) => part.type === "text").length;
+	return { ...result, content: result.content.map((part) => {
+		if (part.type !== "text") return part;
+		const text = truncateOutput(part.text, Math.floor(remaining / textParts));
+		remaining -= Buffer.byteLength(text, "utf8");
+		textParts--;
+		return { ...part, text };
+	}) };
 }
 
 type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };

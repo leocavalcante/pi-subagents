@@ -223,7 +223,7 @@ Each child has bounded output capture:
 - Stderr retains its first 64 KiB, including a truncation notice. Further stderr is drained and discarded.
 - Message history retains at most 128 recent messages and 16 MiB of source JSON records. Evicting earlier messages does not change aggregate usage totals.
 
-Results and tool details report capture truncation. These are capture limits, separate from the 50 KiB model-visible output limit. Discarded records and evicted history are not preserved elsewhere.
+Results and tool details report capture truncation. These are capture limits, separate from the 50 KiB model-visible output limit shared across all text blocks in one response. Discarded records and evicted history are not preserved elsewhere.
 
 Pre-spawn failures, such as an unwritable prompt file or a synchronous spawn error, return a failed task result with the setup phase and a safe error code. They preserve earlier chain results and let independent batch tasks continue. Cancellation still aborts the operation. Raw setup-error messages are not exposed because they may contain private prompt data.
 

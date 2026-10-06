@@ -162,6 +162,20 @@ test('overflow across a batch preserves captures without returning non-finite us
   assert.ok(result.details.results.every(task => Number.isFinite(task.reportedUsage.input)));
 });
 
+test('multi-block diagnostic responses share the total model-facing text budget', async () => {
+  const tasks = [{ agent: 'worker', task: 'large-usage' }, { agent: 'worker', task: 'large-usage' }];
+  for (const background of [false, true]) {
+    const initial = await invoke('subagent', { tasks, background });
+    const result = background ? (await finish(initial.details.background.id)).latest : initial;
+    assert.equal(result.isError, true);
+    const text = result.content.filter(part => part.type === 'text').map(part => part.text).join('');
+    assert.ok(Buffer.byteLength(text) <= 50 * 1024);
+    assert.match(text, /cumulative.*usage/);
+    assert.equal(text.includes('�'), false);
+    assert.ok(result.details.results.every(task => task.messages.at(-1).content[0].text.length === 40000));
+  }
+});
+
 test('single, parallel, and chained failures report failed jobs', async () => {
   for (const params of [
     { agent: 'worker', task: 'fail' },
