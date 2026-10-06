@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 const MAX_DIAGNOSTIC_BYTES = 2048;
+export const MAX_JOB_WAIT_MS = 60_000;
+export const DEFAULT_JOB_WAIT_MS = 30_000;
 
 function boundedDiagnostic(text: string, limit = MAX_DIAGNOSTIC_BYTES): string {
 	// A short UTF-16 prefix is sufficient for the byte cap. Avoid encoding an
@@ -34,6 +36,11 @@ export interface JobSnapshot<T> {
 	outputEvicted?: boolean;
 }
 
+export interface JobWaitResult<T> {
+	job: JobSnapshot<T>;
+	timedOut: boolean;
+}
+
 export interface JobRetention<T> {
 	maxBytes: number;
 	measure: (result: T) => number;
@@ -44,6 +51,7 @@ interface Job<T> {
 	controller: AbortController;
 	done: Promise<void>;
 	retainedBytes: number;
+	waiters: Set<() => void>;
 }
 
 /** Session-owned jobs. Turn cancellation deliberately does not own these controllers. */
@@ -80,6 +88,7 @@ export class JobManager<T> {
 			controller: new AbortController(),
 			done: Promise.resolve(),
 			retainedBytes: 0,
+			waiters: new Set(),
 		};
 		this.jobs.set(snapshot.id, job);
 		// Defer execution so registration and the launch result precede completion delivery.
@@ -123,6 +132,7 @@ export class JobManager<T> {
 					}
 				}
 				this.prune();
+				for (const notify of job.waiters) notify();
 			}
 		});
 		return { ...snapshot };
@@ -131,6 +141,38 @@ export class JobManager<T> {
 	get(id: string): JobSnapshot<T> | undefined {
 		const job = this.jobs.get(id);
 		return job ? { ...job.snapshot } : undefined;
+	}
+
+	/** Wait for cleanup and retention without polling or retaining timed-out observers. */
+	async wait(id: string, timeoutMs = DEFAULT_JOB_WAIT_MS, signal?: AbortSignal): Promise<JobWaitResult<T> | undefined> {
+		if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_JOB_WAIT_MS) {
+			throw new RangeError(`timeoutMs must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`);
+		}
+		signal?.throwIfAborted();
+		const job = this.jobs.get(id);
+		if (!job) return undefined;
+		if (job.snapshot.finishedAt) return { job: { ...job.snapshot }, timedOut: false };
+		return new Promise<JobWaitResult<T>>((resolve, reject) => {
+			const cleanup = () => {
+				clearTimeout(timer);
+				job.waiters.delete(complete);
+				signal?.removeEventListener("abort", abort);
+			};
+			const complete = () => {
+				cleanup();
+				resolve({ job: { ...job.snapshot }, timedOut: false });
+			};
+			const abort = () => {
+				cleanup();
+				reject(signal?.reason ?? new Error("Job wait aborted."));
+			};
+			const timer = setTimeout(() => {
+				cleanup();
+				resolve({ job: { ...job.snapshot }, timedOut: !job.snapshot.finishedAt });
+			}, timeoutMs);
+			job.waiters.add(complete);
+			signal?.addEventListener("abort", abort, { once: true });
+		});
 	}
 
 	list(): JobSnapshot<T>[] {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { getEventListeners } from 'node:events';
 import { jiti } from './pi-runtime.mjs';
 const { JobManager, ProcessPool } = await jiti.import('../jobs.ts');
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -192,6 +193,87 @@ test('retention measurement failures remain safe and inspectable', async () => {
   }
   assert.throws(() => new JobManager(() => {}, () => false, 0), /positive/);
   assert.throws(() => new JobManager(() => {}, () => false, 8, -1), /non-negative/);
+});
+
+test('wait resolves every observer after completion and retention, including failed jobs', async () => {
+  const gate = deferred();
+  const delivered = [];
+  const jobs = new JobManager(job => delivered.push(job), value => value === 'bad', 8, 32, { maxBytes: 0, measure: () => 1 });
+  const job = jobs.start('waited', async () => gate.promise);
+  const controller = new AbortController();
+  const first = jobs.wait(job.id, 1000, controller.signal);
+  const second = jobs.wait(job.id, 1000);
+  gate.resolve('bad');
+  const results = await Promise.all([first, second]);
+  for (const result of results) {
+    assert.equal(result.timedOut, false);
+    assert.equal(result.job.state, 'failed');
+    assert.equal(result.job.outputEvicted, true);
+    assert.equal(result.job.latest, undefined);
+    assert.ok(result.job.finishedAt);
+  }
+  assert.equal(delivered.length, 1);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assert.equal((await jobs.wait(job.id, 1000)).timedOut, false);
+  assert.equal(await jobs.wait('unknown', 1000), undefined);
+  await jobs.shutdown();
+});
+
+test('wait timeouts and aborted waits remove observers without canceling the job', async () => {
+  const gate = deferred();
+  const jobs = new JobManager(() => {}, () => false);
+  let jobSignal;
+  const job = jobs.start('long', async signal => { jobSignal = signal; return gate.promise; });
+  const controller = new AbortController();
+  const timed = await jobs.wait(job.id, 1, controller.signal);
+  assert.equal(timed.timedOut, true);
+  assert.equal(timed.job.state, 'running');
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assert.equal(jobs.jobs.get(job.id).waiters.size, 0);
+  for (let i = 0; i < 20; i++) await jobs.wait(job.id, 1);
+  assert.equal(jobs.jobs.get(job.id).waiters.size, 0, 'Expired observers must not accumulate until job completion');
+  const aborted = jobs.wait(job.id, 1000, controller.signal);
+  controller.abort();
+  await assert.rejects(aborted, { name: 'AbortError' });
+  assert.equal(jobSignal.aborted, false);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assert.equal(jobs.jobs.get(job.id).waiters.size, 0);
+  const next = jobs.wait(job.id, 1000);
+  gate.resolve('done');
+  assert.equal((await next).job.state, 'completed');
+  await jobs.shutdown();
+});
+
+test('wait observes explicit job cancellation and shutdown after cleanup', async () => {
+  for (const shutdown of [false, true]) {
+    const cleaned = deferred();
+    const jobs = new JobManager(() => {}, () => false);
+    const job = jobs.start('cleanup', async signal => { await cleaned.promise; signal.throwIfAborted(); });
+    await tick();
+    let resolved = false;
+    const waiter = jobs.wait(job.id, 1000).then(result => { resolved = true; return result; });
+    const close = shutdown ? jobs.shutdown() : Promise.resolve(jobs.cancel(job.id));
+    await tick();
+    assert.equal(resolved, false, 'A cancellation request is not completed cleanup');
+    cleaned.resolve();
+    assert.equal((await waiter).job.state, 'canceled');
+    await close;
+    await jobs.shutdown();
+  }
+});
+
+test('wait validates bounds and preserves abort-before-wait and abort-after-finish semantics', async () => {
+  const jobs = new JobManager(() => {}, () => false);
+  const job = jobs.start('instant', async () => 'done');
+  for (const timeout of [0, -1, 1.5, NaN, Infinity, 60001]) await assert.rejects(jobs.wait(job.id, timeout), /timeoutMs/);
+  await assert.rejects(jobs.wait(job.id, 1000, AbortSignal.abort()), { name: 'AbortError' });
+  await tick();
+  const controller = new AbortController();
+  const result = await jobs.wait(job.id, 1000, controller.signal);
+  controller.abort();
+  assert.equal(result.job.state, 'completed');
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  await jobs.shutdown();
 });
 
 test('process pool shares slots fairly and cancels queued requests', async () => {

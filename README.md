@@ -170,6 +170,7 @@ The `subagent_jobs` tool manages jobs:
 ```json
 { "action": "list" }
 { "action": "status", "jobId": "<job ID>" }
+{ "action": "wait", "jobId": "<job ID>", "timeoutMs": 30000 }
 { "action": "output", "jobId": "<finished job ID>", "taskIndex": 0, "offset": 0, "limit": 16384 }
 { "action": "cancel", "jobId": "<job ID>" }
 { "action": "forget", "jobId": "<finished job ID>" }
@@ -187,6 +188,26 @@ Foreground calls and background jobs share a limit of four direct child processe
 Completion and status text are capped at 50 KiB including headers and truncation notices, with captured output retained in details. Jobs live only in the current Pi session. Quit, `/reload`, and session replacement cancel active jobs and discard job history. Jobs do not survive a Pi restart.
 
 Background execution requires a long-lived TUI or RPC session. Print and JSON modes must use foreground execution so they do not exit with unfinished work.
+
+## Wait for a background job
+
+Use `action: "wait"` when the next operation needs a particular job's result. It waits for the job to finish cleanup, without polling. `timeoutMs` defaults to 30000 and accepts whole milliseconds from 1 to 60000. This limits the wait, not the child's runtime.
+
+The response includes the same snapshot as status, plus `timedOut`. A completed, failed, or canceled job returns `timedOut: false`. If the wait expires first, it returns the current state with `timedOut: true`; the background job stays active. Unknown or forgotten IDs return an error immediately.
+
+Canceling the waiting tool call only stops the wait. To cancel the job, use `action: "cancel"`. Waiters also finish when session shutdown completes job cleanup. Waiting does not consume a child-process slot, add usage charges, or send an extra completion message. Automatic follow-ups still arrive as usual.
+
+In a codemode script:
+
+```js
+const result = await tools.subagent_jobs({
+  action: "wait", jobId: "<job ID>", timeoutMs: 30000
+});
+if (result.error) throw new Error(result.error);
+return { state: result.job.state, timedOut: result.timedOut };
+```
+
+Use one bounded wait when needed rather than a repeated status or wait loop.
 
 ## Read captured job output
 

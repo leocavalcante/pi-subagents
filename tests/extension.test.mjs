@@ -80,6 +80,61 @@ test('background returns before completion, retains progress, and sends a follow
   assert.equal(child.thinking, 'high');
 });
 
+test('wait returns a structured final snapshot without polling, extra delivery or billing', async () => {
+  const id = await launch({ task: 'delay=200 wait result' });
+  const result = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
+  assert.notEqual(result.isError, true);
+  assert.equal(result.structuredContent.action, 'wait');
+  assert.equal(result.structuredContent.timedOut, false);
+  assert.equal(result.structuredContent.job.state, 'completed');
+  assert.match(result.content[0].text, /result: delay=200 wait result/);
+  assert.equal(result.usage, undefined);
+  assert.equal(messages.length, 1);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, result.structuredContent), true);
+  const again = await invoke('subagent_jobs', { action: 'wait', jobId: id });
+  assert.equal(again.structuredContent.timedOut, false);
+  assert.equal(messages.length, 1);
+  const failed = await launch({ task: 'fail' });
+  const failure = await invoke('subagent_jobs', { action: 'wait', jobId: failed, timeoutMs: 5000 });
+  assert.notEqual(failure.isError, true, 'A failed job is not a failed inspection');
+  assert.equal(failure.structuredContent.job.state, 'failed');
+});
+
+test('wait timeout and turn abortion leave the background job running', async () => {
+  const id = await launch({ task: 'delay=10000 wait independent' });
+  const timed = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 1 });
+  assert.equal(timed.structuredContent.timedOut, true);
+  assert.notEqual(timed.isError, true);
+  assert.equal(timed.structuredContent.job.state, 'running');
+  assert.match(timed.content[0].text, /Wait timed out/);
+  const controller = new AbortController();
+  const waited = invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 }, ctx(), controller.signal);
+  controller.abort();
+  await assert.rejects(waited, { name: 'AbortError' });
+  assert.equal((await status(id)).state, 'running');
+  const canceled = invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  assert.equal((await canceled).structuredContent.job.state, 'canceled');
+});
+
+test('invalid wait queries do not mutate jobs and unavailable IDs fail promptly', async () => {
+  const id = await launch({ task: 'delay=10000 wait query safety' });
+  for (const timeoutMs of [0, -1, 1.5, Infinity, 60001]) {
+    const result = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs });
+    assert.equal(result.isError, true);
+    assert.match(result.structuredContent.error, /timeoutMs/);
+  }
+  for (const action of ['cancel', 'clear', 'forget', 'status', 'list', 'output']) {
+    assert.equal((await invoke('subagent_jobs', { action, jobId: id, timeoutMs: 1 })).isError, true);
+  }
+  assert.equal((await status(id)).state, 'running');
+  assert.equal((await invoke('subagent_jobs', { action: 'wait', jobId: 'unknown' })).isError, true);
+  assert.equal((await invoke('subagent_jobs', { action: 'wait' })).isError, true);
+  assert.equal((await invoke('subagent_jobs', { action: 'wait', jobId: id, offset: 0 })).isError, true);
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  await finish(id);
+});
+
 test('background is independent of the launch turn abort signal', async () => {
   const controller = new AbortController();
   const started = await invoke('subagent', { background: true, agent: 'worker', task: 'delay=120 independent' }, ctx(), controller.signal);

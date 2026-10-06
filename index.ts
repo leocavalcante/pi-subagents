@@ -30,7 +30,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, THINKING_LEVELS } from "./agents.ts";
-import { JobManager, ProcessPool, type JobSnapshot, type JobState } from "./jobs.ts";
+import { JobManager, ProcessPool, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, parseChildEvent } from "./protocol.ts";
 import { MAX_PAGE_BYTES, sliceOutput } from "./paging.ts";
@@ -800,7 +800,7 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 	));
 }
 
-const JobActionSchema = StringEnum(["list", "status", "cancel", "forget", "clear", "output"] as const);
+const JobActionSchema = StringEnum(["list", "status", "cancel", "forget", "clear", "output", "wait"] as const);
 const JobMetadataSchema = Type.Object({
 	id: Type.String(), label: Type.String(),
 	state: StringEnum(["running", "canceling", "completed", "failed", "canceled"] as const),
@@ -818,6 +818,7 @@ const JobResponseSchema = Type.Object({
 		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
 	})),
 	forgotten: Type.Optional(Type.String()), cleared: Type.Optional(Type.Integer()),
+	timedOut: Type.Optional(Type.Boolean()),
 	error: Type.Optional(Type.String()),
 });
 
@@ -932,22 +933,28 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
-		description: "List, inspect, cancel, or forget session-owned background jobs. Use output to page through a finished task's captured text or failure diagnosis. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; completions arrive automatically as follow-ups.",
+		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job. Use output to page through a finished task's captured text or failure diagnosis. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
 			action: JobActionSchema,
 			jobId: Type.Optional(Type.String({ description: "Job ID required except for list and clear." })),
 			taskIndex: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: zero-based task index. Default: 0." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: UTF-8 byte offset. Default: 0. Use nextOffset from the previous page." })),
 			limit: Type.Optional(Type.Integer({ minimum: 4, maximum: MAX_PAGE_BYTES, description: "Output only: maximum page bytes, from 4 to 32768. Default: 16384." })),
+			timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_JOB_WAIT_MS, default: DEFAULT_JOB_WAIT_MS,
+				description: "Wait only: maximum milliseconds to wait, from 1 to 60000. Default: 30000. Does not cancel the job." })),
 		}),
 		outputSchema: JobResponseSchema,
-		async execute(_id, params): Promise<AgentToolResult<JobToolDetails>> {
+		async execute(_id, params, signal): Promise<AgentToolResult<JobToolDetails>> {
 			const reply = (text: string, details: JobToolDetails, data: Omit<Static<typeof JobResponseSchema>, "action">, isError = false): AgentToolResult<JobToolDetails> => ({
 				content: [{ type: "text", text: truncateOutput(text) }], details,
 				structuredContent: { action: params.action, ...data }, ...(isError ? { isError: true } : {}),
 			});
 			const fail = (error: string, job?: JobSnapshot<JobResult>) =>
 				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job) } : {}) }, true);
+			if (params.timeoutMs !== undefined && (params.action !== "wait" || !Number.isInteger(params.timeoutMs) ||
+				params.timeoutMs < 1 || params.timeoutMs > MAX_JOB_WAIT_MS)) {
+				return fail(`timeoutMs applies only to action: wait and must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`);
+			}
 			if (params.action !== "output" && [params.taskIndex, params.offset, params.limit].some((v) => v !== undefined)) {
 				return fail("taskIndex, offset, and limit apply only to action: output.");
 			}
@@ -969,7 +976,9 @@ export default function (pi: ExtensionAPI) {
 					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
-			const job = params.jobId
+			const waited = params.action === "wait" && params.jobId
+				? await jobs.wait(params.jobId, params.timeoutMs ?? DEFAULT_JOB_WAIT_MS, signal) : undefined;
+			const job = params.action === "wait" ? waited?.job : params.jobId
 				? params.action === "cancel" ? jobs.cancel(params.jobId) : jobs.get(params.jobId)
 				: undefined;
 			if (!job) return fail("Unknown or missing job ID. Use action: list to see jobs.");
@@ -999,7 +1008,9 @@ export default function (pi: ExtensionAPI) {
 			const output = job.error ?? (job.outputEvicted
 				? "Captured output was evicted from the job registry to honor its retention budget. See the completion message."
 				: job.latest?.content.filter((c) => c.type === "text").map((c) => c.text).join("\n\n") ?? "(awaiting output)");
-			return reply(`${job.id} ${job.state}: ${job.label}\n\n${output}`, job, { job: metadata });
+			const waitNotice = waited?.timedOut ? "Wait timed out. The job is still active; completion will arrive automatically.\n" : "";
+			return reply(`${waitNotice}${job.id} ${job.state}: ${job.label}\n\n${output}`, job,
+				{ job: metadata, ...(waited ? { timedOut: waited.timedOut } : {}) });
 		},
 	});
 
