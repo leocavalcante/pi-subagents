@@ -428,6 +428,13 @@ async function runSingleAgent(
 		timeoutMs,
 	};
 
+	signal?.throwIfAborted();
+	if (!task.trim()) {
+		currentResult.exitCode = 1;
+		currentResult.errorMessage = "Delegated task is empty after replacing {previous}.";
+		return currentResult;
+	}
+
 	const emitUpdate = () => {
 		if (onUpdate) {
 			onUpdate({
@@ -1025,6 +1032,12 @@ export default function (pi: ExtensionAPI) {
 				typeof item?.agent !== "string" || !item.agent.trim() || typeof item?.task !== "string" || !item.task.trim())) {
 				return {
 					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+			if (params.chain && !params.chain[0].task.replace(/\{previous\}/g, "").trim()) {
+				return {
+					content: [{ type: "text", text: "The first chain task is empty after replacing {previous}. There is no previous output at step 1." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}

@@ -612,6 +612,26 @@ test('final output includes all text blocks and chain substitution preserves dol
   assert.equal(traces().filter(t => t.event === 'start').at(-1).task, `prefix ${literal} suffix ${literal}`);
 });
 
+test('empty initial chain context fails before project approval or launching a child', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
+  const result = await invoke('subagent', { chain: [{ agent: 'project', task: ' {previous} {previous} ' }], agentScope: 'both' }, context);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /empty|non-empty/);
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+});
+
+test('a chain stops when substitution creates a blank task without consuming a slot', async () => {
+  const result = await invoke('subagent', { chain: [{ agent: 'worker', task: 'empty-final' }, { agent: 'worker', task: '{previous}' }, { agent: 'worker', task: 'never run' }] });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /step 2.*empty/);
+  assert.equal(result.details.results.length, 2);
+  assert.equal(result.details.results[1].usage.turns, 0);
+  assert.equal(traces().filter(t => t.event === 'start').length, 1);
+  assert.notEqual((await invoke('subagent', { agent: 'worker', task: 'after blank task' })).isError, true);
+});
+
 test('chain rendering uses model failure status even on zero exit, and shows pending steps', async () => {
   const definition = tools.get('subagent').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };

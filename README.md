@@ -98,6 +98,8 @@ The `subagent` tool accepts exactly one mode. Empty arrays, blank tasks, partial
 | Parallel | `{ tasks: [{ agent, task }, ...] }` | Up to 8 tasks, up to 4 concurrent |
 | Chain | `{ chain: [{ agent, task }, ...] }` | Sequential, with `{previous}` substituted into each task |
 
+At the first chain step, `{previous}` is an empty string. A first task containing only that placeholder is rejected before approval or launch. If a later substitution makes the task blank, the chain stops at that step without starting another child.
+
 Use `cwd` to set a working directory. Relative paths resolve from the parent session's working directory. Parallel and chain entries accept their own `cwd`. Tasks reach children through stdin, so large prompts do not depend on the operating system's command-line argument limit.
 
 Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Model-facing text is capped at 50 KiB per response, including headers and truncation notices. The same limit applies to progress updates, single tasks, chains, and entire parallel batches. Parallel tasks share the available text budget so every task's status remains visible. Captured results remain in tool details, and chains pass the full captured final text to the next step.
