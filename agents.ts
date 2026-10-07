@@ -70,9 +70,34 @@ function parseToolList(value: unknown): string[] | undefined {
 	return [...new Set(raw.map((t: string) => t.trim()).filter(Boolean))];
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics: AgentDiagnostic[]): AgentConfig[] {
+function isPathInside(parent: string, child: string): boolean {
+	const relative = path.relative(parent, child);
+	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function loadAgentsFromDir(
+	dir: string,
+	source: "user" | "project",
+	diagnostics: AgentDiagnostic[],
+	projectRoot?: string,
+): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 	const sourceFiles = new Map<string, string>();
+	let realProjectRoot: string | undefined;
+
+	if (source === "project" && projectRoot) {
+		try {
+			realProjectRoot = fs.realpathSync(projectRoot);
+			const realDir = fs.realpathSync(dir);
+			if (!isPathInside(realProjectRoot, realDir)) {
+				diagnostics.push({ filePath: dir, source, message: "Agent directory resolves outside the project root." });
+				return agents;
+			}
+		} catch {
+			diagnostics.push({ filePath: dir, source, message: "Unable to resolve project agent directory safely." });
+			return agents;
+		}
+	}
 
 	if (!fs.existsSync(dir)) {
 		return agents;
@@ -92,7 +117,19 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 
 		const filePath = path.join(dir, entry.name);
 		try {
-			const content = fs.readFileSync(filePath, "utf-8");
+			let contentPath = filePath;
+			if (realProjectRoot) {
+				try {
+					contentPath = fs.realpathSync(filePath);
+				} catch {
+					throw new Error("Unable to resolve agent file safely.");
+				}
+				if (!isPathInside(realProjectRoot, contentPath)) {
+					diagnostics.push({ filePath, source, message: "Agent file resolves outside the project root." });
+					continue;
+				}
+			}
+			const content = fs.readFileSync(contentPath, "utf-8");
 			let parsed: ReturnType<typeof parseFrontmatter<AgentFrontmatter>>;
 			try {
 				parsed = parseFrontmatter<AgentFrontmatter>(content);
@@ -148,11 +185,11 @@ function isDirectory(p: string): boolean {
 	}
 }
 
-function findNearestProjectAgentsDir(cwd: string): string | null {
+function findNearestProjectAgentsDir(cwd: string): { dir: string; root: string } | null {
 	let currentDir = path.resolve(cwd);
 	while (true) {
 		const candidate = path.join(currentDir, CONFIG_DIR_NAME, "agents");
-		if (isDirectory(candidate)) return candidate;
+		if (isDirectory(candidate)) return { dir: candidate, root: currentDir };
 
 		const parentDir = path.dirname(currentDir);
 		if (parentDir === currentDir) return null;
@@ -162,12 +199,13 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
-	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
+	const projectLocation = findNearestProjectAgentsDir(cwd);
+	const projectAgentsDir = projectLocation?.dir ?? null;
 
 	const diagnostics: AgentDiagnostic[] = [];
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user", diagnostics);
-	const projectAgents = scope === "user" || !projectAgentsDir
-		? [] : loadAgentsFromDir(projectAgentsDir, "project", diagnostics);
+	const projectAgents = scope === "user" || !projectLocation
+		? [] : loadAgentsFromDir(projectLocation.dir, "project", diagnostics, projectLocation.root);
 
 	const agentMap = new Map<string, AgentConfig>();
 

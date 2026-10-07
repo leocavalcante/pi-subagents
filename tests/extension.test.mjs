@@ -3,7 +3,7 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { promises as fsPromises } from 'node:fs';
 import { after, afterEach, beforeEach, test } from 'node:test';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -787,6 +787,25 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
     assert.deepEqual(project.details.agents.map(a => a.name), ['project']);
     assert.equal(traces().length, 0);
   } finally { rmSync(badFile); }
+});
+
+test('project agent path escape diagnostics satisfy the listing output schema', async () => {
+  const target = join(sandbox, 'external-project-agent.md');
+  const link = join(sandbox, 'project/.pi/agents/escaped.md');
+  writeFileSync(target, '---\nname: escaped\ndescription: Outside project\n---\nExternal prompt.\n');
+  symlinkSync(target, link);
+  try {
+    const result = await invoke('subagent_agents', { agentScope: 'project' }, { ...ctx(), cwd: join(sandbox, 'project') });
+    assert.deepEqual(result.details.agents.map(a => a.name), ['project']);
+    assert.ok(result.details.diagnostics.some(d => d.filePath === link && /outside the project root/i.test(d.message)));
+    assert.deepEqual(result.structuredContent, result.details);
+    assert.equal(Value.Check(tools.get('subagent_agents').definition.outputSchema, result.structuredContent), true);
+    assert.equal(result.structuredContent.agents.some(a => a.name === 'escaped'), false);
+    assert.equal(traces().length, 0);
+  } finally {
+    rmSync(link);
+    rmSync(target);
+  }
 });
 
 test('agent thinking overrides inheritance and empty tools disable the selection', async () => {

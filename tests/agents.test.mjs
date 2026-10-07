@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
@@ -88,4 +88,34 @@ test('scope and project precedence work from nested or relative directories', ()
   assert.equal(both.agents[1].source, 'project');
   assert.equal(both.projectAgentsDir, projectDir);
   assert.ok(discoverAgents(cwd, 'project').agents.every(a => a.source === 'project'));
+});
+
+test('project agent file symlinks stay within the project trust boundary', () => {
+  const internal = join(sandbox, 'project/shared-agent.md');
+  const external = join(sandbox, 'external-agent.md');
+  writeFileSync(internal, '---\nname: internal\ndescription: In-project shared agent\n---\nInternal prompt.\n');
+  writeFileSync(external, '---\nname: escaped\ndescription: Outside project\n---\nExternal prompt.\n');
+  symlinkSync(internal, join(projectDir, 'linked-internal.md'));
+  symlinkSync(external, join(projectDir, 'linked-external.md'));
+
+  const result = discoverAgents(cwd, 'project');
+  assert.deepEqual(result.agents.map(a => a.name), ['internal']);
+  assert.equal(result.agents[0].filePath, join(projectDir, 'linked-internal.md'));
+  assert.equal(result.diagnostics.length, 1);
+  assert.equal(result.diagnostics[0].filePath, join(projectDir, 'linked-external.md'));
+  assert.match(result.diagnostics[0].message, /outside the project root/i);
+});
+
+test('project agents directories that resolve outside the project are ignored', () => {
+  const externalDir = join(sandbox, 'external-agents');
+  mkdirSync(externalDir);
+  agent(externalDir, 'escaped', 'name: escaped\ndescription: Outside project');
+  rmSync(projectDir, { recursive: true, force: true });
+  symlinkSync(externalDir, projectDir, process.platform === 'win32' ? 'junction' : 'dir');
+
+  const result = discoverAgents(cwd, 'project');
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.equal(result.diagnostics[0].filePath, projectDir);
+  assert.match(result.diagnostics[0].message, /outside the project root/i);
 });

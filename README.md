@@ -64,7 +64,7 @@ Without `tools`, it uses Pi's defaults. Both `tools: read, bash` and `tools: [re
 
 Definitions need non-empty `name` and `description` fields. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents. Duplicate names in the same directory produce a diagnostic naming both files. The last valid definition in filename order still wins. Intentional project-over-personal overrides do not produce a duplicate warning.
 
-Project-local definitions live in `.pi/agents/*.md`. The tool loads only personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents. Project definitions override personal definitions of the same name when using `"both"`.
+Project-local definitions live in `.pi/agents/*.md`. The tool loads only personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents. Project definitions override personal definitions of the same name when using `"both"`. Project agent directories and files may use symlinks that resolve within the project root; links resolving outside it are skipped and reported as diagnostics. Personal agent symlinks are unchanged.
 
 ## Usage
 
