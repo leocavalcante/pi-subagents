@@ -47,6 +47,26 @@ test('stderr stays within its byte cap and does not split Unicode', () => {
   assert.equal(capture.text.includes('\uFFFD'), false);
 });
 
+test('truncated stderr output is formatted once despite repeated reads', () => {
+  const capture = new TextCapture(64);
+  capture.append('x'.repeat(64));
+  capture.append('more output');
+  const originalFrom = Buffer.from;
+  let conversions = 0;
+  Buffer.from = (...args) => { conversions++; return originalFrom(...args); };
+  try {
+    const text = capture.text;
+    const formattedConversions = conversions;
+    assert.match(text, /stderr capture truncated/);
+    assert.equal(capture.text, text);
+    capture.append('ignored tail');
+    assert.equal(capture.text, text);
+    assert.equal(conversions, formattedConversions, 'Repeated reads must not re-encode the retained stderr prefix');
+  } finally {
+    Buffer.from = originalFrom;
+  }
+});
+
 test('tiny diagnostic budgets remain bounded and invalid limits are rejected', () => {
   const capture = new TextCapture(4);
   capture.append('x'.repeat(100));

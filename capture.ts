@@ -20,12 +20,14 @@ function utf8Prefix(text: string, maxBytes: number): string {
 export class TextCapture {
 	private value = "";
 	private bytes = 0;
+	private truncatedText?: string;
 	truncated = false;
 
 	constructor(private limit = MAX_STDERR_BYTES) { positiveLimit(limit); }
 
 	append(text: string): void {
 		if (this.truncated) return;
+		this.truncatedText = undefined;
 		const bytes = Buffer.byteLength(text, "utf8");
 		if (this.bytes + bytes <= this.limit) {
 			this.value += text;
@@ -38,8 +40,11 @@ export class TextCapture {
 
 	get text(): string {
 		if (!this.truncated) return this.value;
-		const notice = utf8Prefix("\n[stderr capture truncated]", this.limit);
-		return utf8Prefix(this.value, this.limit - Buffer.byteLength(notice)) + notice;
+		if (this.truncatedText === undefined) {
+			const notice = utf8Prefix("\n[stderr capture truncated]", this.limit);
+			this.truncatedText = utf8Prefix(this.value, this.limit - Buffer.byteLength(notice)) + notice;
+		}
+		return this.truncatedText;
 	}
 }
 
