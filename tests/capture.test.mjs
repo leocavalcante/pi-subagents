@@ -47,6 +47,25 @@ test('stderr stays within its byte cap and does not split Unicode', () => {
   assert.equal(capture.text.includes('\uFFFD'), false);
 });
 
+test('stderr truncation encodes only a bounded prefix of an oversized input chunk', () => {
+  const capture = new TextCapture(64);
+  const input = 'x'.repeat(8 * 1024 * 1024);
+  const originalFrom = Buffer.from;
+  const encodedLengths = [];
+  Buffer.from = (value, ...args) => {
+    if (typeof value === 'string') encodedLengths.push(value.length);
+    return originalFrom(value, ...args);
+  };
+  try {
+    capture.append(input);
+    assert.equal(capture.truncated, true);
+    assert.ok(encodedLengths.every(length => length <= 66), 'truncation should not encode the discarded tail');
+    assert.ok(Buffer.byteLength(capture.text) <= 64);
+  } finally {
+    Buffer.from = originalFrom;
+  }
+});
+
 test('truncated stderr output is formatted once despite repeated reads', () => {
   const capture = new TextCapture(64);
   capture.append('x'.repeat(64));

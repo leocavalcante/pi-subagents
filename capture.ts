@@ -9,8 +9,11 @@ function positiveLimit(limit: number): void {
 }
 
 function utf8Prefix(text: string, maxBytes: number): string {
-	const bytes = Buffer.from(text, "utf8");
-	if (bytes.length <= maxBytes) return text;
+	// A UTF-16 prefix of maxBytes + 2 code units is enough to cover the byte
+	// budget and any surrogate pair at its boundary. Do not encode a discarded
+	// child-output tail just to keep its bounded prefix.
+	const bytes = Buffer.from(text.slice(0, maxBytes + 2), "utf8");
+	if (text.length <= maxBytes && bytes.length <= maxBytes) return text;
 	let end = Math.max(0, maxBytes);
 	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
 	return bytes.subarray(0, end).toString("utf8");
