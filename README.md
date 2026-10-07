@@ -35,7 +35,17 @@ mkdir -p ~/.pi/agent/extensions
 ln -s "$PWD" ~/.pi/agent/extensions/subagent
 ```
 
-Run that command from the checkout, with no existing `subagent` directory. Use either a package install or the symlink, not both.
+Run that command from the checkout, with no existing `subagent` directory. Use either a package install or the symlink, not both. On Windows, use PowerShell and a directory junction instead of the POSIX `ln -s` command:
+
+```powershell
+$extensions = Join-Path $HOME ".pi/agent/extensions"
+New-Item -ItemType Directory -Force $extensions | Out-Null
+$link = Join-Path $extensions "subagent"
+if (Test-Path -LiteralPath $link) { throw "Remove the existing subagent path first: $link" }
+New-Item -ItemType Junction -Path $link -Target (Get-Location).Path
+```
+
+Run this from the checkout root. A junction avoids requiring Windows symbolic-link privileges; remove it with `Remove-Item (Join-Path $HOME ".pi\agent\extensions\subagent")` when you no longer need the local install.
 
 ## Agent definitions
 
