@@ -57,6 +57,9 @@ if (task === 'long-path') console.log(JSON.stringify({ type: 'message_end', mess
 if (task === 'malformed-tool-result') console.log(JSON.stringify({ type: 'tool_result_end', message: {
   role: 'toolResult', toolName: 'read', content: [], isError: false,
 } }));
+if (task === 'wrong-role-tool-result') console.log(JSON.stringify({ type: 'tool_result_end', message: {
+  role: 'assistant', content: [], stopReason: 'stop',
+} }));
 if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result_end', message: { role: 'assistant' } }));
 if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
 if (task === 'malformed-null') console.log('null');

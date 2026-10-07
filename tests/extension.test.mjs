@@ -700,6 +700,14 @@ test('malformed child events fail cleanly without crashing or retaining slots', 
   assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');
 });
 
+test('tool-result-end rejects a well-formed message with the wrong role', async () => {
+  const job = await finish(await launch({ task: 'wrong-role-tool-result' }));
+  assert.equal(job.state, 'failed');
+  assert.match(job.latest.content[0].text, /tool result event must contain a tool result message/);
+  assert.equal(job.latest.details.results[0].messages.some(message => message.content.length === 0), false,
+    'the invalid event must not be retained as an assistant message');
+});
+
 test('deep JSON cannot overflow renderer or session serialization stacks', async () => {
   const result = await invoke('subagent', { agent: 'worker', task: 'deep-json' });
   assert.equal(result.isError, true);

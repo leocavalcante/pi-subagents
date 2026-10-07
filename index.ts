@@ -565,6 +565,10 @@ async function runSingleAgent(
 					protocolError = "Invalid subagent JSON event: malformed message.";
 					return;
 				}
+				if (event.type === "tool_result_end" && event.message.role !== "toolResult") {
+					protocolError = "Invalid subagent JSON event: tool result event must contain a tool result message.";
+					return;
+				}
 				if (isMessageEnd && (event.message.role === "assistant" || event.message.role === "toolResult")) {
 					const error = event.message.role === "assistant"
 						? assistantMessageError(event.message) : toolResultMessageError(event.message);
