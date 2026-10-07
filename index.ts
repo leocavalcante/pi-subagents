@@ -812,12 +812,24 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 }
 
 const JobActionSchema = StringEnum(["list", "status", "cancel", "forget", "clear", "output", "wait"] as const);
+const UsageSummarySchema = Type.Object({
+	input: Type.Number({ minimum: 0 }), output: Type.Number({ minimum: 0 }),
+	cacheRead: Type.Number({ minimum: 0 }), cacheWrite: Type.Number({ minimum: 0 }),
+	totalTokens: Type.Number({ minimum: 0 }),
+	cost: Type.Object({
+		input: Type.Number({ minimum: 0 }), output: Type.Number({ minimum: 0 }),
+		cacheRead: Type.Number({ minimum: 0 }), cacheWrite: Type.Number({ minimum: 0 }),
+		total: Type.Number({ minimum: 0 }),
+	}),
+	cacheWrite1h: Type.Optional(Type.Number({ minimum: 0 })),
+	reasoning: Type.Optional(Type.Number({ minimum: 0 })),
+});
 const JobMetadataSchema = Type.Object({
 	id: Type.String(), label: Type.String(), notify: Type.Boolean(),
 	state: StringEnum(["running", "canceling", "completed", "failed", "canceled"] as const),
 	startedAt: Type.String(), finishedAt: Type.Optional(Type.String()),
 	error: Type.Optional(Type.String()), outputEvicted: Type.Optional(Type.Boolean()),
-	resultCount: Type.Optional(Type.Integer()),
+	resultCount: Type.Optional(Type.Integer()), usage: Type.Optional(UsageSummarySchema),
 });
 const JobResponseSchema = Type.Object({
 	action: JobActionSchema,
@@ -833,7 +845,22 @@ const JobResponseSchema = Type.Object({
 	error: Type.Optional(Type.String()),
 });
 
+function summarizeJobUsage(job: JobSnapshot<JobResult>): Usage | undefined {
+	const reports = job.latest?.details?.results.flatMap((result) =>
+		result.reportedUsage ? [result.reportedUsage] : [],
+	) ?? [];
+	if (reports.length === 0) return undefined;
+	try {
+		return sumUsage(reports);
+	} catch {
+		// Oversized aggregates are already represented as tool errors; do not
+		// let optional observation metadata make status/list calls fail.
+		return undefined;
+	}
+}
+
 function jobMetadata(job: JobSnapshot<JobResult>): Static<typeof JobMetadataSchema> {
+	const usage = summarizeJobUsage(job);
 	return {
 		id: job.id, label: truncateOutput(job.label, 1024, "..."),
 		state: job.state, notify: job.notify, startedAt: job.startedAt,
@@ -841,6 +868,7 @@ function jobMetadata(job: JobSnapshot<JobResult>): Static<typeof JobMetadataSche
 		...(job.error ? { error: truncateOutput(job.error, 2048, "...") } : {}),
 		...(job.outputEvicted ? { outputEvicted: true } : {}),
 		...(job.latest?.details ? { resultCount: job.latest.details.results.length } : {}),
+		...(usage !== undefined ? { usage } : {}),
 	};
 }
 

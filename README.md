@@ -250,7 +250,7 @@ After a job finishes, `action: "output"` reads a page of a task's captured final
 
 `offset` is a UTF-8 byte offset, not a character count. Start at 0 and use the returned `nextOffset` until it is `null`. `limit` is 4 to 32768 bytes, with a default of 16384. Pages never split a UTF-8 character. Active jobs, unavailable captures, invalid indices, and offsets inside a character return an error. Evicted output cannot be recovered from this registry.
 
-Job operations also return structured data to codemode scripts. List returns `{ action, jobs }`, inspection returns `{ action, job }`, and output adds an `output` page. Errors include `error`. Job metadata contains state and timestamps but no full message capture. Page responses do not copy the full capture into session history again.
+Job operations also return structured data to codemode scripts. List returns `{ action, jobs }`, inspection returns `{ action, job }`, and output adds an `output` page. Errors include `error`. Job metadata contains state and timestamps, plus cumulative usage while the latest result remains retained; it does not include the full message capture. Page responses do not copy the full capture into session history again.
 
 For a completed job:
 
@@ -267,7 +267,7 @@ Read additional pages only when needed. Non-silent jobs send completion messages
 
 Foreground results report cumulative child token and cost totals through Pi's standard tool-result `usage` field. This includes completed assistant attempts and nested model usage in canonical `message_end` tool results, even when a task fails or earlier message history is evicted. Legacy `tool_result_end` copies do not add usage again. Reasoning tokens and one-hour cache writes are subsets, not additional tokens.
 
-Background totals remain in retained job details; they are not added to Pi's session statistics. Launch acknowledgements, progress updates, and job inspection never report billable usage again. Parent-aborted foreground calls do not return a billable tool result.
+Background totals remain in retained job details and are also available as observational `usage` in `subagent_jobs` metadata while the latest result is retained; they are not added to Pi's session statistics. Launch acknowledgements, progress updates, and job inspection never report billable usage again. Parent-aborted foreground calls do not return a billable tool result.
 
 Malformed usage and arithmetic overflow fail the task without exposing provider payloads. An overflow while combining batch totals marks the response as an error and preserves individual captures, but omits aggregate usage.
 

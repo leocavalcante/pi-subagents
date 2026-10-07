@@ -248,6 +248,37 @@ test('nested tool usage counts once and does not change assistant context or tur
   assert.equal(result.details.results[0].usage.cost, 1);
 });
 
+test('background job metadata reports cumulative chain usage without billing inspections', async () => {
+  const launched = await invoke('subagent', { background: true, chain: [
+    { agent: 'worker', task: 'nested-usage' }, { agent: 'worker', task: 'delay=1000 usage' },
+  ] });
+  const id = launched.details.background.id;
+  const live = await waitFor(async () => {
+    const result = await invoke('subagent_jobs', { action: 'status', jobId: id });
+    return result.structuredContent.job?.usage?.input >= 10 ? result : undefined;
+  });
+  assert.equal(live.usage, undefined);
+  assert.equal(live.structuredContent.job.state, 'running');
+  assert.ok(live.structuredContent.job.resultCount >= 1 && live.structuredContent.job.resultCount <= 2);
+  assert.ok(live.structuredContent.job.usage.input >= 10);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, live.structuredContent), true);
+
+  const waited = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
+  assert.equal(waited.usage, undefined);
+  assert.equal(waited.structuredContent.job.state, 'completed');
+  assert.deepEqual(waited.structuredContent.job.usage, {
+    input: 14, output: 24, cacheRead: 30, cacheWrite: 40, totalTokens: 108,
+    cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 },
+    cacheWrite1h: 5, reasoning: 7,
+  });
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, waited.structuredContent), true);
+
+  const listed = await invoke('subagent_jobs', { action: 'list' });
+  assert.equal(listed.usage, undefined);
+  assert.deepEqual(listed.structuredContent.jobs.find(job => job.id === id).usage, waited.structuredContent.job.usage);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, listed.structuredContent), true);
+});
+
 test('history eviction preserves billable usage while background inspections never bill again', async () => {
   const launched = await invoke('subagent', { agent: 'worker', task: 'history-flood', background: true });
   assert.equal(launched.usage, undefined);
