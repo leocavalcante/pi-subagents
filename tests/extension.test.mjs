@@ -690,10 +690,11 @@ test('synchronous spawn failures remain inspectable and do not discard sibling r
 });
 
 test('malformed child events fail cleanly without crashing or retaining slots', async () => {
-  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-json', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message']) {
+  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-json', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result']) {
     const job = await finish(await launch({ task }));
     assert.equal(job.state, 'failed');
     assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
+    if (task === 'malformed-tool-result') assert.match(job.latest.content[0].text, /malformed tool result metadata/);
     assert.match(job.latest.content[0].text, /^Agent failed:/);
   }
   assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');

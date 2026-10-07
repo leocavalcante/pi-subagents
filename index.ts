@@ -32,7 +32,7 @@ import { Type, type Static } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, THINKING_LEVELS } from "./agents.ts";
 import { JobManager, ProcessPool, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
-import { assistantMessageError, parseChildEvent } from "./protocol.ts";
+import { assistantMessageError, parseChildEvent, toolResultMessageError } from "./protocol.ts";
 import { MAX_PAGE_BYTES, sliceOutput } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext } from "./chain.ts";
@@ -565,8 +565,9 @@ async function runSingleAgent(
 					protocolError = "Invalid subagent JSON event: malformed message.";
 					return;
 				}
-				if (isMessageEnd && event.message.role === "assistant") {
-					const error = assistantMessageError(event.message);
+				if (isMessageEnd && (event.message.role === "assistant" || event.message.role === "toolResult")) {
+					const error = event.message.role === "assistant"
+						? assistantMessageError(event.message) : toolResultMessageError(event.message);
 					if (error) {
 						protocolError = `Invalid subagent JSON event: ${error}.`;
 						return;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { assistantMessageError, parseChildEvent } = await jiti.import('../protocol.ts');
+const { assistantMessageError, parseChildEvent, toolResultMessageError } = await jiti.import('../protocol.ts');
 const message = extra => ({ content: [{ type: 'text', text: 'answer' }], stopReason: 'stop', ...extra });
 
 test('JSON nesting is bounded without counting brackets inside escaped strings', () => {
@@ -31,4 +31,23 @@ test('rejects invalid usage and content while allowing optional usage', () => {
     { usage: { output: -1 } }, { usage: { cost: { total: 'bad' } } }, { usage: null },
     { content: [{ type: 'text', text: null }] }, { content: [{ type: 'toolCall', name: 'bash', arguments: {} }] },
   ]) assert.ok(assistantMessageError(message(extra)));
+});
+
+test('validates tool-result metadata, content blocks, and nested usage', () => {
+  const valid = { role: 'toolResult', toolCallId: 'call', toolName: 'read', content: [{ type: 'text', text: 'ok' }], isError: false };
+  assert.equal(toolResultMessageError(valid), undefined);
+  assert.equal(toolResultMessageError({ ...valid, content: [{ type: 'image', data: 'AA==', mimeType: 'image/png' }] }), undefined);
+  for (const malformed of [
+    { ...valid, toolCallId: undefined },
+    { ...valid, toolName: null },
+    { ...valid, isError: 0 },
+    { ...valid, content: null },
+    { ...valid, content: [{ type: 'text', text: 42 }] },
+    { ...valid, content: [{ type: 'image', data: 'AA==' }] },
+    { ...valid, usage: { cost: { total: 'private payload' } } },
+  ]) {
+    const error = toolResultMessageError(malformed);
+    assert.ok(error);
+    assert.equal(error.includes('private payload'), false);
+  }
 });

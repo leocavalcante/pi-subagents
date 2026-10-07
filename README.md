@@ -283,7 +283,7 @@ Results and tool details report capture truncation. These are capture limits, se
 
 Pre-spawn failures, such as an unwritable prompt file or a synchronous spawn error, return a failed task result with the setup phase and a safe error code. They preserve earlier chain results and let independent batch tasks continue. Cancellation still aborts the operation. Raw setup-error messages are not exposed because they may contain private prompt data.
 
-A zero exit code alone is not success. The child must emit a completed assistant message. Invalid JSONL, more than 128 levels of JSON nesting, or malformed assistant metadata fails the task without crashing the parent. Redacted thinking blocks are supported, and a successful retry clears errors from earlier attempts.
+A zero exit code alone is not success. The child must emit a completed assistant message. Invalid JSONL, JSON nesting beyond 128 levels, or malformed assistant or tool-result messages (including metadata, content, or usage) cause the task to fail without crashing the parent. Redacted thinking blocks are supported, and a successful retry clears errors from earlier attempts.
 
 After a child exits, its output pipes get one second to drain. If inherited handles keep the pipes open, the extension cleans up the POSIX process group with SIGTERM and SIGKILL, then closes its pipe ends. Windows closes the inherited pipes but does not terminate descendants. Results report this cleanup instead of waiting indefinitely for `close`.
 

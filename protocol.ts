@@ -47,3 +47,17 @@ export function assistantMessageError(message: unknown): string | undefined {
 	if (usageError(message.usage)) return "malformed assistant usage";
 	return undefined;
 }
+
+/** Validate tool-result fields captured from child events without echoing payloads. */
+export function toolResultMessageError(message: unknown): string | undefined {
+	if (!isObject(message) || message.role !== "toolResult" ||
+		typeof message.toolCallId !== "string" || typeof message.toolName !== "string" ||
+		typeof message.isError !== "boolean") return "malformed tool result metadata";
+	if (!Array.isArray(message.content) || !message.content.every((part: unknown) => {
+		if (!isObject(part)) return false;
+		if (part.type === "text") return typeof part.text === "string";
+		return part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string";
+	})) return "malformed tool result content";
+	if (usageError(message.usage)) return "malformed tool result usage";
+	return undefined;
+}
