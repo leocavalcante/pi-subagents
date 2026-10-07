@@ -1040,7 +1040,16 @@ export default function (pi: ExtensionAPI) {
 		parameters: SubagentParams,
 
 		execute: boundedSubagentExecute(async (_toolCallId, params, signal, onUpdate, ctx) => {
-			const agentScope: AgentScope = params.agentScope ?? "user";
+			const requestedAgentScope: unknown = params.agentScope;
+			if (requestedAgentScope !== undefined && requestedAgentScope !== "user" &&
+				requestedAgentScope !== "project" && requestedAgentScope !== "both") {
+				return {
+					content: [{ type: "text", text: 'agentScope must be "user", "project", or "both".' }],
+					details: { mode: "single", agentScope: "user", projectAgentsDir: null, results: [] },
+					isError: true,
+				};
+			}
+			const agentScope: AgentScope = requestedAgentScope ?? "user";
 			const dispatchDefaults: DispatchDefaults = {
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
 				thinkingLevel: ctx.thinkingLevel,

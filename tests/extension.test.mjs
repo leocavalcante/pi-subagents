@@ -835,6 +835,17 @@ test('parallel and background chain entries override batch model and thinking de
   assert.deepEqual(chain.map(t => [t.model, t.thinking]), [['fake/chain', 'low'], ['fake/entry', 'off']]);
 });
 
+test('invalid agent scope cannot select project agents or bypass trust confirmation', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
+  const result = await invoke('subagent', { agent: 'project', task: 'must not run', agentScope: 'unexpected' }, context);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /agentScope/);
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+});
+
 test('invalid dispatch overrides fail before project approval or any child launch', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
