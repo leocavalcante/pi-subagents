@@ -33,7 +33,7 @@ import { type AgentConfig, type AgentScope, discoverAgents, THINKING_LEVELS } fr
 import { JobManager, ProcessPool, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, parseChildEvent, toolResultMessageError } from "./protocol.ts";
-import { MAX_PAGE_BYTES, sliceOutput } from "./paging.ts";
+import { MAX_PAGE_BYTES, createOutputPager } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext } from "./chain.ts";
 
@@ -251,6 +251,19 @@ function getResultOutput(result: SingleResult): string {
 		: getFinalOutput(result.messages) || "(no output)";
 	const notice = getCaptureNotice(result);
 	return output + (notice ? `\n\n${notice}` : "");
+}
+
+// Keep at most one encoded output alive. The weak key lets finished-job
+// eviction release its result; the pager itself retains only the UTF-8 bytes.
+let outputPagerCache: { result: WeakRef<SingleResult>; pager: ReturnType<typeof createOutputPager> } | undefined;
+
+function pageResultOutput(result: SingleResult, offset: number, limit: number) {
+	let pager = outputPagerCache?.result.deref() === result ? outputPagerCache.pager : undefined;
+	if (!pager) {
+		pager = createOutputPager(getResultOutput(result));
+		outputPagerCache = { result: new WeakRef(result), pager };
+	}
+	return pager(offset, limit);
 }
 
 function truncateOutput(output: string, budget = MODEL_TEXT_CAP,
@@ -1035,7 +1048,7 @@ export default function (pi: ExtensionAPI) {
 				const task = job.latest?.details?.results[taskIndex];
 				if (!task) return fail("No retained task at this taskIndex. Inspect status for resultCount.", job);
 				try {
-					const output = { ...sliceOutput(getResultOutput(task), params.offset ?? 0, params.limit ?? 16384),
+					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384),
 						taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode,
 						...(task.stepId !== undefined ? { stepId: task.stepId } : {}) };
 					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;
