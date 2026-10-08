@@ -8,7 +8,7 @@ trace({ event: 'start', task, cwd: process.cwd(), model: flag('--model'), thinki
 if (args.includes('--append-system-prompt')) readFileSync(flag('--append-system-prompt'), 'utf8');
 if (task.includes('stubborn')) process.on('SIGTERM', () => {});
 if (task.includes('grandchild')) {
-  const source = `const fs = require('node:fs'); process.on('SIGTERM', () => {}); fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild', pid: process.pid})+'\\n'); setInterval(() => {}, 1000);`;
+  const source = `const fs = require('node:fs'); process.on('SIGTERM', () => fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild-term', pid: process.pid})+'\\n')); fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild', pid: process.pid})+'\\n'); setInterval(() => {}, 1000);`;
   const child = spawn(process.execPath, ['-e', source], { stdio: task.includes('grandchild-ignored') ? 'ignore' : ['ignore', 'inherit', 'inherit'] });
   if (task.includes('orphan')) child.unref();
 }
@@ -19,6 +19,16 @@ const emit = (text, stopReason = 'stop') => console.log(JSON.stringify({
   },
 }));
 const write = (stream, text) => new Promise((resolve, reject) => stream.write(text, error => error ? reject(error) : resolve()));
+const toolUseEvent = { type: 'message_end', message: {
+  role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'echo done' } }],
+  stopReason: 'toolUse', usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+} };
+if (task === 'tool-use-only') {
+  await write(process.stdout, JSON.stringify(toolUseEvent) + '\n');
+  trace({ event: 'end', task });
+  process.exit(0);
+}
+if (task === 'tool-use-then-final') await write(process.stdout, JSON.stringify(toolUseEvent) + '\n');
 if (['silent-exit', 'junk-exit', 'session-only-exit'].includes(task)) {
   if (task === 'junk-exit') await write(process.stdout, 'not JSON\n');
   if (task === 'session-only-exit') await write(process.stdout, '{"type":"session"}\n');

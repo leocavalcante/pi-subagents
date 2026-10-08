@@ -520,6 +520,7 @@ async function runSingleAgent(
 			childCreated = true;
 			let leaderExited = false;
 			let closed = false;
+			let settling = false;
 			let settled = false;
 			let drainTimer: NodeJS.Timeout | undefined;
 			let deadlineTimer: NodeJS.Timeout | undefined;
@@ -529,19 +530,25 @@ async function runSingleAgent(
 				proc.stdout.destroy();
 				proc.stderr.destroy();
 			};
-			const killGroup = (killSignal: NodeJS.Signals) => {
+			const killGroup = (killSignal: NodeJS.Signals): boolean => {
 				// A POSIX group may still have descendants after its leader exits.
-				if (!proc.pid || (process.platform === "win32" && leaderExited)) return;
+				if (!proc.pid || (process.platform === "win32" && leaderExited)) return false;
 				try {
 					if (process.platform !== "win32") process.kill(-proc.pid, killSignal);
-					else proc.kill(killSignal);
+					else return proc.kill(killSignal);
+					return true;
 				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ESRCH") proc.kill(killSignal);
+					if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+					try {
+						return proc.kill(killSignal);
+					} catch (fallbackError) {
+						if ((fallbackError as NodeJS.ErrnoException).code === "ESRCH") return false;
+						return false;
+					}
 				}
 			};
 			const terminateGroup = () => {
-				if (escalation) return;
-				killGroup("SIGTERM");
+				if (escalation || !killGroup("SIGTERM")) return;
 				// Keep the slot until escalation even if the leader closes early.
 				escalation = new Promise<void>((done) => {
 					setTimeout(() => {
@@ -553,7 +560,8 @@ async function runSingleAgent(
 				});
 			};
 			const killProc = () => {
-				if (wasAborted || closed) return;
+				// Keep observing cancellation while post-exit descendant cleanup runs.
+				if (wasAborted || settled) return;
 				wasAborted = true;
 				terminateGroup();
 			};
@@ -635,12 +643,14 @@ async function runSingleAgent(
 				protocolError = `Subagent JSON record exceeded ${MAX_JSON_RECORD_BYTES / (1024 * 1024)} MiB; oversized record discarded.`;
 			});
 			const finish = (code: number | null) => {
-				if (settled) return;
-				settled = true;
+				if (settling || settled) return;
+				settling = true;
 				clearTimeout(drainTimer);
 				clearTimeout(deadlineTimer);
-				signal?.removeEventListener("abort", killProc);
 				const complete = () => {
+					if (settled) return;
+					settled = true;
+					signal?.removeEventListener("abort", killProc);
 					reader.finish();
 					resolve(code ?? 1);
 				};
@@ -667,11 +677,14 @@ async function runSingleAgent(
 					if (closed) return;
 					currentResult.capture!.inheritedPipesClosed = true;
 					terminateGroup();
-					void escalation!.then(() => finish(code));
+					closePipes();
+					finish(code);
 				}, 1000);
 			});
 			proc.on("close", (code) => {
 				closed = true;
+				// Reap group members even if they closed or ignored inherited stdio.
+				if (!wasAborted && !timedOut) terminateGroup();
 				finish(code);
 			});
 
@@ -696,8 +709,12 @@ async function runSingleAgent(
 			else signal?.addEventListener("abort", killProc, { once: true });
 		});
 
-		if (exitCode === 0 && !wasAborted && !timedOut && currentResult.usage.turns === 0) {
-			protocolError ??= "Subagent exited without a completed assistant message.";
+		if (exitCode === 0 && !wasAborted && !timedOut) {
+			if (currentResult.usage.turns === 0) {
+				protocolError ??= "Subagent exited without a completed assistant message.";
+			} else if (currentResult.stopReason === "toolUse") {
+				protocolError ??= "Subagent exited after a tool-use response without a final assistant response.";
+			}
 		}
 		currentResult.exitCode = protocolError || timedOut ? 1 : exitCode;
 		if (timedOut) currentResult.timedOut = true;

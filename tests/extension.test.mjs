@@ -492,6 +492,54 @@ test('cancellation still escalates after the leader exits and descendants ignore
   });
 });
 
+test('normal completion cleans up descendants that do not inherit pipes', { skip: process.platform !== 'linux' }, async () => {
+  const id = await launch({ task: 'delay=500 orphan grandchild-ignored' });
+  let descendant;
+  try {
+    await waitFor(() => traces().some(t => t.event === 'grandchild'));
+    descendant = traces().find(t => t.event === 'grandchild').pid;
+    const job = await finish(id);
+    assert.equal(job.state, 'completed');
+    assert.equal(job.latest.details.results[0].capture.inheritedPipesClosed, undefined);
+    assert.ok(traces().some(t => t.event === 'grandchild-term' && t.pid === descendant), 'descendants receive the SIGTERM grace period');
+    await waitFor(() => {
+      try { return /State:\s+Z/.test(readFileSync(`/proc/${descendant}/status`, 'utf8')); }
+      catch { return true; }
+    });
+  } finally {
+    descendant ??= traces().find(t => t.event === 'grandchild')?.pid;
+    if (descendant) {
+      try { process.kill(descendant, 'SIGKILL'); } catch {}
+    }
+    await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+    await finish(id);
+  }
+});
+
+test('foreground abort during descendant cleanup is still honored', { skip: process.platform !== 'linux' }, async () => {
+  const controller = new AbortController();
+  const pending = invoke('subagent', { agent: 'worker', task: 'delay=100 orphan grandchild-ignored' }, ctx(), controller.signal);
+  let descendant;
+  try {
+    await waitFor(() => traces().some(t => t.event === 'grandchild'));
+    descendant = traces().find(t => t.event === 'grandchild').pid;
+    await waitFor(() => traces().some(t => t.event === 'grandchild-term' && t.pid === descendant));
+    controller.abort();
+    await assert.rejects(pending, /aborted/i);
+    await waitFor(() => {
+      try { return /State:\s+Z/.test(readFileSync(`/proc/${descendant}/status`, 'utf8')); }
+      catch { return true; }
+    });
+  } finally {
+    controller.abort();
+    descendant ??= traces().find(t => t.event === 'grandchild')?.pid;
+    if (descendant) {
+      try { process.kill(descendant, 'SIGKILL'); } catch {}
+    }
+    await pending.catch(() => {});
+  }
+});
+
 test('inherited pipes cannot retain a completed child or process slot indefinitely', { skip: process.platform !== 'linux' }, async () => {
   const id = await launch({ task: 'orphan grandchild', timeoutMs: 500 });
   try {
@@ -755,6 +803,30 @@ test('zero exit without a completed assistant message fails cleanly', async () =
     assert.equal(job.state, 'failed');
     assert.match(job.latest.content[0].text, /assistant message|malformed JSON/);
   }
+});
+
+test('tool-use-only exits are incomplete, while a later final response succeeds', async () => {
+  const incomplete = await invoke('subagent', { agent: 'worker', task: 'tool-use-only' });
+  assert.equal(incomplete.isError, true);
+  assert.equal(incomplete.details.results[0].stopReason, 'toolUse');
+  assert.equal(incomplete.details.results[0].exitCode, 1);
+  assert.equal(incomplete.usage.input, 1, 'usage from the incomplete assistant turn remains billable');
+  assert.equal(incomplete.usage.totalTokens, 2);
+  assert.match(incomplete.content[0].text, /without a final assistant response/);
+
+  const completed = await invoke('subagent', { agent: 'worker', task: 'tool-use-then-final' });
+  assert.notEqual(completed.isError, true);
+  assert.equal(completed.details.results[0].stopReason, 'stop');
+  assert.match(completed.content[0].text, /result: tool-use-then-final/);
+
+  const chain = await invoke('subagent', { chain: [
+    { agent: 'worker', task: 'tool-use-only' },
+    { agent: 'worker', task: 'must-not-run-after-tool-use' },
+  ] });
+  assert.equal(chain.isError, true);
+  assert.match(chain.content[0].text, /Chain stopped at step 1/);
+  assert.equal(chain.details.results[0].exitCode, 1);
+  assert.equal(traces().some(t => t.task?.includes('must-not-run-after-tool-use')), false);
 });
 
 test('successful retry clears stale errors and redacted thinking remains valid', async () => {
