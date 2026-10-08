@@ -32,7 +32,7 @@ import { Type, type Static } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, THINKING_LEVELS } from "./agents.ts";
 import { JobManager, ProcessPool, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
-import { assistantMessageError, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
+import { assistantMessageError, isSupportedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
 import { MAX_PAGE_BYTES, createOutputPager } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext } from "./chain.ts";
@@ -596,6 +596,10 @@ async function runSingleAgent(
 				}
 				if (event.type === "tool_result_end" && event.message.role !== "toolResult") {
 					protocolError = "Invalid subagent JSON event: tool result event must contain a tool result message.";
+					return;
+				}
+				if (event.type === "message_end" && !isSupportedMessageRole(event.message.role)) {
+					protocolError = "Invalid subagent JSON event: unsupported message role.";
 					return;
 				}
 				if (isMessageEnd && (event.message.role === "assistant" || event.message.role === "toolResult" || event.message.role === "user")) {

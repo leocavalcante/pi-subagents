@@ -76,6 +76,7 @@ if (task === 'wrong-role-tool-result') console.log(JSON.stringify({ type: 'tool_
 } }));
 if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result_end', message: { role: 'assistant' } }));
 if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
+if (task === 'unknown-message-role') console.log(JSON.stringify({ type: 'message_end', message: { role: 'system', content: [] } }));
 if (task === 'malformed-null') console.log('null');
 if (task === 'malformed-content') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant' } }));
 if (task === 'malformed-user-message') console.log(JSON.stringify({ type: 'message_end', message: {

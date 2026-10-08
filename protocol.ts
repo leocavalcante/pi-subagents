@@ -57,6 +57,13 @@ function hasNonFiniteJsonNumber(value: unknown): boolean {
 	return false;
 }
 
+const MESSAGE_ROLES = new Set(["assistant", "user", "toolResult"]);
+
+/** Message events must use one of the Pi SDK's protocol roles. */
+export function isSupportedMessageRole(role: unknown): boolean {
+	return typeof role === "string" && MESSAGE_ROLES.has(role);
+}
+
 const STOP_REASONS = new Set(["stop", "length", "toolUse", "error", "aborted", "deferred"]);
 
 /** Validate fields consumed from finalized assistant messages, without echoing payloads. */

@@ -867,7 +867,7 @@ test('asynchronous spawn failures expose only a safe setup diagnostic', async t 
 });
 
 test('malformed child events fail cleanly without crashing or retaining slots', async () => {
-  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-fractional-usage', 'malformed-json', 'non-finite-number', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result', 'malformed-user-message']) {
+  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-fractional-usage', 'malformed-json', 'non-finite-number', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'unknown-message-role', 'malformed-tool-result', 'malformed-user-message']) {
     const id = await launch({ task });
     const job = await finish(id);
     assert.equal(job.state, 'failed');
@@ -880,6 +880,11 @@ test('malformed child events fail cleanly without crashing or retaining slots', 
       assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
     }
     if (task === 'malformed-tool-result') assert.match(job.latest.content[0].text, /malformed tool result metadata/);
+    if (task === 'unknown-message-role') {
+      assert.match(job.latest.content[0].text, /unsupported message role/);
+      assert.equal(job.latest.details.results[0].messages.some(message => message.role === 'system'), false,
+        'Unsupported protocol roles must not enter captured history');
+    }
     if (task === 'malformed-user-message') {
       assert.match(job.latest.content[0].text, /malformed user message content/);
       assert.equal(job.latest.details.results[0].messages.some(message => message.role === 'user'), false,
