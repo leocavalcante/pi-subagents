@@ -1161,6 +1161,12 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
+			if (params.background !== undefined && typeof params.background !== "boolean") {
+				return {
+					content: [{ type: "text", text: "background must be a boolean." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
 			if (params.notify !== undefined && (typeof params.notify !== "boolean" || !params.background)) {
 				return {
 					content: [{ type: "text", text: "notify applies only to background jobs and must be a boolean." }],

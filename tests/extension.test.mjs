@@ -1029,6 +1029,26 @@ test('invalid agent scope cannot select project agents or bypass trust confirmat
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
+test('invalid background overrides are rejected before project approval or job creation', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async () => { approvals++; return true; } } };
+  const schema = tools.get('subagent').definition.parameters;
+  for (const background of [0, '', null, 'false', {}]) {
+    const params = { agent: 'project', task: 'must not run', agentScope: 'project', background };
+    assert.equal(Value.Check(schema, params), false);
+    const result = await invoke('subagent', params, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /background must be a boolean/);
+    assert.equal(result.details.background, undefined);
+  }
+  assert.equal(Value.Check(schema, { agent: 'project', task: 'foreground', background: false }), true);
+  assert.equal(Value.Check(schema, { agent: 'project', task: 'background', background: true }), true);
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+});
+
 test('invalid project-agent confirmation overrides cannot disable trust prompts', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
