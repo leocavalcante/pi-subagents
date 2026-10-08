@@ -31,12 +31,20 @@ export class TextCapture {
 	append(text: string): void {
 		if (this.truncated) return;
 		this.truncatedText = undefined;
+		const remaining = this.limit - this.bytes;
+		// UTF-8 uses at least one byte per UTF-16 code unit. A longer chunk
+		// cannot fit, so do not scan its potentially unbounded discarded tail.
+		if (text.length > remaining) {
+			this.value += utf8Prefix(text, remaining);
+			this.truncated = true;
+			return;
+		}
 		const bytes = Buffer.byteLength(text, "utf8");
-		if (this.bytes + bytes <= this.limit) {
+		if (bytes <= remaining) {
 			this.value += text;
 			this.bytes += bytes;
 		} else {
-			this.value += utf8Prefix(text, this.limit - this.bytes);
+			this.value += utf8Prefix(text, remaining);
 			this.truncated = true;
 		}
 	}
