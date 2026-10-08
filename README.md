@@ -317,6 +317,8 @@ npm test
 
 Set `PI_PACKAGE_DIR` to an npm Pi package directory to test against another SDK version. Standalone binary directories fall back to the local development SDK. The tests use fake child processes and make no model calls. They cover agent discovery and configuration, dispatch, output limits, rendering, process budgets, deadlines, cancellation and shutdown, including POSIX descendants and SIGKILL escalation. GitHub Actions runs the type check and tests on Linux and Windows with Node.js 22 and 24.
 
+On Windows, project-agent boundary tests create file symbolic links. If `npm test` fails at `symlinkSync` with `EPERM`, enable Developer Mode or run the test process with symbolic-link creation privilege. This is separate from the junction-based extension checkout setup above, which avoids that requirement.
+
 ## Publishing
 
 GitHub Actions tests pushes and pull requests. Publishing a stable GitHub
