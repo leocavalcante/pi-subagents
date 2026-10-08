@@ -157,9 +157,16 @@ export class JobManager<T, Observation = never> {
 		return job ? { ...job.snapshot } : undefined;
 	}
 
-	/** Compact observations survive output eviction but share the job's registry lifetime. */
+	/** Return a detached observation; consumers must not be able to mutate retained metadata. */
 	getObservation(id: string): Observation | undefined {
-		return this.jobs.get(id)?.observation;
+		const observation = this.jobs.get(id)?.observation;
+		if (observation === undefined) return undefined;
+		try {
+			return structuredClone(observation);
+		} catch {
+			// Observations are optional and must never break job inspection.
+			return undefined;
+		}
 	}
 
 	/** Wait for cleanup and retention without polling or retaining timed-out observers. */
@@ -238,7 +245,8 @@ export class JobManager<T, Observation = never> {
 		// A missing or failed summary must invalidate any earlier partial value.
 		job.observation = undefined;
 		try {
-			job.observation = this.summarize(result);
+			const observation = this.summarize(result);
+			job.observation = observation === undefined ? undefined : structuredClone(observation);
 		} catch {
 			// Observational metadata must never fail job execution or cleanup.
 		}

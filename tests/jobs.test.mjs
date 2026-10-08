@@ -182,17 +182,28 @@ test('finished output retention has a byte budget without dropping job metadata 
   await jobs.shutdown();
 });
 
-test('compact observations survive output eviction, clear unavailable summaries, and share job lifetime', async () => {
+test('compact observations are detached, survive output eviction, and share job lifetime', async () => {
   const jobs = new JobManager(() => {}, () => false, 8, 32,
-    { maxBytes: 0, measure: () => 1 }, result => result.total);
+    { maxBytes: 0, measure: () => 1 }, result => result.total === undefined ? undefined : result);
+  const gate = deferred();
+  let progress;
   const job = jobs.start('observed', async (_signal, update) => {
-    update({ total: 2 });
-    return { total: 5 };
+    progress = { total: 2, cost: { total: 2 } };
+    update(progress);
+    await gate.promise;
+    return { total: 5, cost: { total: 5 } };
   });
+  await tick();
+  progress.cost.total = 99;
+  assert.equal(jobs.getObservation(job.id).cost.total, 2, 'Mutating a progress result must not change its retained observation');
+  gate.resolve();
   await jobs.wait(job.id, 1000);
   assert.equal(jobs.get(job.id).outputEvicted, true);
   assert.equal(jobs.get(job.id).latest, undefined);
-  assert.equal(jobs.getObservation(job.id), 5, 'Final observation is retained independently of output');
+  const observation = jobs.getObservation(job.id);
+  assert.equal(observation.total, 5, 'Final observation is retained independently of output');
+  observation.cost.total = 99;
+  assert.equal(jobs.getObservation(job.id).cost.total, 5, 'Mutating a returned observation must not alter retained metadata');
   assert.equal(jobs.forget(job.id), true);
   assert.equal(jobs.getObservation(job.id), undefined, 'Forgetting a job releases its observation');
 
