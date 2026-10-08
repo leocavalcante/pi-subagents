@@ -331,6 +331,19 @@ test('overflow across a batch preserves captures without returning non-finite us
   assert.ok(result.details.results.every(task => Number.isFinite(task.reportedUsage.input)));
 });
 
+test('cross-task token aggregation reports safe-integer overflow precisely', async () => {
+  const result = await invoke('subagent', { tasks: [
+    { agent: 'worker', task: 'safe-token-overflow' },
+    { agent: 'worker', task: 'safe-token-overflow' },
+  ] });
+  assert.equal(result.isError, true);
+  assert.equal(result.usage, undefined);
+  assert.match(result.content[0].text, /cumulative subagent usage: token totals exceed JavaScript's safe integer limits/);
+  assert.equal(result.details.results.length, 2);
+  assert.ok(result.details.results.every(task =>
+    task.reportedUsage.input === Number.MAX_SAFE_INTEGER && task.reportedUsage.totalTokens === Number.MAX_SAFE_INTEGER));
+});
+
 test('multi-block diagnostic responses share the total model-facing text budget', async () => {
   const tasks = [{ agent: 'worker', task: 'large-usage' }, { agent: 'worker', task: 'large-usage' }];
   for (const background of [false, true]) {
@@ -790,8 +803,9 @@ test('synchronous spawn failures remain inspectable and do not discard sibling r
 });
 
 test('malformed child events fail cleanly without crashing or retaining slots', async () => {
-  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-json', 'non-finite-number', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result']) {
-    const job = await finish(await launch({ task }));
+  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-fractional-usage', 'malformed-json', 'non-finite-number', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result']) {
+    const id = await launch({ task });
+    const job = await finish(id);
     assert.equal(job.state, 'failed');
     if (task === 'non-finite-number') {
       assert.match(job.latest.content[0].text, /outside the finite JavaScript range/);
@@ -802,6 +816,27 @@ test('malformed child events fail cleanly without crashing or retaining slots', 
       assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
     }
     if (task === 'malformed-tool-result') assert.match(job.latest.content[0].text, /malformed tool result metadata/);
+    if (task === 'malformed-fractional-usage') {
+      assert.match(job.latest.content[0].text, /malformed assistant usage/);
+      assert.equal(job.latest.usage.input, 2, 'fractional usage from the invalid event is not accumulated');
+      const status = await invoke('subagent_jobs', { action: 'status', jobId: id });
+      const schema = tools.get('subagent_jobs').definition.outputSchema;
+      assert.equal(Value.Check(schema, status.structuredContent), true);
+      assert.equal(Value.Check(schema, {
+        ...status.structuredContent,
+        job: { ...status.structuredContent.job,
+          usage: { ...status.structuredContent.job.usage, input: Number.MAX_SAFE_INTEGER },
+        },
+      }), true, 'the largest exact token count is representable in status output');
+      for (const input of [0.5, Number.MAX_SAFE_INTEGER + 1]) {
+        assert.equal(Value.Check(schema, {
+          ...status.structuredContent,
+          job: { ...status.structuredContent.job,
+            usage: { ...status.structuredContent.job.usage, input },
+          },
+        }), false, 'structured usage schema rejects inexact token counts');
+      }
+    }
     assert.match(job.latest.content[0].text, /^Agent failed:/);
   }
   assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');

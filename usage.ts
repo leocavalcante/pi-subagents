@@ -20,6 +20,17 @@ export function usageError(value: unknown): string | undefined {
 	return undefined;
 }
 
+/** Protocol token counters must be exact, non-negative integers representable by JavaScript. */
+export function protocolUsageError(value: unknown): string | undefined {
+	if (usageError(value)) return "malformed usage";
+	if (value === undefined) return undefined;
+	if (!isObject(value) || !TOKEN_FIELDS.every((field) => value[field] === undefined ||
+		(typeof value[field] === "number" && Number.isSafeInteger(value[field]) && value[field] >= 0))) {
+		return "malformed usage";
+	}
+	return undefined;
+}
+
 function finiteSum(values: number[]): number {
 	const total = values.reduce((sum, value) => sum + value, 0);
 	if (!Number.isFinite(total)) throw new RangeError("Subagent usage totals exceed finite numeric limits.");
@@ -58,6 +69,9 @@ export function sumUsage(values: Iterable<Usage>): Usage {
 			}
 		}
 		for (const field of COST_FIELDS) total.cost[field] = finiteSum([total.cost[field], value.cost[field]]);
+	}
+	if (TOKEN_FIELDS.some((field) => total[field] !== undefined && !Number.isSafeInteger(total[field]))) {
+		throw new RangeError("Subagent usage token totals exceed safe integer limits.");
 	}
 	return total;
 }

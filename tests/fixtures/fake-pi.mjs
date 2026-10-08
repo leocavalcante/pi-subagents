@@ -15,7 +15,7 @@ if (task.includes('grandchild')) {
 const emit = (text, stopReason = 'stop') => console.log(JSON.stringify({
   type: 'message_end', message: { role: 'assistant', content: (Array.isArray(text) ? text : [text]).map(text => ({ type: 'text', text })),
     model: 'fake', stopReason, ...(stopReason === 'error' ? { errorMessage: task === 'large-error fail' ? 'é'.repeat(40000) : 'fixture failure' } : {}),
-    usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+    ...(task === 'safe-token-overflow' ? {} : { usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } } }),
   },
 }));
 const write = (stream, text) => new Promise((resolve, reject) => stream.write(text, error => error ? reject(error) : resolve()));
@@ -51,8 +51,11 @@ if (task === 'malformed-cost-component' || task === 'malformed-nested-usage') {
   } }));
 }
 if (task === 'usage-overflow' || task === 'large-usage' || task === 'usage-overflow-heavy') for (let i = 0; i < (task === 'large-usage' || task === 'usage-overflow-heavy' ? 1 : 2); i++) console.log(JSON.stringify({
-  type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', usage: { input: 1e308 } }
+  type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', usage: { input: 1, cost: { total: 1e308 } } }
 }));
+if (task === 'safe-token-overflow') console.log(JSON.stringify({ type: 'message_end', message: {
+  role: 'assistant', content: [], stopReason: 'stop', usage: { input: Number.MAX_SAFE_INTEGER },
+} }));
 if (task === 'non-finite-number') console.log('{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"huge","name":"tool","arguments":{"value":1e400}}],"stopReason":"toolUse"}}');
 if (task === 'malformed-json') console.log('{"type":');
 if (task === 'deep-json') {
@@ -76,6 +79,9 @@ if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_en
 if (task === 'malformed-null') console.log('null');
 if (task === 'malformed-content') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant' } }));
 if (task === 'malformed-usage') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], usage: { cost: { total: 'bad' } } } }));
+if (task === 'malformed-fractional-usage') console.log(JSON.stringify({ type: 'message_end', message: {
+  role: 'assistant', content: [], stopReason: 'stop', usage: { input: 0.5 },
+} }));
 if (task === 'stdout-flood' || task.startsWith('stdout-flood-hang')) await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
 if (task === 'stderr-flood') await write(process.stderr, 'é'.repeat(100 * 1024));
 if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`);

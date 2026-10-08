@@ -1,4 +1,4 @@
-import { usageError } from "./usage.ts";
+import { protocolUsageError } from "./usage.ts";
 
 /** Bound structural nesting before parsing, so captured values remain safe to serialize. */
 export function parseChildEvent(line: string): unknown {
@@ -62,7 +62,7 @@ export function assistantMessageError(message: unknown): string | undefined {
 		if (message[field] !== undefined && typeof message[field] !== "string") return `malformed assistant ${field}`;
 	}
 
-	if (usageError(message.usage)) return "malformed assistant usage";
+	if (protocolUsageError(message.usage)) return "malformed assistant usage";
 	return undefined;
 }
 
@@ -76,6 +76,6 @@ export function toolResultMessageError(message: unknown): string | undefined {
 		if (part.type === "text") return typeof part.text === "string";
 		return part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string";
 	})) return "malformed tool result content";
-	if (usageError(message.usage)) return "malformed tool result usage";
+	if (protocolUsageError(message.usage)) return "malformed tool result usage";
 	return undefined;
 }

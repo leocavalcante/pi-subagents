@@ -34,7 +34,9 @@ test('rejects malformed consumed metadata and non-terminal stop reasons without 
 
 test('rejects invalid usage and content while allowing optional usage', () => {
   for (const extra of [
-    { usage: { output: -1 } }, { usage: { cost: { total: 'bad' } } }, { usage: null },
+    { usage: { output: -1 } }, { usage: { input: 0.5 } },
+    { usage: { totalTokens: Number.MAX_SAFE_INTEGER + 1 } },
+    { usage: { cost: { total: 'bad' } } }, { usage: null },
     { content: [{ type: 'text', text: null }] }, { content: [{ type: 'toolCall', name: 'bash', arguments: {} }] },
   ]) assert.ok(assistantMessageError(message(extra)));
 });
@@ -50,6 +52,7 @@ test('validates tool-result metadata, content blocks, and nested usage', () => {
     { ...valid, content: null },
     { ...valid, content: [{ type: 'text', text: 42 }] },
     { ...valid, content: [{ type: 'image', data: 'AA==' }] },
+    { ...valid, usage: { input: 0.5 } },
     { ...valid, usage: { cost: { total: 'private payload' } } },
   ]) {
     const error = toolResultMessageError(malformed);

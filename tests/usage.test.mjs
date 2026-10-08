@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { usageError, normalizeUsage, sumUsage } = await jiti.import('../usage.ts');
+const { usageError, protocolUsageError, normalizeUsage, sumUsage } = await jiti.import('../usage.ts');
 
 test('validates every consumed token and cost field without exposing payloads', () => {
   for (const field of ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning', 'totalTokens']) {
@@ -13,6 +13,15 @@ test('validates every consumed token and cost field without exposing payloads', 
   for (const value of [null, [], { cost: [] }]) assert.ok(usageError(value));
   assert.equal(usageError(undefined), undefined);
   assert.equal(usageError({}), undefined);
+});
+
+test('protocol usage requires exact safe token counters but permits fractional monetary costs', () => {
+  for (const count of [0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(protocolUsageError({ input: count }), 'malformed usage');
+    assert.equal(protocolUsageError({ reasoning: count }), 'malformed usage');
+  }
+  assert.equal(protocolUsageError({ input: Number.MAX_SAFE_INTEGER, cost: { total: 0.25 } }), undefined);
+  assert.equal(protocolUsageError(undefined), undefined);
 });
 
 test('normalizes sparse usage without double-counting optional subsets or overriding totals', () => {
@@ -37,8 +46,10 @@ test('sums usage in fresh objects, preserves optional fields and rejects arithme
   assert.equal(result.cost.total, 1);
   assert.deepEqual(original, copy);
   assert.equal(sumUsage([]).reasoning, undefined);
-  const huge = normalizeUsage({ input: 1e308 });
-  assert.throws(() => sumUsage([huge, huge]), /finite numeric/);
-  assert.equal(huge.input, 1e308);
+  const hugeCost = normalizeUsage({ cost: { input: 1e308, total: 1e308 } });
+  assert.throws(() => sumUsage([hugeCost, hugeCost]), /finite numeric/);
+  assert.equal(hugeCost.cost.input, 1e308);
+  const largeTokens = normalizeUsage({ input: Number.MAX_SAFE_INTEGER, totalTokens: Number.MAX_SAFE_INTEGER });
+  assert.throws(() => sumUsage([largeTokens, normalizeUsage({ input: 1 })]), /safe integer/);
   assert.throws(() => normalizeUsage({ input: 1e308, output: 1e308 }), /finite numeric/);
 });

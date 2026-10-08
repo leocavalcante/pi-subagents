@@ -199,10 +199,13 @@ function reportUsage(result: JobResult): JobResult {
 	try {
 		const usage = sumUsage((result.details?.results ?? []).flatMap((task) => task.reportedUsage ? [task.reportedUsage] : []));
 		return { ...result, usage };
-	} catch {
+	} catch (error) {
+		const reason = error instanceof RangeError && error.message === "Subagent usage token totals exceed safe integer limits."
+			? "token totals exceed JavaScript's safe integer limits"
+			: "totals exceed finite numeric limits";
 		return {
 			...result, isError: true,
-			content: [{ type: "text", text: "Unable to report cumulative subagent usage: totals exceed finite numeric limits." }, ...result.content],
+			content: [{ type: "text", text: `Unable to report cumulative subagent usage: ${reason}.` }, ...result.content],
 		};
 	}
 }
@@ -843,17 +846,18 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 }
 
 const JobActionSchema = StringEnum(["list", "status", "cancel", "forget", "clear", "output", "wait"] as const);
+const TokenCountSchema = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const UsageSummarySchema = Type.Object({
-	input: Type.Number({ minimum: 0 }), output: Type.Number({ minimum: 0 }),
-	cacheRead: Type.Number({ minimum: 0 }), cacheWrite: Type.Number({ minimum: 0 }),
-	totalTokens: Type.Number({ minimum: 0 }),
+	input: TokenCountSchema, output: TokenCountSchema,
+	cacheRead: TokenCountSchema, cacheWrite: TokenCountSchema,
+	totalTokens: TokenCountSchema,
 	cost: Type.Object({
 		input: Type.Number({ minimum: 0 }), output: Type.Number({ minimum: 0 }),
 		cacheRead: Type.Number({ minimum: 0 }), cacheWrite: Type.Number({ minimum: 0 }),
 		total: Type.Number({ minimum: 0 }),
 	}),
-	cacheWrite1h: Type.Optional(Type.Number({ minimum: 0 })),
-	reasoning: Type.Optional(Type.Number({ minimum: 0 })),
+	cacheWrite1h: Type.Optional(TokenCountSchema),
+	reasoning: Type.Optional(TokenCountSchema),
 });
 const JobMetadataSchema = Type.Object({
 	id: Type.String(), label: Type.String(), notify: Type.Boolean(),
