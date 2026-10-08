@@ -307,7 +307,7 @@ Authenticate on each machine with Pi's `/login`. Do not put credentials, session
 
 ## Development checks
 
-Install the pinned development SDK and test loader locally. This also works when Pi is installed as a standalone binary:
+Use Node.js 22.19.0 or newer, matching the package's `engines` declaration. Install the pinned development SDK and test loader locally. This also works when Pi is installed as a standalone binary:
 
 ```sh
 npm ci --ignore-scripts
