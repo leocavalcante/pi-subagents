@@ -53,6 +53,7 @@ if (task === 'malformed-cost-component' || task === 'malformed-nested-usage') {
 if (task === 'usage-overflow' || task === 'large-usage') for (let i = 0; i < (task === 'large-usage' ? 1 : 2); i++) console.log(JSON.stringify({
   type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', usage: { input: 1e308 } }
 }));
+if (task === 'non-finite-number') console.log('{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"huge","name":"tool","arguments":{"value":1e400}}],"stopReason":"toolUse"}}');
 if (task === 'malformed-json') console.log('{"type":');
 if (task === 'deep-json') {
   const nested = '['.repeat(20000) + '0' + ']'.repeat(20000);

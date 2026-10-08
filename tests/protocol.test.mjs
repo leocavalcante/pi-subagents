@@ -12,6 +12,12 @@ test('JSON nesting is bounded without counting brackets inside escaped strings',
   assert.throws(() => parseChildEvent('{bad}'), SyntaxError);
 });
 
+test('rejects parsed numbers outside the finite JavaScript range at any depth', () => {
+  assert.deepEqual(parseChildEvent('{"value":1e308,"nested":[-1e308]}'), { value: 1e308, nested: [-1e308] });
+  assert.throws(() => parseChildEvent('{"value":1e400}'), /outside the finite JavaScript range/);
+  assert.throws(() => parseChildEvent('{"nested":[{"value":-1e400}]}'), /outside the finite JavaScript range/);
+});
+
 test('accepts completed messages, redacted thinking, and arbitrary tool arguments', () => {
   assert.equal(assistantMessageError(message()), undefined);
   assert.equal(assistantMessageError(message({ content: [{ type: 'thinking', redacted: true, thinkingSignature: 'opaque' }] })), undefined);

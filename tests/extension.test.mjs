@@ -769,10 +769,17 @@ test('synchronous spawn failures remain inspectable and do not discard sibling r
 });
 
 test('malformed child events fail cleanly without crashing or retaining slots', async () => {
-  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-json', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result']) {
+  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-json', 'non-finite-number', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result']) {
     const job = await finish(await launch({ task }));
     assert.equal(job.state, 'failed');
-    assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
+    if (task === 'non-finite-number') {
+      assert.match(job.latest.content[0].text, /outside the finite JavaScript range/);
+      assert.equal(job.latest.details.results[0].messages.some(message =>
+        message.content.some(part => part.type === 'toolCall' && part.id === 'huge')), false,
+        'The non-finite child value must not enter captured messages');
+    } else {
+      assert.match(job.latest.content[0].text, /Invalid subagent JSON event/);
+    }
     if (task === 'malformed-tool-result') assert.match(job.latest.content[0].text, /malformed tool result metadata/);
     assert.match(job.latest.content[0].text, /^Agent failed:/);
   }

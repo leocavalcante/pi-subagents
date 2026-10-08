@@ -18,16 +18,34 @@ export function parseChildEvent(line: string): unknown {
 			if (++depth > 128) throw new RangeError("Subagent JSON nesting exceeded 128 levels.");
 		} else if (code === 93 || code === 125) depth--;
 	}
-	return JSON.parse(line);
+	const value: unknown = JSON.parse(line);
+	if (hasNonFiniteJsonNumber(value)) {
+		// JSON.parse can turn a syntactically valid exponent such as 1e400
+		// into Infinity, which JSON.stringify later silently changes to null.
+		throw new RangeError("Subagent JSON event contains a number outside the finite JavaScript range.");
+	}
+	return value;
 }
 
-/** Validate fields consumed from finalized assistant messages, without echoing payloads. */
 function isObject(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** The JSON structure scanner bounds recursion to 128 levels. */
+function hasNonFiniteJsonNumber(value: unknown): boolean {
+	if (typeof value === "number") return !Number.isFinite(value);
+	if (Array.isArray(value)) return value.some(hasNonFiniteJsonNumber);
+	if (isObject(value)) {
+		for (const key in value) {
+			if (Object.hasOwn(value, key) && hasNonFiniteJsonNumber(value[key])) return true;
+		}
+	}
+	return false;
+}
+
 const STOP_REASONS = new Set(["stop", "length", "toolUse", "error", "aborted", "deferred"]);
 
+/** Validate fields consumed from finalized assistant messages, without echoing payloads. */
 export function assistantMessageError(message: unknown): string | undefined {
 	if (!isObject(message) || !Array.isArray(message.content) || !message.content.every((part: unknown) => {
 		if (!isObject(part)) return false;
