@@ -271,11 +271,15 @@ function pageResultOutput(result: SingleResult, offset: number, limit: number) {
 
 function truncateOutput(output: string, budget = MODEL_TEXT_CAP,
 	notice = "\n\n[Output truncated. Captured output preserved in tool details.]"): string {
-	if (Buffer.byteLength(output, "utf8") <= budget) return output;
-	const bytes = Buffer.from(output, "utf8");
+	// UTF-8 output is never shorter than its UTF-16 code-unit length. Only scan
+	// a complete string when that scan itself is bounded by the output budget.
+	if (output.length <= budget && Buffer.byteLength(output, "utf8") <= budget) return output;
+	const noticeBytes = Buffer.byteLength(notice, "utf8");
 	// An unusually long header can consume a batch's entire body allowance.
-	if (budget < Buffer.byteLength(notice, "utf8")) return "";
-	let end = budget - Buffer.byteLength(notice, "utf8");
+	if (budget < noticeBytes) return "";
+	let end = budget - noticeBytes;
+	// Encode only enough of an oversized string to fill its bounded prefix.
+	const bytes = Buffer.from(output.slice(0, end + 2), "utf8");
 	// Do not split a multibyte character. The notice itself is inside the cap.
 	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
 	return bytes.subarray(0, end).toString("utf8") + notice;

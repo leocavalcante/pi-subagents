@@ -1377,6 +1377,27 @@ test('single and chain responses cap text without truncating captured data or ch
   assert.equal(traces().filter(t => t.event === 'start').at(-1).task, 'prefix ' + 'é'.repeat(40000));
 });
 
+test('truncating oversized model text encodes only the bounded prefix', async () => {
+  const originalFrom = Buffer.from;
+  const encodedLengths = [];
+  Buffer.from = (value, ...args) => {
+    if (typeof value === 'string') encodedLengths.push(value.length);
+    return originalFrom(value, ...args);
+  };
+  let result;
+  try {
+    result = await invoke('subagent', { agent: 'worker', task: 'x'.repeat(100000) });
+  } finally {
+    Buffer.from = originalFrom;
+  }
+  assert.notEqual(result.isError, true);
+  assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);
+  assert.match(result.content[0].text, /Output truncated/);
+  assert.ok(encodedLengths.length > 0);
+  assert.ok(encodedLengths.every(length => length <= 50 * 1024),
+    `Oversized output should not be fully encoded: ${Math.max(...encodedLengths)} UTF-16 code units`);
+});
+
 test('parallel responses share a total text budget and keep every captured result', async () => {
   const result = await invoke('subagent', { tasks: Array.from({ length: 8 }, () => ({ agent: 'worker', task: 'large' })) });
   assert.ok(Buffer.byteLength(result.content[0].text) <= 50 * 1024);
