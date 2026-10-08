@@ -737,7 +737,7 @@ async function runSingleAgent(
 		if (timedOut) currentResult.timedOut = true;
 		const failureCauses = [timedOut ? `Subagent timed out after ${timeoutMs} ms.` : undefined, protocolError];
 		if (failureCauses.some(Boolean)) currentResult.errorMessage = failureCauses.filter(Boolean).join(" ");
-		if (wasAborted) throw new Error("Subagent was aborted");
+		if (wasAborted) throw signal?.reason ?? new Error("Subagent was aborted");
 		return currentResult;
 	} catch (error) {
 		// Cancellation still aborts the whole operation. Only pre-spawn failures
@@ -1111,9 +1111,11 @@ export default function (pi: ExtensionAPI) {
 					return fail(error.message, job);
 				}
 			}
-			const output = job.error ?? (job.outputEvicted
-				? `Captured output was evicted from the job registry to honor its retention budget. ${completionHint}`
-				: job.latest?.content.filter((c) => c.type === "text").map((c) => c.text).join("\n\n") ?? "(awaiting output)");
+			const output = job.error ?? (job.state === "canceled"
+				? "Canceled by request."
+				: job.outputEvicted
+					? `Captured output was evicted from the job registry to honor its retention budget. ${completionHint}`
+					: job.latest?.content.filter((c) => c.type === "text").map((c) => c.text).join("\n\n") ?? "(awaiting output)");
 			const waitNotice = waited?.timedOut ? `Wait timed out. The job is still active; ${job.notify
 				? "completion will arrive automatically." : "no automatic completion message will be sent."}\n` : "";
 			return reply(`${waitNotice}${job.id} ${job.state}: ${job.label}\n\n${output}`, job,

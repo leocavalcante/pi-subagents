@@ -527,6 +527,8 @@ test('cancel handles running and queued tasks, with SIGKILL escalation', async (
   await invoke('subagent_jobs', { action: 'cancel', jobId: id });
   const job = await finish(id);
   assert.equal(job.state, 'canceled');
+  assert.equal(job.error, undefined, 'Expected child cancellation must not be reported as a job failure');
+  assert.match((await invoke('subagent_jobs', { action: 'status', jobId: id })).content[0].text, /Canceled by request/);
   assert.equal(traces().filter(t => t.event === 'start').length, 4);
   assert.equal(messages.length, 1);
   assert.match(messages[0].message.content, /canceled/);

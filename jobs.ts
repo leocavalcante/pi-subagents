@@ -114,8 +114,12 @@ export class JobManager<T, Observation = never> {
 						? "failed"
 						: "completed";
 			} catch (error) {
-				snapshot.error = describeThrown(error);
-				snapshot.state = job.controller.signal.aborted ? "canceled" : "failed";
+				const canceled = job.controller.signal.aborted;
+				// A cooperative runner rejects with the exact abort reason. Keep the
+				// canceled state, but do not present that expected control flow as a
+				// job failure. Preserve distinct errors raised during cancellation.
+				if (!canceled || error !== job.controller.signal.reason) snapshot.error = describeThrown(error);
+				snapshot.state = canceled ? "canceled" : "failed";
 			} finally {
 				snapshot.finishedAt = new Date().toISOString();
 				// Keep finished entries in completion order, not launch order.

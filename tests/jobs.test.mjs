@@ -311,7 +311,9 @@ test('wait observes explicit job cancellation and shutdown after cleanup', async
     await tick();
     assert.equal(resolved, false, 'A cancellation request is not completed cleanup');
     cleaned.resolve();
-    assert.equal((await waiter).job.state, 'canceled');
+    const result = await waiter;
+    assert.equal(result.job.state, 'canceled');
+    assert.equal(result.job.error, undefined, 'The expected abort reason is not a job failure diagnostic');
     await close;
     await jobs.shutdown();
   }
