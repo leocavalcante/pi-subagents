@@ -173,7 +173,7 @@ There is no deadline by default. Values must be whole milliseconds between 1 and
 
 For parallel and chain modes, a top-level `timeoutMs` is the default for each child, not a deadline for the entire batch. An entry's `timeoutMs` overrides that default. Deadlines also work with background execution.
 
-A timeout terminates the child using the same process-group cleanup as cancellation and returns a failed result with `timedOut: true` in details. Cleanup can take an additional second for SIGKILL escalation. Background jobs report `failed`, not `canceled`. Chains stop at the timed-out step; other parallel tasks continue. Explicit user cancellation still reports `canceled`.
+A timeout terminates the child using the same cleanup as cancellation and returns a failed result with `timedOut: true` in details. On POSIX, cleanup signals the child's process group and escalates from SIGTERM to SIGKILL after one second. On Windows, only the direct child is signaled; descendants may continue running after a timeout or cancellation. Cleanup can take an additional second for escalation or pipe closure. Background jobs report `failed`, not `canceled`. Chains stop at the timed-out step; other parallel tasks continue. Explicit user cancellation still reports `canceled`.
 
 ## Background execution
 
@@ -226,7 +226,7 @@ Status returns retained progress or the final result. Job-level error diagnostic
 
 `forget` removes one finished job record. `clear` removes all finished records without canceling active jobs. Forgetting an active job is rejected; cancel it and wait for cleanup first. These operations do not erase completion messages or Pi session history.
 
-Background jobs have their own abort controllers. Ctrl+C on the parent's turn does not cancel them. Use `subagent_jobs` to cancel a job. On POSIX, cancellation signals the child's process group, including ordinary tool descendants, and escalates from SIGTERM to SIGKILL after one second. On Windows, it signals the direct child only.
+Background jobs have their own abort controllers. Ctrl+C on the parent's turn does not cancel them. Use `subagent_jobs` to cancel a job. On POSIX, cancellation signals the child's process group, including ordinary tool descendants, and escalates from SIGTERM to SIGKILL after one second. On Windows, it signals the direct child only; descendants may outlive cancellation.
 
 Foreground calls and background jobs share a limit of four direct child processes per extension runtime. There can be up to eight active background jobs, with at most eight tasks in each parallel batch. Tasks waiting for a process slot can also be canceled. The extension retains the latest 32 finished job records for inspection. Finished output in this registry has a shared 32 MiB budget, estimated from serialized message records, task text, stderr, and result text. Oldest output is evicted first; an individually oversized result is not retained. Job state remains available with `outputEvicted: true`, and enabled completion delivery still receives the result before eviction. This registry budget is not a heap-memory limit or a cap on Pi's own session history.
 
@@ -295,7 +295,7 @@ Pre-spawn failures, such as an unwritable prompt file or a synchronous spawn err
 
 A zero exit code alone is not success. The child must emit a completed assistant message; a final `toolUse` turn without a subsequent assistant response is incomplete and fails the task (a chain stops at that step). Invalid JSONL, JSON nesting beyond 128 levels, numbers outside JavaScript's finite range, or malformed user, assistant, or tool-result messages (including metadata, content, or usage where applicable) cause the task to fail without crashing the parent. Redacted thinking blocks are supported, and a successful retry clears errors from earlier attempts.
 
-On POSIX, when a child exits, the extension sends SIGTERM to remaining members of its process group and gives them one second to exit before sending SIGKILL. This applies even when descendants close or ignore the output pipes, so child-launched processes in that group do not survive the invocation. Keep the delegated process running and use `background: true` to decouple long-lived work from the caller. Processes that escape the group, and Windows descendants after the direct child exits, are not terminated by this cleanup. Inherited output pipes get one second to drain, then the extension closes its pipe ends so they cannot hold the invocation open indefinitely. Results report this pipe cleanup.
+On POSIX, when a child exits, the extension sends SIGTERM to remaining members of its process group and gives them one second to exit before sending SIGKILL. This applies even when descendants close or ignore the output pipes, so child-launched processes in that group do not survive the invocation. Keep the delegated process running and use `background: true` to decouple long-lived work from the caller. Processes that escape the group are not terminated. On Windows, descendants are not terminated when the direct child exits, whether normally or after cancellation or a deadline, and may keep running independently. Inherited output pipes get one second to drain, then the extension closes its pipe ends so they cannot hold the invocation open indefinitely. Results report this pipe cleanup.
 
 ## Security
 
