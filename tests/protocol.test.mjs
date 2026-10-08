@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { assistantMessageError, parseChildEvent, toolResultMessageError } = await jiti.import('../protocol.ts');
+const { assistantMessageError, parseChildEvent, toolResultMessageError, userMessageError } = await jiti.import('../protocol.ts');
 const message = extra => ({ content: [{ type: 'text', text: 'answer' }], stopReason: 'stop', ...extra });
 
 test('JSON nesting is bounded without counting brackets inside escaped strings', () => {
@@ -39,6 +39,20 @@ test('rejects invalid usage and content while allowing optional usage', () => {
     { usage: { cost: { total: 'bad' } } }, { usage: null },
     { content: [{ type: 'text', text: null }] }, { content: [{ type: 'toolCall', name: 'bash', arguments: {} }] },
   ]) assert.ok(assistantMessageError(message(extra)));
+});
+
+test('validates user message text and image content before retaining child events', () => {
+  assert.equal(userMessageError({ role: 'user', content: 'task' }), undefined);
+  assert.equal(userMessageError({ role: 'user', content: [
+    { type: 'text', text: 'task' }, { type: 'image', data: 'AA==', mimeType: 'image/png' },
+  ] }), undefined);
+  for (const malformed of [
+    null,
+    { role: 'assistant', content: 'task' },
+    { role: 'user', content: null },
+    { role: 'user', content: [{ type: 'text', text: 42 }] },
+    { role: 'user', content: [{ type: 'image', data: 'AA==' }] },
+  ]) assert.ok(userMessageError(malformed));
 });
 
 test('validates tool-result metadata, content blocks, and nested usage', () => {

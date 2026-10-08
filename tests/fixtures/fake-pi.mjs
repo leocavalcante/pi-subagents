@@ -78,6 +78,9 @@ if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result
 if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
 if (task === 'malformed-null') console.log('null');
 if (task === 'malformed-content') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant' } }));
+if (task === 'malformed-user-message') console.log(JSON.stringify({ type: 'message_end', message: {
+  role: 'user', content: [{ type: 'text', text: 42 }],
+} }));
 if (task === 'malformed-usage') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], usage: { cost: { total: 'bad' } } } }));
 if (task === 'malformed-fractional-usage') console.log(JSON.stringify({ type: 'message_end', message: {
   role: 'assistant', content: [], stopReason: 'stop', usage: { input: 0.5 },

@@ -31,6 +31,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isTextOrImageContent(part: unknown): boolean {
+	if (!isObject(part)) return false;
+	if (part.type === "text") return typeof part.text === "string";
+	return part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string";
+}
+
+/** Validate user messages captured from child events without echoing payloads. */
+export function userMessageError(message: unknown): string | undefined {
+	if (!isObject(message) || message.role !== "user") return "malformed user message metadata";
+	if (typeof message.content === "string" ||
+		(Array.isArray(message.content) && message.content.every(isTextOrImageContent))) return undefined;
+	return "malformed user message content";
+}
+
 /** The JSON structure scanner bounds recursion to 128 levels. */
 function hasNonFiniteJsonNumber(value: unknown): boolean {
 	if (typeof value === "number") return !Number.isFinite(value);
@@ -71,11 +85,7 @@ export function toolResultMessageError(message: unknown): string | undefined {
 	if (!isObject(message) || message.role !== "toolResult" ||
 		typeof message.toolCallId !== "string" || typeof message.toolName !== "string" ||
 		typeof message.isError !== "boolean") return "malformed tool result metadata";
-	if (!Array.isArray(message.content) || !message.content.every((part: unknown) => {
-		if (!isObject(part)) return false;
-		if (part.type === "text") return typeof part.text === "string";
-		return part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string";
-	})) return "malformed tool result content";
+	if (!Array.isArray(message.content) || !message.content.every(isTextOrImageContent)) return "malformed tool result content";
 	if (protocolUsageError(message.usage)) return "malformed tool result usage";
 	return undefined;
 }
