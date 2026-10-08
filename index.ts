@@ -1121,7 +1121,6 @@ export default function (pi: ExtensionAPI) {
 			const defaultCwd = ctx.cwd;
 			const discovery = discoverAgents(defaultCwd, agentScope);
 			const agents = discovery.agents;
-			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
 			const hasChain = params.chain !== undefined;
 			const hasTasks = params.tasks !== undefined;
@@ -1155,6 +1154,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			if (params.confirmProjectAgents !== undefined && typeof params.confirmProjectAgents !== "boolean") {
+				return {
+					content: [{ type: "text", text: "confirmProjectAgents must be a boolean." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 			if (params.notify !== undefined && (typeof params.notify !== "boolean" || !params.background)) {
 				return {
 					content: [{ type: "text", text: "notify applies only to background jobs and must be a boolean." }],
