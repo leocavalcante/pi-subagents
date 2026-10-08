@@ -201,6 +201,22 @@ test('wait timeout and turn abortion leave the background job running', async ()
   assert.equal((await canceled).structuredContent.job.state, 'canceled');
 });
 
+test('invalid job actions are rejected without mutating jobs and retain schema-valid errors', async () => {
+  const id = await launch({ task: 'delay=10000 invalid action' });
+  const outputSchema = tools.get('subagent_jobs').definition.outputSchema;
+  for (const action of ['unexpected', null, undefined]) {
+    const params = { jobId: id };
+    if (action !== undefined) params.action = action;
+    const result = await invoke('subagent_jobs', params);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /action/);
+    assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+  }
+  assert.equal((await status(id)).state, 'running');
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  await finish(id);
+});
+
 test('invalid wait queries do not mutate jobs and unavailable IDs fail promptly', async () => {
   const id = await launch({ task: 'delay=10000 wait query safety' });
   for (const timeoutMs of [0, -1, 1.5, Infinity, 60001]) {

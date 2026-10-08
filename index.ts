@@ -859,7 +859,9 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 	));
 }
 
-const JobActionSchema = StringEnum(["list", "status", "cancel", "forget", "clear", "output", "wait"] as const);
+const JOB_ACTIONS = ["list", "status", "cancel", "forget", "clear", "output", "wait"] as const;
+type JobAction = typeof JOB_ACTIONS[number];
+const JobActionSchema = StringEnum(JOB_ACTIONS);
 const TokenCountSchema = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const UsageSummarySchema = Type.Object({
 	input: TokenCountSchema, output: TokenCountSchema,
@@ -1042,30 +1044,35 @@ export default function (pi: ExtensionAPI) {
 		}),
 		outputSchema: JobResponseSchema,
 		async execute(_id, params, signal): Promise<AgentToolResult<JobToolDetails>> {
+			const requestedAction: unknown = params.action;
+			const action: JobAction | undefined = typeof requestedAction === "string" &&
+				(JOB_ACTIONS as readonly string[]).includes(requestedAction)
+				? requestedAction as JobAction : undefined;
 			const reply = (text: string, details: JobToolDetails, data: Omit<Static<typeof JobResponseSchema>, "action">, isError = false): AgentToolResult<JobToolDetails> => ({
 				content: [{ type: "text", text: truncateOutput(text) }], details,
-				structuredContent: { action: params.action, ...data }, ...(isError ? { isError: true } : {}),
+				structuredContent: { action: action ?? "status", ...data }, ...(isError ? { isError: true } : {}),
 			});
 			const fail = (error: string, job?: JobSnapshot<JobResult>) =>
 				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job, jobs.getObservation(job.id)) } : {}) }, true);
-			if (params.timeoutMs !== undefined && (params.action !== "wait" || !Number.isInteger(params.timeoutMs) ||
+			if (!action) return fail(`action must be one of: ${JOB_ACTIONS.join(", ")}.`);
+			if (params.timeoutMs !== undefined && (action !== "wait" || !Number.isInteger(params.timeoutMs) ||
 				params.timeoutMs < 1 || params.timeoutMs > MAX_JOB_WAIT_MS)) {
 				return fail(`timeoutMs applies only to action: wait and must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`);
 			}
-			if (params.action !== "output" && [params.taskIndex, params.offset, params.limit].some((v) => v !== undefined)) {
+			if (action !== "output" && [params.taskIndex, params.offset, params.limit].some((v) => v !== undefined)) {
 				return fail("taskIndex, offset, and limit apply only to action: output.");
 			}
-			if (params.action === "output" && (
+			if (action === "output" && (
 				(params.taskIndex !== undefined && (!Number.isSafeInteger(params.taskIndex) || params.taskIndex < 0)) ||
 				(params.offset !== undefined && (!Number.isSafeInteger(params.offset) || params.offset < 0)) ||
 				(params.limit !== undefined && (!Number.isInteger(params.limit) || params.limit < 4 || params.limit > MAX_PAGE_BYTES)))) {
 				return fail("Invalid output query. Use non-negative integer taskIndex/offset and a limit between 4 and 32768.");
 			}
-			if (params.action === "clear") {
+			if (action === "clear") {
 				const cleared = jobs.clearFinished();
 				return reply(`Cleared ${cleared} finished job record(s). Active jobs are unchanged.`, { cleared }, { cleared });
 			}
-			if (params.action === "list") {
+			if (action === "list") {
 				const listed = jobs.list();
 				const snapshots = listed.map(({ latest: _latest, ...job }) => job);
 				const metadata = listed.map((job) => jobMetadata(job, jobs.getObservation(job.id)));
@@ -1073,20 +1080,20 @@ export default function (pi: ExtensionAPI) {
 					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
-			const waited = params.action === "wait" && params.jobId
+			const waited = action === "wait" && params.jobId
 				? await jobs.wait(params.jobId, params.timeoutMs ?? DEFAULT_JOB_WAIT_MS, signal) : undefined;
-			const job = params.action === "wait" ? waited?.job : params.jobId
-				? params.action === "cancel" ? jobs.cancel(params.jobId) : jobs.get(params.jobId)
+			const job = action === "wait" ? waited?.job : params.jobId
+				? action === "cancel" ? jobs.cancel(params.jobId) : jobs.get(params.jobId)
 				: undefined;
 			if (!job) return fail("Unknown or missing job ID. Use action: list to see jobs.");
-			if (params.action === "forget") {
+			if (action === "forget") {
 				if (!job.finishedAt) return fail("Cannot forget an active job. Cancel it and wait for cleanup first.", job);
 				jobs.forget(job.id);
 				return reply(`Forgot finished job ${job.id}.`, { forgotten: job.id }, { forgotten: job.id });
 			}
 			const metadata = jobMetadata(job, jobs.getObservation(job.id));
 			const completionHint = job.notify ? "See the completion message." : "Silent jobs do not deliver completion messages.";
-			if (params.action === "output") {
+			if (action === "output") {
 				if (!job.finishedAt) return fail("Output pages require a finished job. Use action: wait to await cleanup.", job);
 				if (job.outputEvicted) return fail(`Captured output was evicted from the job registry. ${completionHint}`, job);
 				const taskIndex = params.taskIndex ?? 0;
