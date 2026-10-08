@@ -967,7 +967,16 @@ export default function (pi: ExtensionAPI) {
 		}),
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const agentScope = params.agentScope ?? "user";
+			const requestedAgentScope: unknown = params.agentScope;
+			if (requestedAgentScope !== undefined && requestedAgentScope !== "user" &&
+				requestedAgentScope !== "project" && requestedAgentScope !== "both") {
+				const details = { agentScope: "user" as const, agents: [], projectAgentsDir: null, diagnostics: [] };
+				return {
+					content: [{ type: "text" as const, text: 'agentScope must be "user", "project", or "both".' }],
+					details, structuredContent: details, isError: true,
+				};
+			}
+			const agentScope: AgentScope = requestedAgentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents.map((agent) => ({
 				name: agent.name,

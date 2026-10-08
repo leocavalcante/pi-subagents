@@ -1064,6 +1064,20 @@ test('invalid agent scope cannot select project agents or bypass trust confirmat
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
+test('agent listing rejects invalid scopes instead of selecting project agents', async () => {
+  const context = { ...ctx(), cwd: join(sandbox, 'project') };
+  const outputSchema = tools.get('subagent_agents').definition.outputSchema;
+  for (const agentScope of ['unexpected', null, {}]) {
+    const result = await invoke('subagent_agents', { agentScope }, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /agentScope/);
+    assert.deepEqual(result.structuredContent.agents, []);
+    assert.equal(result.structuredContent.agentScope, 'user');
+    assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+  }
+  assert.equal(traces().length, 0);
+});
+
 test('invalid background overrides are rejected before project approval or job creation', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
