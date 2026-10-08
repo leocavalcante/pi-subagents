@@ -69,8 +69,12 @@ export class JsonLineCapture {
 			const end = chunk.indexOf("\n", start);
 			const fragment = chunk.slice(start, end < 0 ? undefined : end);
 			if (!this.discarding) {
-				const bytes = Buffer.byteLength(fragment, "utf8");
-				if (this.bytes + bytes > this.limit) {
+				const remaining = this.limit - this.bytes;
+				// UTF-8 uses at least one byte per UTF-16 code unit, so a fragment
+				// longer than the remaining byte budget is certainly oversized.
+				// Skip scanning the whole fragment just to discard it.
+				const bytes = fragment.length > remaining ? undefined : Buffer.byteLength(fragment, "utf8");
+				if (bytes === undefined || bytes > remaining) {
 					this.buffer = "";
 					this.bytes = 0;
 					this.discarding = true;

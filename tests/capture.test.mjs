@@ -35,6 +35,29 @@ test('an oversized unterminated record is not parsed at end of stream', () => {
   assert.equal(overflow, 1);
 });
 
+test('oversized JSON fragments skip needless UTF-8 scans but still count multibyte bytes exactly', () => {
+  const lines = [];
+  let overflow = 0;
+  const reader = new JsonLineCapture(line => lines.push(line), () => overflow++, 8);
+  const originalByteLength = Buffer.byteLength;
+  const measuredLengths = [];
+  Buffer.byteLength = (value, ...args) => {
+    if (typeof value === 'string') measuredLengths.push(value.length);
+    return originalByteLength(value, ...args);
+  };
+  try {
+    reader.append('x'.repeat(1024 * 1024) + String.fromCharCode(10));
+    reader.append('ééé'); // Six bytes; the next two UTF-16 units encode to four bytes.
+    reader.append('😀' + String.fromCharCode(10) + 'valid' + String.fromCharCode(10));
+    reader.finish();
+  } finally {
+    Buffer.byteLength = originalByteLength;
+  }
+  assert.equal(overflow, 2);
+  assert.deepEqual(lines, ['valid']);
+  assert.ok(measuredLengths.every(length => length <= 8), 'guaranteed oversized fragments should not be byte-scanned');
+});
+
 test('stderr stays within its byte cap and does not split Unicode', () => {
   const capture = new TextCapture(64);
   capture.append('é'.repeat(20));
