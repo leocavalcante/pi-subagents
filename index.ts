@@ -876,9 +876,9 @@ const JobResponseSchema = Type.Object({
 	error: Type.Optional(Type.String()),
 });
 
-function summarizeJobUsage(job: JobSnapshot<JobResult>): Usage | undefined {
-	const reports = job.latest?.details?.results.flatMap((result) =>
-		result.reportedUsage ? [result.reportedUsage] : [],
+function summarizeJobUsage(result: JobResult | undefined): Usage | undefined {
+	const reports = result?.details?.results.flatMap((task) =>
+		task.reportedUsage ? [task.reportedUsage] : [],
 	) ?? [];
 	if (reports.length === 0) return undefined;
 	try {
@@ -890,8 +890,8 @@ function summarizeJobUsage(job: JobSnapshot<JobResult>): Usage | undefined {
 	}
 }
 
-function jobMetadata(job: JobSnapshot<JobResult>): Static<typeof JobMetadataSchema> {
-	const usage = summarizeJobUsage(job);
+function jobMetadata(job: JobSnapshot<JobResult>, observation?: Usage): Static<typeof JobMetadataSchema> {
+	const usage = observation ?? summarizeJobUsage(job.latest);
 	return {
 		id: job.id, label: truncateOutput(job.label, 1024, "..."),
 		state: job.state, notify: job.notify, startedAt: job.startedAt,
@@ -905,7 +905,7 @@ function jobMetadata(job: JobSnapshot<JobResult>): Static<typeof JobMetadataSche
 
 export default function (pi: ExtensionAPI) {
 	const pool = new ProcessPool(MAX_CONCURRENCY);
-	const jobs = new JobManager<JobResult>(
+	const jobs = new JobManager<JobResult, Usage>(
 		(job) => {
 			const output =
 				job.state === "canceled"
@@ -929,7 +929,7 @@ export default function (pi: ExtensionAPI) {
 			);
 		},
 		(result) => Boolean(result.isError) || Boolean(result.details?.results.some(isFailedResult)),
-		8, 32, { maxBytes: MAX_RETAINED_JOB_BYTES, measure: estimateJobBytes },
+		8, 32, { maxBytes: MAX_RETAINED_JOB_BYTES, measure: estimateJobBytes }, summarizeJobUsage,
 	);
 	pi.on("session_shutdown", async () => {
 		await jobs.shutdown();
@@ -1020,7 +1020,7 @@ export default function (pi: ExtensionAPI) {
 				structuredContent: { action: params.action, ...data }, ...(isError ? { isError: true } : {}),
 			});
 			const fail = (error: string, job?: JobSnapshot<JobResult>) =>
-				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job) } : {}) }, true);
+				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job, jobs.getObservation(job.id)) } : {}) }, true);
 			if (params.timeoutMs !== undefined && (params.action !== "wait" || !Number.isInteger(params.timeoutMs) ||
 				params.timeoutMs < 1 || params.timeoutMs > MAX_JOB_WAIT_MS)) {
 				return fail(`timeoutMs applies only to action: wait and must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`);
@@ -1041,7 +1041,7 @@ export default function (pi: ExtensionAPI) {
 			if (params.action === "list") {
 				const listed = jobs.list();
 				const snapshots = listed.map(({ latest: _latest, ...job }) => job);
-				const metadata = listed.map(jobMetadata);
+				const metadata = listed.map((job) => jobMetadata(job, jobs.getObservation(job.id)));
 				return reply(metadata.length
 					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
@@ -1057,7 +1057,7 @@ export default function (pi: ExtensionAPI) {
 				jobs.forget(job.id);
 				return reply(`Forgot finished job ${job.id}.`, { forgotten: job.id }, { forgotten: job.id });
 			}
-			const metadata = jobMetadata(job);
+			const metadata = jobMetadata(job, jobs.getObservation(job.id));
 			const completionHint = job.notify ? "See the completion message." : "Silent jobs do not deliver completion messages.";
 			if (params.action === "output") {
 				if (!job.finishedAt) return fail("Output pages require a finished job. Use action: wait to await cleanup.", job);

@@ -182,6 +182,30 @@ test('finished output retention has a byte budget without dropping job metadata 
   await jobs.shutdown();
 });
 
+test('compact observations survive output eviction, clear unavailable summaries, and share job lifetime', async () => {
+  const jobs = new JobManager(() => {}, () => false, 8, 32,
+    { maxBytes: 0, measure: () => 1 }, result => result.total);
+  const job = jobs.start('observed', async (_signal, update) => {
+    update({ total: 2 });
+    return { total: 5 };
+  });
+  await jobs.wait(job.id, 1000);
+  assert.equal(jobs.get(job.id).outputEvicted, true);
+  assert.equal(jobs.get(job.id).latest, undefined);
+  assert.equal(jobs.getObservation(job.id), 5, 'Final observation is retained independently of output');
+  assert.equal(jobs.forget(job.id), true);
+  assert.equal(jobs.getObservation(job.id), undefined, 'Forgetting a job releases its observation');
+
+  const unavailable = jobs.start('unavailable observation', async (_signal, update) => {
+    update({ total: 7 });
+    update({});
+    return {};
+  });
+  await jobs.wait(unavailable.id, 1000);
+  assert.equal(jobs.getObservation(unavailable.id), undefined, 'A missing summary must clear a stale partial value');
+  await jobs.shutdown();
+});
+
 test('forget and clear only remove finished jobs', async () => {
   const jobs = new JobManager(() => {}, () => false);
   const gate = deferred();

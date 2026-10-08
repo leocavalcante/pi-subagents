@@ -47,17 +47,18 @@ export interface JobRetention<T> {
 	measure: (result: T) => number;
 }
 
-interface Job<T> {
+interface Job<T, Observation> {
 	snapshot: JobSnapshot<T>;
 	controller: AbortController;
 	done: Promise<void>;
 	retainedBytes: number;
+	observation?: Observation;
 	waiters: Set<() => void>;
 }
 
 /** Session-owned jobs. Turn cancellation deliberately does not own these controllers. */
-export class JobManager<T> {
-	private jobs = new Map<string, Job<T>>();
+export class JobManager<T, Observation = never> {
+	private jobs = new Map<string, Job<T, Observation>>();
 	private closed = false;
 
 	constructor(
@@ -66,6 +67,7 @@ export class JobManager<T> {
 		private maxActive = 8,
 		private maxRetained = 32,
 		private retention?: JobRetention<T>,
+		private summarize?: (result: T) => Observation | undefined,
 	) {
 		if (!Number.isInteger(maxActive) || maxActive < 1) throw new Error("Active job limit must be a positive integer.");
 		if (!Number.isInteger(maxRetained) || maxRetained < 0) throw new Error("Retained job limit must be a non-negative integer.");
@@ -86,7 +88,7 @@ export class JobManager<T> {
 			notify: options.notify ?? true,
 			startedAt: new Date().toISOString(),
 		};
-		const job: Job<T> = {
+		const job: Job<T, Observation> = {
 			snapshot,
 			controller: new AbortController(),
 			done: Promise.resolve(),
@@ -98,12 +100,17 @@ export class JobManager<T> {
 		job.done = Promise.resolve().then(async () => {
 			try {
 				job.controller.signal.throwIfAborted();
-				snapshot.latest = await run(job.controller.signal, (result) => {
-					if (!snapshot.finishedAt) snapshot.latest = result;
+				const result = await run(job.controller.signal, (updated) => {
+					if (!snapshot.finishedAt) {
+						snapshot.latest = updated;
+						this.recordObservation(job, updated);
+					}
 				});
+				snapshot.latest = result;
+				this.recordObservation(job, result);
 				snapshot.state = job.controller.signal.aborted
 					? "canceled"
-					: this.isFailed(snapshot.latest)
+					: this.isFailed(result)
 						? "failed"
 						: "completed";
 			} catch (error) {
@@ -144,6 +151,11 @@ export class JobManager<T> {
 	get(id: string): JobSnapshot<T> | undefined {
 		const job = this.jobs.get(id);
 		return job ? { ...job.snapshot } : undefined;
+	}
+
+	/** Compact observations survive output eviction but share the job's registry lifetime. */
+	getObservation(id: string): Observation | undefined {
+		return this.jobs.get(id)?.observation;
 	}
 
 	/** Wait for cleanup and retention without polling or retaining timed-out observers. */
@@ -217,7 +229,18 @@ export class JobManager<T> {
 		this.jobs.clear();
 	}
 
-	private evictOutput(job: Job<T>): void {
+	private recordObservation(job: Job<T, Observation>, result: T): void {
+		if (!this.summarize) return;
+		// A missing or failed summary must invalidate any earlier partial value.
+		job.observation = undefined;
+		try {
+			job.observation = this.summarize(result);
+		} catch {
+			// Observational metadata must never fail job execution or cleanup.
+		}
+	}
+
+	private evictOutput(job: Job<T, Observation>): void {
 		delete job.snapshot.latest;
 		job.snapshot.outputEvicted = true;
 		job.retainedBytes = 0;

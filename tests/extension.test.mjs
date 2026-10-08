@@ -118,11 +118,32 @@ test('silent job waits, cancellations and evictions do not promise a completion 
   const heavyId = heavy.details.background.id;
   const evicted = await invoke('subagent_jobs', { action: 'wait', jobId: heavyId, timeoutMs: 5000 });
   assert.equal(evicted.structuredContent.job.outputEvicted, true);
+  assert.deepEqual(evicted.structuredContent.job.usage, {
+    input: 20, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 40,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  }, 'Compact usage observation should remain after captured output eviction');
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, evicted.structuredContent), true);
   assert.match(evicted.content[0].text, /Silent jobs do not deliver completion messages/);
   const page = await invoke('subagent_jobs', { action: 'output', jobId: heavyId });
   assert.equal(page.isError, true);
   assert.doesNotMatch(page.content[0].text, /See the completion message/);
   assert.equal(messages.length, 0);
+});
+
+test('background usage overflow clears partial metadata even after output eviction', async () => {
+  const launched = await invoke('subagent', {
+    background: true, notify: false, concurrency: 1,
+    tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'usage-overflow-heavy' })),
+  });
+  const id = launched.details.background.id;
+  const waited = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 10000 });
+  assert.equal(waited.structuredContent.job.outputEvicted, true);
+  assert.equal(waited.structuredContent.job.usage, undefined,
+    'An unrepresentable aggregate must not leave the first task\'s partial usage in metadata');
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, waited.structuredContent), true);
+  const listed = await invoke('subagent_jobs', { action: 'list' });
+  assert.equal(listed.structuredContent.jobs.find(job => job.id === id).usage, undefined);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, listed.structuredContent), true);
 });
 
 test('notify is a background-only boolean validated before project approval or execution', async () => {
