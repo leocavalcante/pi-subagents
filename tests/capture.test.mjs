@@ -121,12 +121,34 @@ test('tiny diagnostic budgets remain bounded and invalid limits are rejected', (
   const capture = new TextCapture(4);
   capture.append('x'.repeat(100));
   assert.ok(Buffer.byteLength(capture.text) <= 4);
-  for (const limit of [0, -1, 1.5, Infinity]) {
-    assert.throws(() => new TextCapture(limit), /positive integers/);
-    assert.throws(() => new JsonLineCapture(() => {}, () => {}, limit), /positive integers/);
-    assert.throws(() => new MessageCapture(limit, 1), /positive integers/);
-    assert.throws(() => new MessageCapture(10, limit), /positive integers/);
+  for (const limit of [0, -1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new TextCapture(limit), /positive integers within the safe range/);
+    assert.throws(() => new JsonLineCapture(() => {}, () => {}, limit), /positive integers within the safe range/);
+    assert.throws(() => new MessageCapture(limit, 1), /positive integers within the safe range/);
+    assert.throws(() => new MessageCapture(10, limit), /positive integers within the safe range/);
   }
+});
+
+test('message history rejects invalid weights and preserves exact bounded byte accounting', () => {
+  const history = new MessageCapture(10, 2);
+  history.push('kept', 5);
+  for (const bytes of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => history.push('invalid', bytes), /non-negative safe integer/);
+  }
+  assert.deepEqual(history.messages, ['kept']);
+  assert.equal(history.retainedBytes, 5);
+  history.push('replacement', 6);
+  assert.deepEqual(history.messages, ['replacement']);
+  assert.equal(history.retainedBytes, 6);
+  assert.equal(history.dropped, 1);
+
+  const exact = new MessageCapture(Number.MAX_SAFE_INTEGER, 3);
+  exact.push('small', 1);
+  exact.push('large', Number.MAX_SAFE_INTEGER - 1);
+  exact.push('new', Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(exact.messages, ['new']);
+  assert.equal(exact.retainedBytes, Number.MAX_SAFE_INTEGER);
+  assert.equal(exact.dropped, 2);
 });
 
 test('message history enforces both byte and count budgets and keeps the latest message', () => {

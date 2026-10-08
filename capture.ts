@@ -5,7 +5,7 @@ export const MAX_HISTORY_BYTES = 16 * 1024 * 1024;
 export const MAX_HISTORY_MESSAGES = 128;
 
 function positiveLimit(limit: number): void {
-	if (!Number.isInteger(limit) || limit < 1) throw new Error("Capture limits must be positive integers.");
+	if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Capture limits must be positive integers within the safe range.");
 }
 
 function utf8Prefix(text: string, maxBytes: number): string {
@@ -121,12 +121,23 @@ export class MessageCapture<T> {
 	}
 
 	push(message: T, bytes: number): void {
-		this.entries.push({ message, bytes });
-		this.bytes += bytes;
-		while (this.entries.length > this.countLimit || this.bytes > this.byteLimit) {
+		if (!Number.isSafeInteger(bytes) || bytes < 0) {
+			throw new Error("Message size must be a non-negative safe integer.");
+		}
+		if (bytes > this.byteLimit) {
+			this.dropped += this.entries.length + 1;
+			this.entries = [];
+			this.bytes = 0;
+			return;
+		}
+		// Compare against remaining capacity before addition so the retained-byte
+		// total never crosses the safe-integer range, even with large custom limits.
+		while (this.entries.length >= this.countLimit || bytes > this.byteLimit - this.bytes) {
 			this.bytes -= this.entries.shift()!.bytes;
 			this.dropped++;
 		}
+		this.entries.push({ message, bytes });
+		this.bytes += bytes;
 	}
 
 	get messages(): T[] {
