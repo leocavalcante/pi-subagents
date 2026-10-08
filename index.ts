@@ -522,6 +522,7 @@ async function runSingleAgent(
 			});
 			childCreated = true;
 			let leaderExited = false;
+			let processSpawned = false;
 			let closed = false;
 			let settling = false;
 			let settled = false;
@@ -691,8 +692,16 @@ async function runSingleAgent(
 				finish(code);
 			});
 
+			proc.once("spawn", () => { processSpawned = true; });
 			proc.on("error", (error) => {
-				currentResult.errorMessage = error.message;
+				if (processSpawned) {
+					currentResult.errorMessage = "Subagent child process reported an error.";
+				} else {
+					const errorCode = (error as NodeJS.ErrnoException).code;
+					const code = typeof errorCode === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(errorCode)
+						? ` (${errorCode})` : "";
+					currentResult.errorMessage = `Subagent setup failed while launching child process${code}.`;
+				}
 				// Node emits close after error; let close own cleanup and slot release.
 			});
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 import { promises as fsPromises } from 'node:fs';
 import { after, afterEach, beforeEach, test } from 'node:test';
@@ -799,6 +800,35 @@ test('synchronous spawn failures remain inspectable and do not discard sibling r
     const page = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 0 });
     assert.match(page.structuredContent.output.text, /setup failed/);
     assert.equal(JSON.stringify(page).includes('private spawn payload'), false);
+  } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
+});
+
+test('asynchronous spawn failures expose only a safe setup diagnostic', async t => {
+  const originalSpawn = childProcess.spawn;
+  const spawn = t.mock.method(childProcess, 'spawn', (...args) => {
+    if (!args[1].includes('fake/pinned:high')) return originalSpawn(...args);
+    const child = new EventEmitter();
+    child.pid = undefined;
+    child.stdin = new EventEmitter();
+    child.stdin.end = () => {};
+    for (const name of ['stdout', 'stderr']) {
+      child[name] = new EventEmitter();
+      child[name].setEncoding = () => {};
+      child[name].destroy = () => {};
+    }
+    queueMicrotask(() => {
+      child.emit('error', Object.assign(new Error('private spawn payload'), { code: 'ENOENT' }));
+      child.emit('close', null);
+    });
+    return child;
+  });
+  syncBuiltinESMExports();
+  try {
+    const result = await invoke('subagent', { agent: 'pinned', task: 'asynchronous spawn failure' });
+    assert.equal(result.isError, true);
+    assert.equal(result.details.results[0].exitCode, 1);
+    assert.equal(result.details.results[0].errorMessage, 'Subagent setup failed while launching child process (ENOENT).');
+    assert.equal(JSON.stringify(result).includes('private spawn payload'), false);
   } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
 });
 
