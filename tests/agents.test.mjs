@@ -90,13 +90,24 @@ test('scope and project precedence work from nested or relative directories', ()
   assert.ok(discoverAgents(cwd, 'project').agents.every(a => a.source === 'project'));
 });
 
-test('project agent file symlinks stay within the project trust boundary', () => {
+test('project agent file symlinks stay within the project trust boundary', t => {
   const internal = join(sandbox, 'project/shared-agent.md');
   const external = join(sandbox, 'external-agent.md');
   writeFileSync(internal, '---\nname: internal\ndescription: In-project shared agent\n---\nInternal prompt.\n');
   writeFileSync(external, '---\nname: escaped\ndescription: Outside project\n---\nExternal prompt.\n');
-  symlinkSync(internal, join(projectDir, 'linked-internal.md'));
-  symlinkSync(external, join(projectDir, 'linked-external.md'));
+  try {
+    symlinkSync(internal, join(projectDir, 'linked-internal.md'));
+    symlinkSync(external, join(projectDir, 'linked-external.md'));
+  } catch (error) {
+    // Creating file symlinks on Windows requires Developer Mode or the
+    // SeCreateSymbolicLinkPrivilege right. Keep the rest of the suite usable
+    // when neither is available, but do not hide unrelated setup failures.
+    if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error?.code)) {
+      t.skip('File symlink creation is unavailable; enable Developer Mode or grant symlink privilege to run this boundary test.');
+      return;
+    }
+    throw error;
+  }
 
   const result = discoverAgents(cwd, 'project');
   assert.deepEqual(result.agents.map(a => a.name), ['internal']);
