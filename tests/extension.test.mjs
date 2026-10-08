@@ -793,6 +793,30 @@ test('all modes and agent names are validated before foreground children start',
   assert.equal(traces().length, 0);
 });
 
+test('working directory arguments reject non-strings and NUL before project approval or spawn', async () => {
+  let approvals = 0;
+  const context = {
+    ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async () => { approvals++; return true; } },
+  };
+  const invalid = [
+    { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: null },
+    { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: 'bad\0path' },
+    { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: {} }] },
+    { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: 'bad\0path' }] },
+  ];
+  for (const params of invalid) {
+    const result = await invoke('subagent', params, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /cwd/);
+  }
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  const schema = tools.get('subagent').definition.parameters;
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'valid', cwd: 'project' }), true);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: 'bad\0path' }), false);
+});
+
 test('large tasks use stdin and relative cwd resolves from the parent session', async () => {
   const task = 'x'.repeat(256 * 1024);
   const result = await invoke('subagent', { agent: 'worker', task, cwd: 'project' });

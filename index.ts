@@ -742,12 +742,17 @@ const DispatchOptions = {
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." })),
 };
 
+const WorkingDirectory = Type.String({
+	pattern: "^[^\\u0000]*$",
+	description: "Working directory for the agent process; must not contain a NUL character.",
+});
+
 const TaskItem = Type.Object({
 	...DispatchOptions,
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	timeoutMs: Type.Optional(TimeoutSchema),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	cwd: Type.Optional(WorkingDirectory),
 });
 
 const ChainItem = Type.Object({
@@ -759,7 +764,7 @@ const ChainItem = Type.Object({
 		description: "Task with {previous} for the preceding output or {steps.ID} for an earlier named step",
 	}),
 	timeoutMs: Type.Optional(TimeoutSchema),
-	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	cwd: Type.Optional(WorkingDirectory),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -809,11 +814,7 @@ const SubagentParams = Type.Object({
 			default: true,
 		}),
 	),
-	cwd: Type.Optional(
-		Type.String({
-			description: "Working directory for the agent process (single mode)",
-		}),
-	),
+	cwd: Type.Optional(WorkingDirectory),
 });
 
 type SubagentExecute = ToolDefinition<typeof SubagentParams, SubagentDetails>["execute"];
@@ -1198,6 +1199,17 @@ export default function (pi: ExtensionAPI) {
 				(!Number.isInteger(value) || value < 1 || value > MAX_TIMEOUT_MS))) {
 				return {
 					content: [{ type: "text", text: `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.` }],
+					details: makeDetails(mode)([]),
+					isError: true,
+				};
+			}
+			const workingDirectories: unknown[] = [params.cwd,
+				...(params.tasks ?? []).map((task) => task.cwd),
+				...(params.chain ?? []).map((step) => step.cwd)];
+			if (workingDirectories.some((cwd) => cwd !== undefined &&
+				(typeof cwd !== "string" || cwd.includes("\0")))) {
+				return {
+					content: [{ type: "text", text: "cwd must be a string without NUL characters." }],
 					details: makeDetails(mode)([]),
 					isError: true,
 				};
