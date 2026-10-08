@@ -1713,14 +1713,21 @@ export default function (pi: ExtensionAPI) {
 					turns: 0,
 				};
 				for (const r of results) {
-					total.input += r.usage.input;
-					total.output += r.usage.output;
-					total.cacheRead += r.usage.cacheRead;
-					total.cacheWrite += r.usage.cacheWrite;
-					total.cost += r.usage.cost;
-					total.turns += r.usage.turns;
+					for (const field of ["input", "output", "cacheRead", "cacheWrite", "turns"] as const) {
+						const value = r.usage[field];
+						const sum = total[field] + value;
+						if (!Number.isSafeInteger(value) || value < 0 || !Number.isSafeInteger(sum)) return undefined;
+						total[field] = sum;
+					}
+					const cost = total.cost + r.usage.cost;
+					if (!Number.isFinite(r.usage.cost) || r.usage.cost < 0 || !Number.isFinite(cost)) return undefined;
+					total.cost = cost;
 				}
 				return total;
+			};
+			const aggregateUsageText = (results: SingleResult[]) => {
+				const usage = aggregateUsage(results);
+				return usage ? formatUsageStats(usage) : "";
 			};
 
 			if (details.mode === "chain") {
@@ -1779,7 +1786,7 @@ export default function (pi: ExtensionAPI) {
 						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
 					}
 
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
+					const usageStr = aggregateUsageText(details.results);
 					if (usageStr) {
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(theme.fg("dim", `Total: ${usageStr}`), 0, 0));
@@ -1805,7 +1812,7 @@ export default function (pi: ExtensionAPI) {
 					const captureNotice = getCaptureNotice(r);
 					if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
 				}
-				const usageStr = formatUsageStats(aggregateUsage(details.results));
+				const usageStr = aggregateUsageText(details.results);
 				if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
 				text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				return new Text(text, 0, 0);
@@ -1863,7 +1870,7 @@ export default function (pi: ExtensionAPI) {
 						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
 					}
 
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
+					const usageStr = aggregateUsageText(details.results);
 					if (usageStr) {
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(theme.fg("dim", `Total: ${usageStr}`), 0, 0));
@@ -1891,7 +1898,7 @@ export default function (pi: ExtensionAPI) {
 					if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
 				}
 				if (!isRunning) {
-					const usageStr = formatUsageStats(aggregateUsage(details.results));
+					const usageStr = aggregateUsageText(details.results);
 					if (usageStr) text += `\n\n${theme.fg("dim", `Total: ${usageStr}`)}`;
 				}
 				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;

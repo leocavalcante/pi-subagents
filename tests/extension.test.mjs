@@ -345,6 +345,22 @@ test('cross-task token aggregation reports safe-integer overflow precisely', asy
     task.reportedUsage.input === Number.MAX_SAFE_INTEGER && task.reportedUsage.totalTokens === Number.MAX_SAFE_INTEGER));
 });
 
+test('multi-step rendering omits unrepresentable usage totals', async () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const render = (result, expanded) => definition.renderResult(result, { expanded }, theme, {}).render(100).join('\n');
+  for (const task of ['large-usage', 'safe-token-overflow']) {
+    const result = await invoke('subagent', { tasks: [
+      { agent: 'worker', task }, { agent: 'worker', task },
+    ] });
+    assert.equal(result.isError, true);
+    for (const expanded of [false, true]) {
+      assert.doesNotMatch(render(result, expanded), /Total:/,
+        'A total that exceeds finite-cost or safe-token limits must not be presented as valid');
+    }
+  }
+});
+
 test('multi-block diagnostic responses share the total model-facing text budget', async () => {
   const tasks = [{ agent: 'worker', task: 'large-usage' }, { agent: 'worker', task: 'large-usage' }];
   for (const background of [false, true]) {
