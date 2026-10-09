@@ -29,10 +29,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
-      - name: Install Pi 1.1.0 for compatibility checks
-        run: npm install --no-save --package-lock=false --ignore-scripts @earendil-works/pi-coding-agent@1.1.0
-      - name: Check against Pi 1.1.0
+      - name: Install Pi 1.0.4 for compatibility checks
+        run: npm install --no-save --package-lock=false --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
+      - name: Check against Pi 1.0.4
         run: npm run check
-      - name: Test against Pi 1.1.0
+      - name: Test against Pi 1.0.4
         run: npm test
       - run: npm pack --dry-run --ignore-scripts
