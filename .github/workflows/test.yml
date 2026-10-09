@@ -15,7 +15,7 @@ jobs:
       matrix:
         # Keep the existing ubuntu-latest check names and test Ubuntu 26 ahead of its rollout.
         os: [ubuntu-latest, ubuntu-26.04, windows-latest]
-        node: [22, 24]
+        node: [22, 24, 26]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
