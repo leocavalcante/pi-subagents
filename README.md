@@ -76,6 +76,8 @@ Definitions need non-empty `name` and `description` fields. Invalid YAML or conf
 
 Project-local definitions live in `.pi/agents/*.md`. The tool loads only personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents. Project definitions override personal definitions of the same name when using `"both"`. Project agent directories and files may use symlinks that resolve within the project root; links resolving outside it are skipped and reported as diagnostics. Personal agent symlinks are unchanged.
 
+Agent discovery is bounded for both personal and project directories: it scans at most 4096 directory entries, loads at most 256 Markdown definitions, and reads at most 512 KiB per file and 4 MiB of content per directory. A directory exceeding either scan or definition count is skipped entirely; oversized files are skipped, and reaching the aggregate content limit skips remaining files in filename order. At most 64 diagnostics are retained per listing, with one notice when further diagnostics are omitted. These limits keep malformed or unexpectedly large agent directories from consuming unbounded time or memory during discovery.
+
 ## Usage
 
 Use `subagent_agents` to list agent descriptions, source paths, model and tool settings, and invalid definitions without running an agent:
