@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function section(title) {
   const start = readme.indexOf(`## ${title}\n`);
@@ -10,6 +11,16 @@ function section(title) {
   const next = readme.indexOf('\n## ', start + 1);
   return readme.slice(start, next === -1 ? undefined : next);
 }
+
+test('README relative file links are included in the npm package', () => {
+  const relativeLinks = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
+    .map(([, target]) => target.split(/[?#]/, 1)[0])
+    .filter(target => target && !/^[a-z][a-z\d+.-]*:/i.test(target));
+
+  for (const target of relativeLinks) {
+    assert.ok(packageJson.files.includes(target), `README target is missing from the npm package: ${target}`);
+  }
+});
 
 test('README distinguishes POSIX process-group cleanup from Windows direct-child cleanup', () => {
   const deadlines = section('Task deadlines');
