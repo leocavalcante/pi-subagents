@@ -318,7 +318,7 @@ function getResultOutput(result: SingleResult): string {
 		const context = formatFailureContext(result);
 		if (context) sections.push(context);
 		const partial = getPartialOutput(result.messages);
-		if (partial) sections.push(`[Partial, unverified output from failed task]\n\n${partial}`);
+		if (partial) sections.push(`[Partial, unverified output]\n\n${partial}`);
 	}
 	const notice = getCaptureNotice(result);
 	if (notice) sections.push(notice);
