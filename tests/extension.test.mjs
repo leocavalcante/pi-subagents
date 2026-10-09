@@ -1505,6 +1505,7 @@ test('output pages reject active jobs and expose failed-job diagnoses after comp
   const canceledOutput = await invoke('subagent_jobs', { action: 'output', jobId: id });
   assert.equal(canceledOutput.structuredContent.output.partial, true);
   assert.match(canceledOutput.structuredContent.output.text, /Partial, unverified output/);
+  assert.doesNotMatch(canceledOutput.structuredContent.output.text, /failed task/);
   const failed = await launch({ task: 'zero-exit fail' });
   await finish(failed);
   const output = await invoke('subagent_jobs', { action: 'output', jobId: failed });
@@ -1551,7 +1552,7 @@ test('failed protocol jobs expose safe context and paginated unverified partial 
   }
   assert.match(text, /Invalid subagent JSON event: tool result event must contain a tool result message/);
   assert.match(text, /Failure context: event=tool_result_end; role=other; record=4; lastStopReason=stop; processExitCode=0/);
-  assert.match(text, /Partial, unverified output from failed task/);
+  assert.match(text, /\[Partial, unverified output\]/);
   assert.match(text, /tool progress café/);
   assert.match(text, /partial answer — résumé/);
   assert.equal(text.includes('DO_NOT_ECHO_EVENT_PAYLOAD'), false);
