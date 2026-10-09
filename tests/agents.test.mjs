@@ -119,6 +119,19 @@ test('malformed YAML and invalid definitions do not break discovery', () => {
   assert.ok(result.diagnostics.every(d => d.source === 'user' && d.filePath && d.message));
 });
 
+test('agent filename precedence and name ordering are locale-independent', () => {
+  agent(userDir, 'a', 'name: worker\ndescription: Dot filename');
+  agent(userDir, 'a_', 'name: worker\ndescription: Underscore filename');
+  agent(userDir, 'a-agent', 'name: a\ndescription: A');
+  agent(userDir, 'aa-agent', 'name: aa\ndescription: AA');
+  agent(userDir, 'z-agent', 'name: z\ndescription: Z');
+  agent(userDir, 'accented-agent', 'name: á\ndescription: Accented');
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(a => a.name), ['a', 'aa', 'worker', 'z', 'á']);
+  assert.equal(result.agents.find(a => a.name === 'worker').description, 'Underscore filename');
+});
+
 test('normalizes config, preserves explicit empty tools, and supports thinking', () => {
   agent(userDir, 'z', 'name: " z "\ndescription: " Worker Z "\nmodel: "  "\ntools: []\nthinking: off');
   agent(userDir, 'a', 'name: a\ndescription: Worker A\ntools: "read, bash,read, "\nmodel: " fake/model "\nthinking: max');

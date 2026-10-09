@@ -56,6 +56,11 @@ const MAX_AGENT_FILE_BYTES = 512 * 1024;
 const MAX_AGENT_DIRECTORY_BYTES = 4 * 1024 * 1024;
 const MAX_AGENT_DIAGNOSTICS = 64;
 
+/** Stable across host locales and ICU versions. */
+function compareLexically(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function addDiagnostic(
 	diagnostics: AgentDiagnostic[],
 	filePath: string,
@@ -163,7 +168,7 @@ function loadAgentsFromDir(
 	}
 
 	let totalBytes = 0;
-	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+	for (const entry of entries.sort((a, b) => compareLexically(a.name, b.name))) {
 		const filePath = path.join(dir, entry.name);
 		let contentPath = filePath;
 		if (realProjectRoot) {
@@ -316,7 +321,7 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	}
 
 	return {
-		agents: Array.from(agentMap.values()).sort((a, b) => a.name.localeCompare(b.name)),
+		agents: Array.from(agentMap.values()).sort((a, b) => compareLexically(a.name, b.name)),
 		projectAgentsDir,
 		diagnostics,
 	};
