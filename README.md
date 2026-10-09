@@ -303,7 +303,7 @@ Context isolation is not a sandbox. Children run with the same OS permissions as
 
 Only enable project-local agents in repositories you trust. Interactive sessions ask before running project agents in untrusted projects unless `confirmProjectAgents` is disabled.
 
-Authenticate on each machine with Pi's `/login`. Do not put credentials, sessions, or machine-local Pi state in this repository.
+Authenticate on each machine with Pi's `/login`. Do not put credentials, sessions, or machine-local Pi state in this repository. To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
