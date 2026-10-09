@@ -29,23 +29,19 @@ test('oversized JSON records are discarded until LF without losing following rec
 
 test('an oversized record is rejected before slicing its fragment and capture recovers at LF', () => {
   const text = 'x'.repeat(1024 * 1024) + '\nvalid\n';
+  const chunk = new String(text);
   const slicedLengths = [];
-  const originalSlice = String.prototype.slice;
+  chunk.slice = (start, end) => {
+    slicedLengths.push(end === undefined ? chunk.length - start : end - start);
+    return String.prototype.slice.call(chunk, start, end);
+  };
   const lines = [];
   let overflow = 0;
   const reader = new JsonLineCapture(line => lines.push(line), () => overflow++, 8);
-  String.prototype.slice = function(start, end) {
-    if (this === text) slicedLengths.push(end === undefined ? text.length - start : end - start);
-    return originalSlice.call(this, start, end);
-  };
-  try {
-    reader.append(text);
-  } finally {
-    String.prototype.slice = originalSlice;
-  }
+  reader.append(chunk);
   assert.equal(overflow, 1);
   assert.deepEqual(lines, ['valid']);
-  assert.ok(slicedLengths.every(length => length <= 8), 'the oversized fragment must not be sliced');
+  assert.deepEqual(slicedLengths, [5], 'only the following valid fragment should be sliced');
 });
 
 test('an oversized unterminated record is not parsed at end of stream', () => {
