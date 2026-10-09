@@ -539,6 +539,32 @@ test('cancel handles running and queued tasks, with SIGKILL escalation', async (
   assert.equal((await finish(next)).state, 'completed');
 });
 
+test('Windows cancellation and deadlines skip the POSIX SIGKILL grace timer', { skip: process.platform !== 'win32' }, async t => {
+  const graceTimers = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+    if (delay === 1000) graceTimers.push(delay);
+    return originalSetTimeout(callback, delay, ...args);
+  });
+
+  const canceled = await launch({ task: 'delay=10000 windows cancel' });
+  await waitFor(() => traces().some(t => t.event === 'start'));
+  const beforeCancel = graceTimers.length;
+  await invoke('subagent_jobs', { action: 'cancel', jobId: canceled });
+  assert.equal((await finish(canceled)).state, 'canceled');
+  assert.equal(graceTimers.length - beforeCancel, 1,
+    'Cancellation should schedule only the bounded inherited-pipe drain timer');
+
+  const beforeTimeout = graceTimers.length;
+  const timedOut = await launch({ task: 'delay=10000 windows timeout', timeoutMs: 100 });
+  await waitFor(() => traces().some(t => t.event === 'start' && t.task.includes('windows timeout')));
+  const result = await finish(timedOut);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.latest.details.results[0].timedOut, true);
+  assert.equal(graceTimers.length - beforeTimeout, 1,
+    'A deadline should schedule only the bounded inherited-pipe drain timer');
+});
+
 test('POSIX cancellation kills descendants in the child process group', { skip: process.platform === 'win32' }, async () => {
   const id = await launch({ task: 'delay=10000 stubborn grandchild' });
   await waitFor(() => traces().some(t => t.event === 'grandchild'));

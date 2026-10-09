@@ -32,6 +32,7 @@ test('README distinguishes POSIX process-group cleanup from Windows direct-child
   const deadlines = section('Task deadlines');
   assert.match(deadlines, /On POSIX, cleanup signals the child's process group/);
   assert.match(deadlines, /On Windows, only the direct child is signaled; descendants may continue running after a timeout or cancellation/);
+  assert.match(deadlines, /Windows uses an immediate termination request instead of the POSIX escalation delay/);
 
   const cleanup = section('Output capture and cleanup');
   assert.match(cleanup, /On Windows, descendants are not terminated when the direct child exits, whether normally or after cancellation or a deadline/);
