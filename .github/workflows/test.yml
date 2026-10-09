@@ -15,7 +15,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         node: [22, 24]
-        pi: ["1.0.4", "1.1.0"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -27,8 +26,12 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --ignore-scripts
-      - if: matrix.pi == '1.1.0'
-        run: npm install --no-save --package-lock=false --ignore-scripts @earendil-works/pi-coding-agent@${{ matrix.pi }}
       - run: npm run check
       - run: npm test
+      - name: Install Pi 1.1.0 for compatibility checks
+        run: npm install --no-save --package-lock=false --ignore-scripts @earendil-works/pi-coding-agent@1.1.0
+      - name: Check against Pi 1.1.0
+        run: npm run check
+      - name: Test against Pi 1.1.0
+        run: npm test
       - run: npm pack --dry-run --ignore-scripts
