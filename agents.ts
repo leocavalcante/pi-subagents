@@ -49,6 +49,15 @@ type AgentFrontmatter = {
 };
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
+export const MAX_AGENT_NAME_BYTES = 256;
+export const AGENT_NAME_PATTERN = "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u206f\\ufeff]+(?![\\s\\S])";
+const INVALID_AGENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/;
+
+export function isSafeAgentName(name: string): boolean {
+	// UTF-8 is never shorter than UTF-16 code units; reject large names before scanning them.
+	return name.length > 0 && name.length <= MAX_AGENT_NAME_BYTES &&
+		Buffer.byteLength(name, "utf8") <= MAX_AGENT_NAME_BYTES && name.trim().length > 0 && !INVALID_AGENT_NAME.test(name);
+}
 
 const MAX_AGENT_DIRECTORY_ENTRIES = 4096;
 const MAX_AGENT_FILES = 256;
@@ -247,6 +256,9 @@ function loadAgentsFromDir(
 				typeof frontmatter.description !== "string" || !frontmatter.description.trim()
 			) {
 				throw new Error("name and description must be non-empty strings.");
+			}
+			if (!isSafeAgentName(frontmatter.name.trim())) {
+				throw new Error(`name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and contain no control or bidirectional formatting characters.`);
 			}
 			if (frontmatter.model !== undefined && typeof frontmatter.model !== "string") {
 				throw new Error("model must be a string.");
