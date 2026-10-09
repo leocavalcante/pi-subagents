@@ -38,6 +38,10 @@ const waitFor = async predicate => {
   throw new Error('Timed out waiting for test condition');
 };
 const finish = id => waitFor(async () => { const job = await status(id); return job.finishedAt ? job : undefined; });
+const noisyTasks = prefix => {
+  const task = `${prefix}${'x'.repeat(1_300_000)}`;
+  return Array.from({ length: 8 }, () => ({ agent: 'worker', task }));
+};
 const shutdown = async () => {
   for (const handler of extension.handlers.get('session_shutdown') ?? []) await handler({ type: 'session_shutdown', reason: 'reload' }, ctx());
 };
@@ -115,14 +119,14 @@ test('silent job waits, cancellations and evictions do not promise a completion 
   const canceled = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
   assert.equal(canceled.structuredContent.job.state, 'canceled');
   assert.equal(messages.length, 0);
-  const heavy = await invoke('subagent', { background: true, notify: false, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'retention-heavy' })) });
+  const heavy = await invoke('subagent', { background: true, notify: false, tasks: noisyTasks('retention-heavy:') });
   const heavyId = heavy.details.background.id;
   const evicted = await invoke('subagent_jobs', { action: 'wait', jobId: heavyId, timeoutMs: 15000 });
   assert.equal(evicted.structuredContent.timedOut, false);
   assert.equal(evicted.structuredContent.job.state, 'completed');
   assert.equal(evicted.structuredContent.job.outputEvicted, true);
   assert.deepEqual(evicted.structuredContent.job.usage, {
-    input: 20, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 40,
+    input: 40, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens: 80,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   }, 'Compact usage observation should remain after captured output eviction');
   assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, evicted.structuredContent), true);
@@ -136,7 +140,7 @@ test('silent job waits, cancellations and evictions do not promise a completion 
 test('background usage overflow clears partial metadata even after output eviction', async () => {
   const launched = await invoke('subagent', {
     background: true, notify: false, concurrency: 1,
-    tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'usage-overflow-heavy' })),
+    tasks: noisyTasks('usage-overflow-heavy:'),
   });
   const id = launched.details.background.id;
   const waited = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 10000 });
@@ -682,7 +686,7 @@ test('bounded history keeps the final answer and usage from evicted messages', a
   assert.ok(result.capture.messagesDropped > 0);
   assert.equal(result.usage.turns, 202);
   assert.match(job.latest.content[0].text, /result: history-flood/);
-  assert.match(job.latest.content[0].text, /earlier messages omitted/);
+  assert.match(job.latest.content[0].text, /messages omitted from captured history/);
   const theme = { fg: (_color, text) => text, bold: text => text };
   for (const mode of ['single', 'chain', 'parallel']) for (const expanded of [false, true]) {
     const rendered = tools.get('subagent').definition.renderResult(
@@ -1562,19 +1566,60 @@ test('finished job records can be forgotten or cleared without canceling active 
 });
 
 test('finished registry output is byte-bounded while completion delivery retains the result', async () => {
-  const launched = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'retention-heavy' })) });
+  const launched = await invoke('subagent', { background: true, tasks: noisyTasks('retention-heavy:') });
   const id = launched.details.background.id;
   const job = await finish(id);
   assert.equal(job.state, 'completed');
   assert.equal(job.outputEvicted, true);
   assert.equal(job.latest, undefined);
-  assert.equal(messages[0].message.details.latest.details.results.length, 4);
+  assert.equal(messages[0].message.details.latest.details.results.length, 8);
   assert.match((await invoke('subagent_jobs', { action: 'status', jobId: id })).content[0].text, /evicted/);
   assert.match((await invoke('subagent_jobs', { action: 'list' })).content[0].text, /output evicted/);
   const page = await invoke('subagent_jobs', { action: 'output', jobId: id });
   assert.equal(page.isError, true);
   assert.match(page.structuredContent.error, /evicted/);
   assert.equal(page.structuredContent.job.outputEvicted, true);
+});
+
+test('parallel and chain histories share a bounded aggregate capture budget', async () => {
+  const budget = 32 * 1024 * 1024;
+  const parallel = await invoke('subagent', {
+    tasks: Array.from({ length: 8 }, () => ({ agent: 'worker', task: 'retention-heavy' })),
+  });
+  const parallelBytes = parallel.details.results.reduce((sum, result) => sum + result.capture.retainedMessageBytes, 0);
+  assert.ok(parallelBytes <= budget, `Parallel history retained ${parallelBytes} bytes`);
+  assert.ok(parallel.details.results.every(result => result.capture.retainedMessageBytes <= budget / 8));
+  assert.ok(parallel.details.results.every(result => result.capture.messagesDropped >= 2));
+
+  const chain = await invoke('subagent', {
+    chain: Array.from({ length: 8 }, (_, i) => ({ id: `step-${i}`, agent: 'worker', task: 'retention-heavy' })),
+  });
+  assert.equal(chain.details.results.length, 8);
+  const chainBytes = chain.details.results.reduce((sum, result) => sum + result.capture.retainedMessageBytes, 0);
+  assert.ok(chainBytes <= budget, `Chain history retained ${chainBytes} bytes`);
+
+  const chainStartsBefore = traces().filter(entry => entry.event === 'start').length;
+  const expanded = await invoke('subagent', {
+    chain: [
+      { agent: 'worker', task: 'chain-aggregate-output' },
+      ...Array.from({ length: 31 }, () => ({ agent: 'worker', task: '{previous}' })),
+    ],
+  });
+  assert.equal(expanded.isError, true, 'Aggregate expanded tasks must stop before exceeding the dispatch limit');
+  assert.match(expanded.content[0].text, /remaining .* per-dispatch task limit/);
+  assert.ok(expanded.details.results.length < 32);
+  const expandedBytes = expanded.details.results.reduce((sum, result) => sum + Buffer.byteLength(result.task), 0);
+  assert.ok(expandedBytes <= budget, `Retained expanded task text used ${expandedBytes} bytes`);
+  assert.equal(traces().filter(entry => entry.event === 'start').length - chainStartsBefore,
+    expanded.details.results.length - 1, 'The oversized expanded task must fail before spawning a child');
+
+  const overflow = await invoke('subagent', {
+    chain: Array.from({ length: 32 }, (_, i) => ({ agent: 'worker', task: i === 0 ? 'chain-capture-overflow' : 'must-not-run' })),
+  });
+  assert.equal(overflow.isError, true, 'A dropped final answer must not be passed onward as an empty chain result');
+  assert.equal(overflow.details.results.length, 1);
+  assert.equal(overflow.details.results[0].capture.finalAssistantMessageDropped, true);
+  assert.match(overflow.content[0].text, /exceeded the available history capture budget/);
 });
 
 test('single and chain responses cap text without truncating captured data or chain input', async () => {

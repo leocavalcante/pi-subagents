@@ -200,7 +200,7 @@ export class MessageCapture<T> {
 		positiveLimit(countLimit);
 	}
 
-	push(message: T, bytes: number): void {
+	push(message: T, bytes: number): boolean {
 		if (!Number.isSafeInteger(bytes) || bytes < 0) {
 			throw new Error("Message size must be a non-negative safe integer.");
 		}
@@ -208,7 +208,7 @@ export class MessageCapture<T> {
 			this.dropped += this.entries.length + 1;
 			this.entries = [];
 			this.bytes = 0;
-			return;
+			return false;
 		}
 		// Compare against remaining capacity before addition so the retained-byte
 		// total never crosses the safe-integer range, even with large custom limits.
@@ -218,6 +218,7 @@ export class MessageCapture<T> {
 		}
 		this.entries.push({ message, bytes });
 		this.bytes += bytes;
+		return true;
 	}
 
 	get messages(): T[] {

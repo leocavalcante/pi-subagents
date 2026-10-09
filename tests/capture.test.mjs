@@ -184,6 +184,15 @@ test('message history rejects invalid weights and preserves exact bounded byte a
   assert.equal(exact.dropped, 2);
 });
 
+test('message history reports when an oversized current message cannot be retained', () => {
+  const history = new MessageCapture(4);
+  assert.equal(history.push('kept', 4), true);
+  assert.equal(history.push('oversized', 5), false);
+  assert.deepEqual(history.messages, []);
+  assert.equal(history.retainedBytes, 0);
+  assert.equal(history.dropped, 2);
+});
+
 test('message history enforces both byte and count budgets and keeps the latest message', () => {
   const history = new MessageCapture(10, 2);
   history.push('first', 4);

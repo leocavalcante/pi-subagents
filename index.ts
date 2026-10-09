@@ -39,7 +39,7 @@ import {
 	THINKING_LEVELS,
 } from "./agents.ts";
 import { JobManager, ProcessPool, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS, type JobSnapshot, type JobState } from "./jobs.ts";
-import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
+import { JsonLineCapture, MessageCapture, TextCapture, MAX_HISTORY_BYTES, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
 import { MAX_PAGE_BYTES, createOutputPager } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
@@ -54,6 +54,7 @@ const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
+const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
 
 function escapeTerminalControls(value: string): string {
@@ -232,6 +233,7 @@ interface SingleResult {
 		retainedMessageBytes?: number;
 		stderrTruncated?: boolean;
 		inheritedPipesClosed?: boolean;
+		finalAssistantMessageDropped?: boolean;
 	};
 }
 
@@ -339,7 +341,8 @@ function isPartialResult(result: SingleResult): boolean {
 
 function getCaptureNotice(result: SingleResult): string {
 	const notices: string[] = [];
-	if (result.capture?.messagesDropped) notices.push(`${result.capture.messagesDropped} earlier messages omitted from captured history.`);
+	if (result.capture?.messagesDropped) notices.push(`${result.capture.messagesDropped} messages omitted from captured history.`);
+	if (result.capture?.finalAssistantMessageDropped) notices.push("Final assistant message omitted because it exceeded the history capture budget.");
 	if (result.capture?.stderrTruncated) notices.push("stderr capture truncated at 64 KiB.");
 	if (result.capture?.inheritedPipesClosed) notices.push("Inherited output pipes were closed after the child exited.");
 	return notices.length ? `[Capture notice: ${notices.join(" ")}]` : "";
@@ -520,6 +523,8 @@ async function runSingleAgent(
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
 	expandedTaskTooLarge = false,
+	historyByteLimit = MAX_HISTORY_BYTES,
+	expandedTaskError?: string,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -583,7 +588,7 @@ async function runSingleAgent(
 	signal?.throwIfAborted();
 	if (expandedTaskTooLarge || taskByteLength(task) > MAX_TASK_BYTES) {
 		currentResult.exitCode = 1;
-		currentResult.errorMessage = taskSizeError();
+		currentResult.errorMessage = expandedTaskError ?? taskSizeError();
 		return currentResult;
 	}
 	if (!task.trim()) {
@@ -635,7 +640,7 @@ async function runSingleAgent(
 				...(currentResult.stopReason ? { lastStopReason: currentResult.stopReason as FailureStopReason } : {}),
 			};
 		};
-		const history = new MessageCapture<Message>();
+		const history = new MessageCapture<Message>(historyByteLimit);
 		const stderr = new TextCapture();
 		currentResult.capture = {};
 
@@ -761,7 +766,8 @@ async function runSingleAgent(
 							return;
 						}
 					}
-					history.push(msg, Buffer.byteLength(line, "utf8"));
+					const retained = history.push(msg, Buffer.byteLength(line, "utf8"));
+					if (msg.role === "assistant") currentResult.capture!.finalAssistantMessageDropped = !retained;
 					currentResult.messages = history.messages;
 					currentResult.capture!.messagesDropped = history.dropped;
 					currentResult.capture!.retainedMessageBytes = history.retainedBytes;
@@ -876,9 +882,15 @@ async function runSingleAgent(
 				setProtocolError("Subagent exited after a tool-use response without a final assistant response.", "process_exit");
 			}
 		}
-		currentResult.exitCode = protocolError || timedOut ? 1 : exitCode;
+		const finalAssistantMessageDropped = exitCode === 0 && !protocolError && !timedOut &&
+			currentResult.capture?.finalAssistantMessageDropped;
+		currentResult.exitCode = protocolError || timedOut || finalAssistantMessageDropped ? 1 : exitCode;
 		if (timedOut) currentResult.timedOut = true;
-		const failureCauses = [timedOut ? `Subagent timed out after ${timeoutMs} ms.` : undefined, protocolError];
+		const failureCauses = [
+			timedOut ? `Subagent timed out after ${timeoutMs} ms.` : undefined,
+			protocolError,
+			finalAssistantMessageDropped ? "Final assistant message exceeded the available history capture budget." : undefined,
+		];
 		if (failureCauses.some(Boolean)) currentResult.errorMessage = failureCauses.filter(Boolean).join(" ");
 		if (wasAborted) throw signal?.reason ?? new Error("Subagent was aborted");
 		return currentResult;
@@ -1529,13 +1541,20 @@ export default function (pi: ExtensionAPI) {
 			): Promise<AgentToolResult<SubagentDetails>> => {
 				if (params.chain && params.chain.length > 0) {
 					const results: SingleResult[] = [];
+					let retainedHistoryBytes = 0;
+					let expandedTaskBytes = 0;
 					let previousOutput = "";
 					const namedOutputs = new Map<string, string>();
 
 					for (let i = 0; i < params.chain.length; i++) {
 						const step = params.chain[i];
-						const boundedTask = substituteChainContextBounded(step.task, previousOutput, namedOutputs, MAX_TASK_BYTES);
+						const remainingTaskBytes = MAX_DISPATCH_TASK_BYTES - expandedTaskBytes;
+						const taskByteLimit = Math.min(MAX_TASK_BYTES, remainingTaskBytes);
+						const boundedTask = substituteChainContextBounded(step.task, previousOutput, namedOutputs, taskByteLimit);
 						const expandedTaskTooLarge = boundedTask === undefined;
+						const expandedTaskError = expandedTaskTooLarge && remainingTaskBytes < MAX_TASK_BYTES
+							? `Expanded chain task exceeds the remaining ${remainingTaskBytes} UTF-8 bytes of the ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB per-dispatch task limit.`
+							: undefined;
 						// Keep only the bounded template in the failed result if expansion would exceed the cap.
 						const taskWithContext = boundedTask ?? step.task;
 
@@ -1555,6 +1574,11 @@ export default function (pi: ExtensionAPI) {
 								}
 							: undefined;
 
+						const remainingSteps = params.chain.length - i;
+						const availableHistoryBytes = MAX_DISPATCH_HISTORY_BYTES - retainedHistoryBytes;
+						const historyByteLimit = Math.max(1, Math.min(
+							MAX_HISTORY_BYTES, Math.floor(availableHistoryBytes / remainingSteps),
+						));
 						const result = await runSingleAgent(
 							defaultCwd,
 							pool,
@@ -1570,8 +1594,12 @@ export default function (pi: ExtensionAPI) {
 							chainUpdate,
 							makeDetails("chain"),
 							expandedTaskTooLarge,
+							historyByteLimit,
+							expandedTaskError,
 						);
 						if (step.id !== undefined) result.stepId = step.id;
+						if (boundedTask !== undefined) expandedTaskBytes += Buffer.byteLength(taskWithContext, "utf8");
+						retainedHistoryBytes += result.capture?.retainedMessageBytes ?? 0;
 						results.push(result);
 
 						const isError = isFailedResult(result);
@@ -1643,6 +1671,9 @@ export default function (pi: ExtensionAPI) {
 						}
 					};
 
+					const historyByteLimit = Math.max(1, Math.min(
+						MAX_HISTORY_BYTES, Math.floor(MAX_DISPATCH_HISTORY_BYTES / params.tasks.length),
+					));
 					const results = await mapWithConcurrencyLimit(params.tasks, concurrency, async (t, index) => {
 						const result = await runSingleAgent(
 							defaultCwd,
@@ -1664,6 +1695,8 @@ export default function (pi: ExtensionAPI) {
 								}
 							},
 							makeDetails("parallel"),
+							false,
+							historyByteLimit,
 						);
 						allResults[index] = result;
 						emitParallelUpdate();
