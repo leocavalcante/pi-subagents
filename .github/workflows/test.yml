@@ -38,7 +38,14 @@ jobs:
       - run: npm run check
       - run: npm test
       - name: Install Pi 1.0.4 for compatibility checks
-        run: npm install --no-save --package-lock=false --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
+        shell: bash
+        run: |
+          archive="$(npm pack --silent @earendil-works/pi-coding-agent@1.0.4)"
+          test -f "$archive"
+          rm -rf node_modules/@earendil-works/pi-coding-agent
+          mkdir -p node_modules/@earendil-works/pi-coding-agent
+          tar -xzf "$archive" --strip-components=1 -C node_modules/@earendil-works/pi-coding-agent
+          rm "$archive"
       - name: Check against Pi 1.0.4
         run: npm run check
       - name: Test against Pi 1.0.4
