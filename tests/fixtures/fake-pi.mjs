@@ -76,7 +76,37 @@ if (task === 'wrong-role-tool-result') console.log(JSON.stringify({ type: 'tool_
 } }));
 if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result_end', message: { role: 'assistant' } }));
 if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
-if (task === 'unknown-message-role') console.log(JSON.stringify({ type: 'message_end', message: { role: 'system', content: [] } }));
+if (task === 'documented-message-roles') {
+  const emitMessage = message => write(process.stdout, JSON.stringify({ type: 'message_end', message }) + '\n');
+  const emitContext = async (role, fields = {}) => emitMessage({ role, timestamp: 1, ...fields });
+  const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const assistant = (content, stopReason) => ({
+    role: 'assistant', content, api: 'openai-completions', provider: 'fake', model: 'fake',
+    usage, stopReason, timestamp: 2,
+  });
+
+  // Pi 1.1.0 AgentMessage roles and an extension-defined role can surround
+  // ordinary tool/assistant messages in the JSON event stream.
+  await emitContext('system', { content: 'system instructions' });
+  await emitContext('custom', { customType: 'fixture', content: 'custom context', display: false, details: { safe: true } });
+  await emitMessage(assistant([{ type: 'toolCall', id: 'role-call', name: 'bash', arguments: { command: 'echo done' } }], 'toolUse'));
+  await emitContext('bashExecution', { command: 'echo done', output: 'done', exitCode: 0, cancelled: false, truncated: false });
+  await emitContext('branchSummary', { summary: 'branch context', fromId: null });
+  await emitMessage({
+    role: 'toolResult', toolCallId: 'role-call', toolName: 'bash',
+    content: [{ type: 'text', text: 'done' }], isError: false, timestamp: 3,
+  });
+  await emitContext('system', { content: 'additional system instructions' });
+  await emitContext('custom', { customType: 'fixture', content: 'more custom context', display: true });
+  await emitMessage(assistant([{ type: 'text', text: 'Pi 1.1 terminal answer' }], 'stop'));
+  await emitContext('compactionSummary', { summary: 'compacted context', tokensBefore: 100 });
+  await emitContext('system', { content: 'trailing system instructions' });
+  await emitContext('custom', { customType: 'fixture', content: 'trailing custom context', display: false });
+  await emitContext('extensionNotice', { opaque: { arbitrary: true } });
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'malformed-null') console.log('null');
 if (task === 'malformed-content') console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant' } }));
 if (task === 'malformed-user-message') console.log(JSON.stringify({ type: 'message_end', message: {

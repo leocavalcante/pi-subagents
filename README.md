@@ -6,7 +6,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 
 ## Installation
 
-Requires Pi. Tested with Pi 1.0.4. Pi provides the runtime dependencies, so no build step is needed.
+Requires Pi. Tested with Pi 1.0.4 and 1.1.0. Pi provides the runtime dependencies, so no build step is needed.
 
 Install from npm:
 
@@ -315,7 +315,7 @@ npm run check
 npm test
 ```
 
-Set `PI_PACKAGE_DIR` to an npm Pi package directory to test against another SDK version. Standalone binary directories fall back to the local development SDK. The tests use fake child processes and make no model calls. They cover agent discovery and configuration, dispatch, output limits, rendering, process budgets, deadlines, cancellation and shutdown, including POSIX descendants and SIGKILL escalation. GitHub Actions runs the type check and tests on Linux and Windows with Node.js 22 and 24.
+Set `PI_PACKAGE_DIR` to an npm Pi package directory to test against another SDK version. Standalone binary directories fall back to the local development SDK. The tests use fake child processes and make no model calls. They cover agent discovery and configuration, dispatch, output limits, rendering, process budgets, deadlines, cancellation and shutdown, including POSIX descendants and SIGKILL escalation. GitHub Actions runs the type check and tests on Linux and Windows with Node.js 22 and 24 against Pi 1.0.4 and 1.1.0.
 
 On Windows, the project-agent file-symlink boundary test runs when the process can create symbolic links. If Windows denies that privilege (`EPERM` or `EACCES`), that test is skipped with an explanation; enable Developer Mode or grant symbolic-link creation privilege to run it. Other tests, including the junction-based project-directory boundary test, still run. This is separate from the junction-based extension checkout setup above, which avoids requiring symlink privileges.
 
