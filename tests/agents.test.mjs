@@ -106,6 +106,20 @@ test('agent diagnostics are bounded with one omission notice', () => {
   assert.equal(result.diagnostics.at(-1).message, 'Further agent diagnostics omitted.');
 });
 
+test('agent names reject oversized UTF-8 and terminal or bidirectional controls', () => {
+  agent(userDir, 'oversized-name', `name: "${'€'.repeat(86)}"\ndescription: Too many UTF-8 bytes`);
+  agent(userDir, 'terminal-control', 'name: "bad\\u001b[31mname"\ndescription: Terminal control');
+  agent(userDir, 'c1-control', 'name: "bad\\u009bname"\ndescription: C1 terminal control');
+  agent(userDir, 'line-control', 'name: "bad\\nname"\ndescription: Newline');
+  agent(userDir, 'bidi-control', 'name: "bad\\u202ename"\ndescription: Bidirectional control');
+  agent(userDir, 'valid-unicode', 'name: café\ndescription: Valid Unicode name');
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(a => a.name), ['café']);
+  assert.equal(result.diagnostics.length, 5);
+  assert.ok(result.diagnostics.every(d => d.message === 'name must be at most 256 UTF-8 bytes and contain no control or bidirectional formatting characters.'));
+});
+
 test('malformed YAML and invalid definitions do not break discovery', () => {
   agent(userDir, 'bad-yaml', 'name: [unterminated');
   agent(userDir, 'scalar', 'just a scalar');

@@ -1014,6 +1014,13 @@ test('renderers tolerate partial calls and invalid tool argument types', async (
   for (const args of [{ chain: [{}] }, { tasks: [{}] }, { task: 42, agent: {} }]) {
     assert.doesNotThrow(() => definition.renderCall(args, theme, {}).render(80));
   }
+  const rawEscape = String.fromCharCode(27);
+  const invalidNameCall = definition.renderCall({ agent: `unsafe${rawEscape}[31m`, task: 'preview' }, theme, {});
+  const invalidNamePreview = invalidNameCall.render(80).join(String.fromCharCode(10));
+  assert.equal(invalidNamePreview.includes(rawEscape), false);
+  assert.ok(invalidNamePreview.includes('u001b'));
+  const hugeNamePreview = definition.renderCall({ agent: 'x'.repeat(1024 * 1024), task: 'preview' }, theme, {}).render(80);
+  assert.ok(Buffer.byteLength(hugeNamePreview.join(String.fromCharCode(10))) < 512);
   const result = await invoke('subagent', { agent: 'worker', task: 'odd-tool-args' });
   for (const expanded of [false, true]) assert.doesNotThrow(() => definition.renderResult(result, { expanded }, theme, {}).render(80));
   const original = result.details.results[0];
@@ -1034,6 +1041,39 @@ test('all modes and agent names are validated before foreground children start',
     assert.equal(result.isError, true);
   }
   assert.equal(traces().length, 0);
+});
+
+test('agent selectors enforce UTF-8 and control limits before approval or background retention', async () => {
+  const multibyteName = '€'.repeat(86); // 258 UTF-8 bytes, but only 86 schema characters.
+  const schema = tools.get('subagent').definition.parameters;
+  const requests = [
+    { agent: multibyteName, task: 'oversized name' },
+    { tasks: [{ agent: multibyteName, task: 'oversized name' }] },
+    { chain: [{ agent: multibyteName, task: 'oversized name' }] },
+  ];
+  for (const request of requests) assert.equal(Value.Check(schema, request), true);
+  for (const name of [`bad${String.fromCharCode(10)}name`, `bad${String.fromCharCode(10)}`, `bad${String.fromCharCode(27)}[31m`, `bad${String.fromCodePoint(0x202e)}name`]) {
+    assert.equal(Value.Check(schema, { agent: name, task: 'invalid control' }), false);
+  }
+
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async () => { approvals++; return true; } } };
+  for (const request of requests) {
+    const result = await invoke('subagent', { ...request, agentScope: 'project', background: true }, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Agent name must be at most 256 UTF-8 bytes/);
+    assert.equal(JSON.stringify(result).includes(multibyteName), false);
+    assert.equal(result.details.background, undefined);
+  }
+  const controlName = `bad${String.fromCharCode(27)}[31m`;
+  const control = await invoke('subagent', { agent: controlName, task: 'invalid control', agentScope: 'project' }, context);
+  assert.equal(control.isError, true);
+  assert.match(control.content[0].text, /Agent name must be at most 256 UTF-8 bytes/);
+  assert.equal(JSON.stringify(control).includes(controlName), false);
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
 test('working directory arguments reject non-strings and NUL before project approval or spawn', async () => {
@@ -1132,6 +1172,65 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
     assert.deepEqual(project.details.agents.map(a => a.name), ['project']);
     assert.equal(traces().length, 0);
   } finally { rmSync(badFile); }
+});
+
+test('project agent metadata is escaped in listings and trust confirmations', async () => {
+  const projectDir = join(sandbox, 'project/.pi/agents');
+  const hostileName = 'safe `name` [link](https://example.invalid)';
+  const escape = String.fromCharCode(27);
+  const c1 = String.fromCodePoint(0x009b);
+  const hostileDescription = `visible${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
+  const metadataFile = join(projectDir, 'metadata.md');
+  const hostilePathFile = join(projectDir, `path-${escape}.md`);
+  const yamlAgent = (name, description, suffix = '') => [
+    '---',
+    `name: ${JSON.stringify(name)}`,
+    `description: ${JSON.stringify(description)}`,
+    `model: ${JSON.stringify(`fake/${escape}[31m`)}`,
+    `tools: ${JSON.stringify(['read', `custom${String.fromCharCode(10)}${escape}`])}`,
+    suffix,
+    '---',
+    'Untrusted test prompt.',
+    '',
+  ].filter(Boolean).join(String.fromCharCode(10));
+  writeFileSync(metadataFile, yamlAgent(hostileName, hostileDescription));
+  const canUseControlFilename = process.platform !== 'win32';
+  if (canUseControlFilename) writeFileSync(hostilePathFile, yamlAgent('path-safe', 'Path test'));
+  try {
+    const context = { ...ctx(), cwd: join(sandbox, 'project') };
+    const listed = await invoke('subagent_agents', { agentScope: 'project' }, context);
+    const text = listed.content[0].text;
+    assert.equal(text.includes(escape), false);
+    assert.equal(text.includes(String.fromCodePoint(0x202e)), false);
+    assert.equal(text.includes(c1), false);
+    assert.equal(text.split(String.fromCharCode(10)).some(line => line.startsWith('### forged heading')), false);
+    assert.ok(text.includes('u001b'));
+    assert.ok(text.includes('u000a'));
+    assert.equal(listed.details.agents.find(agent => agent.name === hostileName).description, hostileDescription);
+    if (canUseControlFilename) {
+      assert.ok(listed.details.agents.some(agent => agent.filePath === hostilePathFile));
+      assert.equal(text.includes(hostilePathFile), false);
+      const pathLine = text.split(String.fromCharCode(10)).find(line => line.includes('u001b') && line.includes('md'));
+      assert.ok(pathLine.includes('path-'));
+      assert.ok(pathLine.includes('\\u001b'));
+      assert.ok(pathLine.includes('.md'));
+    }
+    assert.deepEqual(listed.structuredContent, listed.details);
+
+    let confirmation = '';
+    const trustContext = { ...context, hasUI: true, isProjectTrusted: () => false,
+      ui: { confirm: async (_title, body) => { confirmation = body; return false; } } };
+    const denied = await invoke('subagent', { agent: hostileName, task: 'must not start', agentScope: 'project' }, trustContext);
+    assert.equal(denied.content[0].text, 'Canceled: project-local agents not approved.');
+    assert.equal(confirmation.includes(escape), false);
+    assert.equal(confirmation.includes(String.fromCodePoint(0x202e)), false);
+    assert.equal(confirmation.includes(hostileName), false);
+    assert.equal(confirmation.includes('Project agents are repo-controlled.'), true);
+    assert.equal(traces().length, 0);
+  } finally {
+    rmSync(metadataFile, { force: true });
+    rmSync(hostilePathFile, { force: true });
+  }
 });
 
 test('project agent path escape diagnostics satisfy the listing output schema', async () => {
@@ -1518,7 +1617,7 @@ test('parallel responses share a total text budget and keep every captured resul
   assert.match(result.content[0].text, /Output truncated/);
   assert.equal(result.details.results.length, 8);
   assert.ok(result.details.results.every(r => r.messages.at(-1).content[0].text.length === 40000));
-  assert.equal(result.content[0].text.match(/### \[worker\] completed/g).length, 8);
+  assert.equal((result.content[0].text.match(/### \[`worker`\] completed/g) ?? []).length, 8);
   const mixed = await invoke('subagent', { tasks: Array.from({ length: 8 }, (_, i) => ({ agent: 'worker', task: i === 7 ? 'large fail' : 'large' })) });
   assert.match(mixed.content[0].text, /7\/8 succeeded/);
   assert.match(mixed.content[0].text, /fixture failure/);

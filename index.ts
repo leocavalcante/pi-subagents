@@ -29,7 +29,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents, THINKING_LEVELS } from "./agents.ts";
+import {
+	AGENT_NAME_PATTERN,
+	MAX_AGENT_NAME_BYTES,
+	type AgentConfig,
+	type AgentScope,
+	discoverAgents,
+	isSafeAgentName,
+	THINKING_LEVELS,
+} from "./agents.ts";
 import { JobManager, ProcessPool, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS, type JobSnapshot, type JobState } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
@@ -46,6 +54,24 @@ const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
+const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
+
+function escapeTerminalControls(value: string): string {
+	return value.replace(UNSAFE_DISPLAY_CHARACTERS,
+		(character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+function displayUntrustedText(value: string): string {
+	const escaped = escapeTerminalControls(value).replace(/`/g, "\\u0060");
+	// A code span prevents metadata from becoming Markdown/HTML; controls and
+	// embedded backticks are escaped first so it cannot break out of the span.
+	const padding = escaped.startsWith(" ") || escaped.endsWith(" ") ? " " : "";
+	return `\`${padding}${escaped}${padding}\``;
+}
+
+function previewAgentName(value: string): string {
+	return escapeTerminalControls(truncateOutput(value, MAX_AGENT_NAME_BYTES, "..."));
+}
 
 function taskByteLength(task: string): number {
 	// UTF-8 bytes are never fewer than UTF-16 code units. Avoid scanning an
@@ -893,6 +919,13 @@ const DispatchOptions = {
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." })),
 };
 
+const AgentNameSchema = Type.String({
+	pattern: AGENT_NAME_PATTERN,
+	minLength: 1,
+	maxLength: MAX_AGENT_NAME_BYTES,
+	description: `Agent name; maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and no terminal or bidirectional controls.`,
+});
+
 function taskTextSchema(description: string) {
 	return Type.String({ maxLength: MAX_TASK_BYTES,
 		description: `${description}. Maximum ${MAX_TASK_BYTES / (1024 * 1024)} MiB UTF-8 per task and ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB total per dispatch.` });
@@ -905,7 +938,7 @@ const WorkingDirectory = Type.String({
 
 const TaskItem = Type.Object({
 	...DispatchOptions,
-	agent: Type.String({ description: "Name of the agent to invoke" }),
+	agent: AgentNameSchema,
 	task: taskTextSchema("Task to delegate to the agent"),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
@@ -915,7 +948,7 @@ const ChainItem = Type.Object({
 	...DispatchOptions,
 	id: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64,
 		description: "Optional unique step ID. Later tasks reference this output with {steps.ID}." })),
-	agent: Type.String({ description: "Name of the agent to invoke" }),
+	agent: AgentNameSchema,
 	task: taskTextSchema("Task with {previous} for the preceding output or {steps.ID} for an earlier named step"),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
@@ -936,11 +969,7 @@ const SubagentParams = Type.Object({
 	),
 	notify: Type.Optional(Type.Boolean({ default: true,
 		description: "Background only: send an automatic completion follow-up. Set false for silent jobs inspected with subagent_jobs. Default: true." })),
-	agent: Type.Optional(
-		Type.String({
-			description: "Name of the agent to invoke (for single mode)",
-		}),
-	),
+	agent: Type.Optional(AgentNameSchema),
 	task: Type.Optional(taskTextSchema("Task to delegate (for single mode)")),
 	tasks: Type.Optional(
 		Type.Array(TaskItem, {
@@ -1068,7 +1097,7 @@ export default function (pi: ExtensionAPI) {
 				{
 					customType: "subagent-background",
 					content: truncateOutput(
-						`Background subagent job ${job.id} ${job.state} (${job.label}).\n\n${output}`,
+						`Background subagent job ${job.id} ${job.state} (${displayUntrustedText(job.label)}).\n\n${output}`,
 					),
 					display: true,
 					details: job,
@@ -1133,13 +1162,13 @@ export default function (pi: ExtensionAPI) {
 			}));
 			const listing = agents.map((a) => {
 				const config = [
-					a.model && `model=${a.model}`,
+					a.model && `model=${displayUntrustedText(a.model)}`,
 					a.thinking && `thinking=${a.thinking}`,
-					a.tools && `tools=${a.tools.length ? a.tools.join(",") : "none"}`,
+					a.tools && `tools=${displayUntrustedText(a.tools.length ? a.tools.join(",") : "none")}`,
 				].filter(Boolean).join("; ");
-				return `${a.name} (${a.source}): ${a.description}${config ? ` [${config}]` : ""}\n  ${a.filePath}`;
+				return `${displayUntrustedText(a.name)} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
 			}).join("\n");
-			const warnings = discovery.diagnostics.map((d) => `${d.filePath}: ${d.message}`).join("\n");
+			const warnings = discovery.diagnostics.map((d) => `${displayUntrustedText(d.filePath)}: ${displayUntrustedText(d.message)}`).join("\n");
 			const details = {
 				agentScope, agents, projectAgentsDir: discovery.projectAgentsDir,
 				diagnostics: discovery.diagnostics.map((diagnostic) => ({ ...diagnostic })),
@@ -1249,7 +1278,7 @@ export default function (pi: ExtensionAPI) {
 					: job.latest?.content.filter((c) => c.type === "text").map((c) => c.text).join("\n\n") ?? "(awaiting output)");
 			const waitNotice = waited?.timedOut ? `Wait timed out. The job is still active; ${job.notify
 				? "completion will arrive automatically." : "no automatic completion message will be sent."}\n` : "";
-			return reply(`${waitNotice}${job.id} ${job.state}: ${job.label}\n\n${output}`, job,
+			return reply(`${waitNotice}${job.id} ${job.state}: ${displayUntrustedText(job.label)}\n\n${output}`, job,
 				{ job: metadata, ...(waited ? { timedOut: waited.timedOut } : {}) });
 		},
 	});
@@ -1307,7 +1336,7 @@ export default function (pi: ExtensionAPI) {
 				});
 
 			if (modeCount !== 1) {
-				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+				const available = agents.map((a) => `${displayUntrustedText(a.name)} (${a.source})`).join(", ") || "none";
 				return {
 					content: [
 						{
@@ -1371,12 +1400,16 @@ export default function (pi: ExtensionAPI) {
 			}
 			let submittedTaskBytes = 0;
 			for (const item of requested) {
+				if (!isSafeAgentName(item.agent)) return {
+					content: [{ type: "text", text: `Agent name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and contain no terminal or bidirectional controls.` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
 				const bytes = taskByteLength(item.task);
 				if (bytes > MAX_TASK_BYTES) return {
 					content: [{ type: "text", text: taskSizeError() }],
 					details: makeDetails(mode)([]), isError: true,
 				};
-				if (!item.agent.trim() || !item.task.trim()) return {
+				if (!item.task.trim()) return {
 					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
@@ -1446,7 +1479,7 @@ export default function (pi: ExtensionAPI) {
 						content: [
 							{
 								type: "text",
-								text: `Unknown agent: "${unknown.agent}". Available agents: ${agents.map((a) => a.name).join(", ") || "none"}.`,
+								text: `Unknown agent: ${displayUntrustedText(unknown.agent)}. Available agents: ${agents.map((a) => displayUntrustedText(a.name)).join(", ") || "none"}.`,
 							},
 						],
 						details: makeDetails(mode)([]),
@@ -1470,8 +1503,8 @@ export default function (pi: ExtensionAPI) {
 					.filter((a): a is AgentConfig => a?.source === "project");
 
 				if (projectAgentsRequested.length > 0) {
-					const names = projectAgentsRequested.map((a) => a.name).join(", ");
-					const dir = discovery.projectAgentsDir ?? "(unknown)";
+					const names = projectAgentsRequested.map((a) => displayUntrustedText(a.name)).join(", ");
+					const dir = displayUntrustedText(discovery.projectAgentsDir ?? "(unknown)");
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
 						`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
@@ -1548,7 +1581,7 @@ export default function (pi: ExtensionAPI) {
 								content: [
 									{
 										type: "text",
-										text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}`,
+										text: `Chain stopped at step ${i + 1} (${displayUntrustedText(step.agent)}): ${errorMsg}`,
 									},
 								],
 								details: makeDetails("chain")(results),
@@ -1643,7 +1676,7 @@ export default function (pi: ExtensionAPI) {
 					const headings = results.map((r) => {
 						const status = isFailedResult(r)
 							? `failed${r.stopReason ? ` (${r.stopReason})` : ""}` : "completed";
-						return `### [${truncateOutput(r.agent, 256, "...")}] ${status}\n\n`;
+						return `### [${displayUntrustedText(truncateOutput(r.agent, 256, "..."))}] ${status}\n\n`;
 					});
 					const overhead = Buffer.byteLength(header + headings.join(separator));
 					const bodyBudget = Math.max(0, Math.floor((MODEL_TEXT_CAP - overhead) / results.length));
@@ -1701,7 +1734,7 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
-				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+				const available = agents.map((a) => `${displayUntrustedText(a.name)} (${a.source})`).join(", ") || "none";
 				return {
 					content: [
 						{
@@ -1726,7 +1759,7 @@ export default function (pi: ExtensionAPI) {
 				content: [
 					{
 						type: "text",
-						text: `Background job ${job.id} started (${label}). ${job.notify
+						text: `Background job ${job.id} started (${displayUntrustedText(label)}). ${job.notify
 							? "Continue your work; results will arrive automatically."
 							: "No automatic completion message will be sent."} Use subagent_jobs to inspect, wait, or cancel.`,
 					},
@@ -1754,7 +1787,7 @@ export default function (pi: ExtensionAPI) {
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
-						theme.fg("accent", stringArg(step?.agent)) +
+						theme.fg("accent", previewAgentName(stringArg(step?.agent))) +
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
@@ -1768,12 +1801,12 @@ export default function (pi: ExtensionAPI) {
 				for (const t of args.tasks.slice(0, 3)) {
 					const task = stringArg(t?.task, "");
 					const preview = task.length > 40 ? `${task.slice(0, 40)}...` : task;
-					text += `\n  ${theme.fg("accent", stringArg(t?.agent))}${theme.fg("dim", ` ${preview}`)}`;
+					text += `\n  ${theme.fg("accent", previewAgentName(stringArg(t?.agent)))}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
-			const agentName = stringArg(args.agent);
+			const agentName = previewAgentName(stringArg(args.agent));
 			const task = stringArg(args.task);
 			const preview = task.length > 60 ? `${task.slice(0, 60)}...` : task;
 			let text =
