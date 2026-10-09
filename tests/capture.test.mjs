@@ -27,6 +27,25 @@ test('oversized JSON records are discarded until LF without losing following rec
   assert.deepEqual(lines, ['valid', 'second']);
 });
 
+test('an oversized record is rejected before slicing its fragment and capture recovers at LF', () => {
+  const text = 'x'.repeat(1024 * 1024) + '\nvalid\n';
+  const slicedLengths = [];
+  const chunk = new String(text);
+  const originalSlice = chunk.slice;
+  chunk.slice = function(start, end) {
+    slicedLengths.push(end === undefined ? this.length - start : end - start);
+    return originalSlice.call(this, start, end);
+  };
+
+  const lines = [];
+  let overflow = 0;
+  const reader = new JsonLineCapture(line => lines.push(line), () => overflow++, 8);
+  reader.append(chunk);
+  assert.equal(overflow, 1);
+  assert.deepEqual(lines, ['valid']);
+  assert.deepEqual(slicedLengths, [5], 'only the following valid fragment should be sliced');
+});
+
 test('an oversized unterminated record is not parsed at end of stream', () => {
   let overflow = 0;
   const reader = new JsonLineCapture(() => assert.fail('oversized line parsed'), () => overflow++, 8);
