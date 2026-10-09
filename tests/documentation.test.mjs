@@ -12,6 +12,12 @@ function section(title) {
   return readme.slice(start, next === -1 ? undefined : next);
 }
 
+test('README documents the minimum Node.js version required by the package', () => {
+  const engine = packageJson.engines?.node;
+  assert.match(engine, /^>=\d+\.\d+\.\d+$/, 'Expected a simple minimum Node.js engine range');
+  assert.ok(readme.includes(`Node.js ${engine.slice(2)} or newer`), `README must document Node.js ${engine}`);
+});
+
 test('README relative file links are included in the npm package', () => {
   const relativeLinks = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
     .map(([, target]) => target.split(/[?#]/, 1)[0])

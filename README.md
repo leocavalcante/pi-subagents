@@ -6,7 +6,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 
 ## Installation
 
-Requires Pi. Tested with Pi 1.0.4 and 1.1.0. Pi provides the runtime dependencies, so no build step is needed.
+Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4 and 1.1.0. Pi provides the runtime dependencies, so no build step is needed.
 
 Install from npm:
 
