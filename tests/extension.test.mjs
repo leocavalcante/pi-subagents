@@ -1518,6 +1518,29 @@ test('output pages reject active jobs and expose failed-job diagnoses after comp
   assert.equal(output.structuredContent.output.processExitCode, 0);
 });
 
+test('invalid UTF-8 child records fail safely and preserve later valid messages', async () => {
+  const job = await finish(await launch({ task: 'invalid-utf8-event' }));
+  assert.equal(job.state, 'failed');
+  const task = job.latest.details.results[0];
+  assert.equal(task.exitCode, 1);
+  assert.equal(task.processExitCode, 0);
+  assert.deepEqual(task.failureContext, {
+    eventType: 'invalid_utf8', record: 2, lastStopReason: 'stop',
+  });
+  assert.deepEqual(task.messages.map(message => message.role), ['assistant', 'assistant']);
+  assert.equal(JSON.stringify(task).includes('DO_NOT_ECHO_INVALID_UTF8_'), false);
+
+  const page = await invoke('subagent_jobs', { action: 'output', jobId: job.id });
+  assert.equal(page.isError, undefined);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, page.structuredContent), true);
+  assert.equal(page.structuredContent.output.failureContext.eventType, 'invalid_utf8');
+  assert.match(page.structuredContent.output.text, /Invalid subagent JSON event: malformed UTF-8/);
+  assert.match(page.structuredContent.output.text, /before invalid UTF-8/);
+  assert.match(page.structuredContent.output.text, /after invalid UTF-8/);
+  assert.equal(page.structuredContent.output.text.includes('DO_NOT_ECHO_INVALID_UTF8_'), false);
+  assert.equal(page.structuredContent.output.text.includes('\uFFFD'), false);
+});
+
 test('failed protocol jobs expose safe context and paginated unverified partial output', async () => {
   const id = await launch({ task: 'protocol-error-after-progress' });
   const job = await finish(id);

@@ -160,7 +160,7 @@ interface UsageStats {
 	turns: number;
 }
 
-type FailureEventType = "invalid_json" | "invalid_event" | "message_end" | "tool_result_end" | "oversized_record" | "process_exit";
+type FailureEventType = "invalid_json" | "invalid_utf8" | "invalid_event" | "message_end" | "tool_result_end" | "oversized_record" | "process_exit";
 type FailureRole = "assistant" | "user" | "toolResult" | "system" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary" | "other";
 type FailureStopReason = "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
 
@@ -740,6 +740,9 @@ async function runSingleAgent(
 				const record = ++recordPosition;
 				setProtocolError(`Subagent JSON record exceeded ${MAX_JSON_RECORD_BYTES / (1024 * 1024)} MiB; oversized record discarded.`,
 					"oversized_record", record);
+			}, MAX_JSON_RECORD_BYTES, () => {
+				const record = ++recordPosition;
+				setProtocolError("Invalid subagent JSON event: malformed UTF-8.", "invalid_utf8", record);
 			});
 			const finish = (code: number | null) => {
 				if (settling || settled) return;
@@ -757,10 +760,9 @@ async function runSingleAgent(
 				else complete();
 			};
 
-			// Preserve UTF-8 characters split across pipe chunks, but bound each record.
-			proc.stdout.setEncoding("utf8");
+			// Keep stdout as bytes so malformed UTF-8 cannot be silently replaced.
 			proc.stderr.setEncoding("utf8");
-			proc.stdout.on("data", (data: string) => reader.append(data));
+			proc.stdout.on("data", (data: Buffer) => reader.append(data));
 			proc.stderr.on("data", (data: string) => {
 				stderr.append(data);
 				currentResult.stderr = stderr.text;
@@ -967,7 +969,7 @@ const UsageSummarySchema = Type.Object({
 	reasoning: Type.Optional(TokenCountSchema),
 });
 const FailureContextSchema = Type.Object({
-	eventType: StringEnum(["invalid_json", "invalid_event", "message_end", "tool_result_end", "oversized_record", "process_exit"] as const),
+	eventType: StringEnum(["invalid_json", "invalid_utf8", "invalid_event", "message_end", "tool_result_end", "oversized_record", "process_exit"] as const),
 	role: Type.Optional(StringEnum(["assistant", "user", "toolResult", "system", "custom", "bashExecution", "branchSummary", "compactionSummary", "other"] as const)),
 	record: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 	lastStopReason: Type.Optional(StringEnum(["stop", "length", "toolUse", "error", "aborted", "deferred"] as const)),

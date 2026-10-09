@@ -14,6 +14,20 @@ test('JSON capture handles chunk boundaries, CRLF, Unicode separators, and final
   assert.deepEqual(lines, ['{"text":"é\u2028\u2029"}\r', 'tail']);
 });
 
+test('byte JSON capture rejects malformed and truncated UTF-8 records, then recovers', () => {
+  const lines = [];
+  let invalid = 0;
+  let overflow = 0;
+  const reader = new JsonLineCapture(line => lines.push(line), () => overflow++, 100, () => invalid++);
+  reader.append(Buffer.concat([Buffer.from('first\nbad '), Buffer.from([0xe2])]));
+  reader.append(Buffer.concat([Buffer.from([0x28, 0xa1]), Buffer.from('\nvalid\n')]));
+  reader.append(Buffer.from([0xf0, 0x9f]));
+  reader.finish();
+  assert.deepEqual(lines, ['first', 'valid']);
+  assert.equal(invalid, 2);
+  assert.equal(overflow, 0);
+});
+
 test('oversized JSON records are discarded until LF without losing following records', () => {
   const lines = [];
   let overflow = 0;

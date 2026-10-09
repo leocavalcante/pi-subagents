@@ -76,6 +76,19 @@ if (task === 'wrong-role-tool-result') console.log(JSON.stringify({ type: 'tool_
 } }));
 if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result_end', message: { role: 'assistant' } }));
 if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
+if (task === 'invalid-utf8-event') {
+  const assistant = text => ({ type: 'message_end', message: {
+    role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop', model: 'fake',
+    usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+  } });
+  await write(process.stdout, JSON.stringify(assistant('before invalid UTF-8')) + '\n');
+  const invalidPrefix = Buffer.from('{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"DO_NOT_ECHO_INVALID_UTF8_');
+  const invalidSuffix = Buffer.from('"}],"stopReason":"stop","model":"fake","usage":{"input":1,"output":1,"totalTokens":2,"cost":{"total":0}}}}\n');
+  await write(process.stdout, Buffer.concat([invalidPrefix, Buffer.from([0xff]), invalidSuffix]));
+  await write(process.stdout, JSON.stringify(assistant('after invalid UTF-8')) + '\n');
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'protocol-error-after-progress') {
   await write(process.stdout, JSON.stringify(toolUseEvent) + '\n');
   await write(process.stdout, JSON.stringify({ type: 'message_end', message: {
