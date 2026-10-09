@@ -35,7 +35,7 @@ import { JsonLineCapture, MessageCapture, TextCapture, MAX_JSON_RECORD_BYTES } f
 import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
 import { MAX_PAGE_BYTES, createOutputPager } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
-import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext } from "./chain.ts";
+import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
@@ -493,6 +493,7 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	expandedTaskTooLarge = false,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -554,7 +555,7 @@ async function runSingleAgent(
 	};
 
 	signal?.throwIfAborted();
-	if (taskByteLength(task) > MAX_TASK_BYTES) {
+	if (expandedTaskTooLarge || taskByteLength(task) > MAX_TASK_BYTES) {
 		currentResult.exitCode = 1;
 		currentResult.errorMessage = taskSizeError();
 		return currentResult;
@@ -1500,7 +1501,10 @@ export default function (pi: ExtensionAPI) {
 
 					for (let i = 0; i < params.chain.length; i++) {
 						const step = params.chain[i];
-						const taskWithContext = substituteChainContext(step.task, previousOutput, namedOutputs);
+						const boundedTask = substituteChainContextBounded(step.task, previousOutput, namedOutputs, MAX_TASK_BYTES);
+						const expandedTaskTooLarge = boundedTask === undefined;
+						// Keep only the bounded template in the failed result if expansion would exceed the cap.
+						const taskWithContext = boundedTask ?? step.task;
 
 						// Create update callback that includes all previous results
 						const chainUpdate: OnUpdateCallback | undefined = onUpdate
@@ -1532,6 +1536,7 @@ export default function (pi: ExtensionAPI) {
 							signal,
 							chainUpdate,
 							makeDetails("chain"),
+							expandedTaskTooLarge,
 						);
 						if (step.id !== undefined) result.stepId = step.id;
 						results.push(result);

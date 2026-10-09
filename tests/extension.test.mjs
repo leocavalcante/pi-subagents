@@ -1299,17 +1299,20 @@ test('named chain outputs reuse earlier full captures alongside previous output 
   assert.ok(updates.some(update => update.details.results.some(step => step.stepId === 'middle')));
 });
 
-test('chain context is capped after substitution without launching an oversized step', async () => {
+test('repeated chain context is rejected before materialization or launching the oversized step', async () => {
+  const template = '{previous}'.repeat(2_000);
   const result = await invoke('subagent', { chain: [
     { agent: 'worker', task: 'huge-final' },
-    { agent: 'worker', task: 'continue: {previous}' },
+    { agent: 'worker', task: template },
   ] });
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /Chain stopped at step 2.*4 MiB UTF-8 size limit/);
   assert.equal(result.details.results.length, 2);
   assert.equal(result.details.results[0].exitCode, 0);
   assert.equal(result.details.results[1].exitCode, 1);
-  assert.ok(Buffer.byteLength(result.details.results[1].task, 'utf8') > 4 * 1024 * 1024);
+  assert.equal(result.details.results[1].task, template, 'Do not retain the oversized expanded context');
+  assert.match(result.details.results[1].errorMessage, /4 MiB UTF-8 size limit/);
+  assert.equal(result.content[0].text.includes('é'), false, 'Do not echo prior output into diagnostics');
   assert.equal(traces().filter(row => row.event === 'start').length, 1);
 });
 
