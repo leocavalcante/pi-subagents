@@ -637,6 +637,12 @@ async function runSingleAgent(
 				}
 			};
 			const terminateGroup = () => {
+				if (process.platform === "win32") {
+					// Windows SIGTERM is a force-termination request; POSIX-style grace and
+					// delayed SIGKILL escalation add no protection on this platform.
+					killGroup("SIGTERM");
+					return;
+				}
 				if (escalation || !killGroup("SIGTERM")) return;
 				// Keep the slot until escalation even if the leader closes early.
 				escalation = new Promise<void>((done) => {

@@ -175,7 +175,7 @@ There is no deadline by default. Values must be whole milliseconds between 1 and
 
 For parallel and chain modes, a top-level `timeoutMs` is the default for each child, not a deadline for the entire batch. An entry's `timeoutMs` overrides that default. Deadlines also work with background execution.
 
-A timeout terminates the child using the same cleanup as cancellation and returns a failed result with `timedOut: true` in details. On POSIX, cleanup signals the child's process group and escalates from SIGTERM to SIGKILL after one second. On Windows, only the direct child is signaled; descendants may continue running after a timeout or cancellation. Cleanup can take an additional second for escalation or pipe closure. Background jobs report `failed`, not `canceled`. Chains stop at the timed-out step; other parallel tasks continue. Explicit user cancellation still reports `canceled`.
+A timeout terminates the child using the same cleanup as cancellation and returns a failed result with `timedOut: true` in details. On POSIX, cleanup signals the child's process group and escalates from SIGTERM to SIGKILL after one second. On Windows, only the direct child is signaled; descendants may continue running after a timeout or cancellation. Windows uses an immediate termination request instead of the POSIX escalation delay. Cleanup may still wait up to one second for inherited pipes to drain. Background jobs report `failed`, not `canceled`. Chains stop at the timed-out step; other parallel tasks continue. Explicit user cancellation still reports `canceled`.
 
 ## Background execution
 
