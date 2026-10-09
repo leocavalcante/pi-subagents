@@ -57,11 +57,11 @@ function hasNonFiniteJsonNumber(value: unknown): boolean {
 	return false;
 }
 
-const MESSAGE_ROLES = new Set(["assistant", "user", "toolResult"]);
+const CAPTURED_MESSAGE_ROLES = new Set(["assistant", "user", "toolResult"]);
 
-/** Message events must use one of the Pi SDK's protocol roles. */
-export function isSupportedMessageRole(role: unknown): boolean {
-	return typeof role === "string" && MESSAGE_ROLES.has(role);
+/** Capture only messages used to build a subagent result; Pi's AgentMessage roles are extensible. */
+export function isCapturedMessageRole(role: unknown): boolean {
+	return typeof role === "string" && CAPTURED_MESSAGE_ROLES.has(role);
 }
 
 const STOP_REASONS = new Set(["stop", "length", "toolUse", "error", "aborted", "deferred"]);

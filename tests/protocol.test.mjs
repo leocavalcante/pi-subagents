@@ -1,8 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { assistantMessageError, parseChildEvent, toolResultMessageError, userMessageError } = await jiti.import('../protocol.ts');
+const { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } = await jiti.import('../protocol.ts');
 const message = extra => ({ content: [{ type: 'text', text: 'answer' }], stopReason: 'stop', ...extra });
+
+test('captures only result-relevant roles while leaving Pi AgentMessage roles extensible', () => {
+  for (const role of ['assistant', 'user', 'toolResult']) assert.equal(isCapturedMessageRole(role), true);
+  for (const role of ['system', 'custom', 'bashExecution', 'branchSummary', 'compactionSummary', 'extensionNotice']) {
+    assert.equal(isCapturedMessageRole(role), false);
+  }
+  assert.equal(isCapturedMessageRole(undefined), false);
+});
 
 test('JSON nesting is bounded without counting brackets inside escaped strings', () => {
   const value = { text: '[{\\\\\\"'.repeat(300), nested: { ok: true } };
