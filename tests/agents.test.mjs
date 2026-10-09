@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { after, beforeEach, test } from 'node:test';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,6 +23,87 @@ after(() => {
   if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
   rmSync(sandbox, { recursive: true, force: true });
+});
+
+test('project agent symlinks to non-regular files are rejected without blocking', { skip: process.platform === 'win32' }, () => {
+  const fifo = join(projectDir, 'agent-pipe');
+  execFileSync('mkfifo', [fifo]);
+  symlinkSync(fifo, join(projectDir, 'linked-pipe.md'));
+  const script = `import { jiti } from ${JSON.stringify(new URL('./pi-runtime.mjs', import.meta.url).href)};\n` +
+    `const { discoverAgents } = await jiti.import(${JSON.stringify(new URL('../agents.ts', import.meta.url).href)});\n` +
+    `process.stdout.write(JSON.stringify(discoverAgents(process.env.AGENT_TEST_CWD, 'project')));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: process.cwd(),
+    env: { ...process.env, PI_CODING_AGENT_DIR: join(sandbox, 'user'), AGENT_TEST_CWD: cwd },
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+  assert.equal(child.error, undefined, `Discovery child must finish: ${child.error?.message}`);
+  assert.equal(child.status, 0, child.stderr);
+  const result = JSON.parse(child.stdout);
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0].message, /regular file/);
+});
+
+test('oversized agent files are skipped without retaining or echoing prompt contents', () => {
+  const secret = 'OVERSIZED_PRIVATE_AGENT_PROMPT';
+  const prefix = `---\nname: oversized\ndescription: Too large\n---\n${secret}`;
+  const content = prefix + 'x'.repeat(512 * 1024 + 1 - Buffer.byteLength(prefix));
+  writeFileSync(join(projectDir, 'oversized.md'), content);
+
+  const result = discoverAgents(cwd, 'project');
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0].message, /512 KiB size limit/);
+  assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
+test('agent directory scanning is bounded even with many unrelated entries', () => {
+  for (let i = 0; i < 4096; i++) writeFileSync(join(userDir, `ignored-${String(i).padStart(4, '0')}.txt`), '');
+  agent(userDir, 'worker', 'name: worker\ndescription: Worker');
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0].message, /4096-entry scan limit/);
+});
+
+test('agent file-count overflow fails closed before loading partial definitions', () => {
+  for (let i = 0; i < 257; i++) {
+    agent(userDir, `agent-${String(i).padStart(3, '0')}`, `name: worker-${i}\ndescription: Worker ${i}`);
+  }
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0].message, /256-definition limit/);
+  assert.match(result.diagnostics[0].message, /no definitions .* loaded/);
+});
+
+test('agent directory content is capped in filename order', () => {
+  const fileBytes = 512 * 1024;
+  const count = 9;
+  for (let i = 0; i < count; i++) {
+    const prefix = `---\nname: worker-${i}\ndescription: Worker ${i}\n---\n`;
+    const content = prefix + 'x'.repeat(fileBytes - Buffer.byteLength(prefix));
+    writeFileSync(join(projectDir, `agent-${String(i).padStart(2, '0')}.md`), content);
+  }
+
+  const result = discoverAgents(cwd, 'project');
+  assert.deepEqual(result.agents.map(a => a.name), Array.from({ length: 8 }, (_, i) => `worker-${i}`));
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0].message, /4 MiB content limit/);
+  assert.ok(result.agents.every(a => Buffer.byteLength(a.systemPrompt) < fileBytes));
+});
+
+test('agent diagnostics are bounded with one omission notice', () => {
+  for (let i = 0; i < 80; i++) writeFileSync(join(userDir, `bad-${String(i).padStart(2, '0')}.md`), '---\nname: [invalid\n---\n');
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 64);
+  assert.equal(result.diagnostics.at(-1).message, 'Further agent diagnostics omitted.');
 });
 
 test('malformed YAML and invalid definitions do not break discovery', () => {

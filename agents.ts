@@ -50,6 +50,26 @@ type AgentFrontmatter = {
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 
+const MAX_AGENT_DIRECTORY_ENTRIES = 4096;
+const MAX_AGENT_FILES = 256;
+const MAX_AGENT_FILE_BYTES = 512 * 1024;
+const MAX_AGENT_DIRECTORY_BYTES = 4 * 1024 * 1024;
+const MAX_AGENT_DIAGNOSTICS = 64;
+
+function addDiagnostic(
+	diagnostics: AgentDiagnostic[],
+	filePath: string,
+	source: "user" | "project",
+	message: string,
+): void {
+	if (diagnostics.length >= MAX_AGENT_DIAGNOSTICS) return;
+	if (diagnostics.length === MAX_AGENT_DIAGNOSTICS - 1) {
+		diagnostics.push({ filePath, source, message: "Further agent diagnostics omitted." });
+		return;
+	}
+	diagnostics.push({ filePath, source, message });
+}
+
 /**
  * Normalize a frontmatter `tools` value to a list of tool names.
  *
@@ -90,11 +110,11 @@ function loadAgentsFromDir(
 			realProjectRoot = fs.realpathSync(projectRoot);
 			const realDir = fs.realpathSync(dir);
 			if (!isPathInside(realProjectRoot, realDir)) {
-				diagnostics.push({ filePath: dir, source, message: "Agent directory resolves outside the project root." });
+				addDiagnostic(diagnostics, dir, source, "Agent directory resolves outside the project root.");
 				return agents;
 			}
 		} catch {
-			diagnostics.push({ filePath: dir, source, message: "Unable to resolve project agent directory safely." });
+			addDiagnostic(diagnostics, dir, source, "Unable to resolve project agent directory safely.");
 			return agents;
 		}
 	}
@@ -103,33 +123,109 @@ function loadAgentsFromDir(
 		return agents;
 	}
 
-	let entries: fs.Dirent[];
+	const entries: fs.Dirent[] = [];
+	let scannedEntries = 0;
+	let tooManyEntries = false;
+	let tooManyFiles = false;
 	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
+		const directory = fs.opendirSync(dir);
+		try {
+			let entry: fs.Dirent | null;
+			while ((entry = directory.readSync()) !== null) {
+				scannedEntries++;
+				if (scannedEntries > MAX_AGENT_DIRECTORY_ENTRIES) {
+					tooManyEntries = true;
+					break;
+				}
+				if (!entry.name.endsWith(".md") || (!entry.isFile() && !entry.isSymbolicLink())) continue;
+				if (entries.length === MAX_AGENT_FILES) {
+					tooManyFiles = true;
+					break;
+				}
+				entries.push(entry);
+			}
+		} finally {
+			try { directory.closeSync(); } catch { /* ignore */ }
+		}
 	} catch {
-		diagnostics.push({ filePath: dir, source, message: "Unable to read agent directory." });
+		addDiagnostic(diagnostics, dir, source, "Unable to read agent directory.");
+		return agents;
+	}
+	if (tooManyEntries) {
+		addDiagnostic(diagnostics, dir, source,
+			`Agent directory exceeds the ${MAX_AGENT_DIRECTORY_ENTRIES}-entry scan limit; no definitions from this directory were loaded.`);
+		return agents;
+	}
+	if (tooManyFiles) {
+		addDiagnostic(diagnostics, dir, source,
+			`Agent directory exceeds the ${MAX_AGENT_FILES}-definition limit; no definitions from this directory were loaded.`);
 		return agents;
 	}
 
+	let totalBytes = 0;
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-		if (!entry.name.endsWith(".md")) continue;
-		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-
 		const filePath = path.join(dir, entry.name);
-		try {
-			let contentPath = filePath;
-			if (realProjectRoot) {
-				try {
-					contentPath = fs.realpathSync(filePath);
-				} catch {
-					throw new Error("Unable to resolve agent file safely.");
-				}
-				if (!isPathInside(realProjectRoot, contentPath)) {
-					diagnostics.push({ filePath, source, message: "Agent file resolves outside the project root." });
-					continue;
-				}
+		let contentPath = filePath;
+		if (realProjectRoot) {
+			try {
+				contentPath = fs.realpathSync(filePath);
+			} catch {
+				addDiagnostic(diagnostics, filePath, source, "Unable to resolve agent file safely.");
+				continue;
 			}
-			const content = fs.readFileSync(contentPath, "utf-8");
+			if (!isPathInside(realProjectRoot, contentPath)) {
+				addDiagnostic(diagnostics, filePath, source, "Agent file resolves outside the project root.");
+				continue;
+			}
+		}
+
+		let content: string;
+		try {
+			let flags = fs.constants.O_RDONLY;
+			if (process.platform !== "win32" && typeof fs.constants.O_NONBLOCK === "number") flags |= fs.constants.O_NONBLOCK;
+			if (process.platform !== "win32" && source === "project" && typeof fs.constants.O_NOFOLLOW === "number") {
+				flags |= fs.constants.O_NOFOLLOW;
+			}
+			const fd = fs.openSync(contentPath, flags);
+			try {
+				const stat = fs.fstatSync(fd);
+				if (!stat.isFile()) throw new Error("Agent definition is not a regular file.");
+				if (stat.size > MAX_AGENT_FILE_BYTES) {
+					throw new Error(`Agent definition exceeds the ${MAX_AGENT_FILE_BYTES / 1024} KiB size limit.`);
+				}
+				const remaining = MAX_AGENT_DIRECTORY_BYTES - totalBytes;
+				if (stat.size > remaining) {
+					addDiagnostic(diagnostics, filePath, source,
+						`Agent directory exceeds the ${MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024)} MiB content limit; remaining definitions were skipped.`);
+					break;
+				}
+				const bytes = Buffer.allocUnsafe(remaining < MAX_AGENT_FILE_BYTES ? remaining + 1 : MAX_AGENT_FILE_BYTES + 1);
+				let length = 0;
+				while (length < bytes.length) {
+					const count = fs.readSync(fd, bytes, length, bytes.length - length, null);
+					if (count === 0) break;
+					length += count;
+				}
+				if (length > MAX_AGENT_FILE_BYTES) {
+					throw new Error(`Agent definition exceeds the ${MAX_AGENT_FILE_BYTES / 1024} KiB size limit.`);
+				}
+				if (length > remaining) {
+					addDiagnostic(diagnostics, filePath, source,
+						`Agent directory exceeds the ${MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024)} MiB content limit; remaining definitions were skipped.`);
+					break;
+				}
+				totalBytes += length;
+				content = bytes.subarray(0, length).toString("utf-8");
+			} finally {
+				fs.closeSync(fd);
+			}
+		} catch (error) {
+			addDiagnostic(diagnostics, filePath, source,
+				error instanceof Error ? error.message : "Unable to load agent.");
+			continue;
+		}
+
+		try {
 			let parsed: ReturnType<typeof parseFrontmatter<AgentFrontmatter>>;
 			try {
 				parsed = parseFrontmatter<AgentFrontmatter>(content);
@@ -165,12 +261,13 @@ function loadAgentsFromDir(
 				filePath,
 			};
 			const previous = sourceFiles.get(agent.name);
-			if (previous) diagnostics.push({ filePath, source,
-				message: `Duplicate agent name. This definition overrides ${previous}.` });
+			if (previous) addDiagnostic(diagnostics, filePath, source,
+				`Duplicate agent name. This definition overrides ${previous}.`);
 			sourceFiles.set(agent.name, filePath);
 			agents.push(agent);
 		} catch (error) {
-			diagnostics.push({ filePath, source, message: error instanceof Error ? error.message : "Unable to load agent." });
+			addDiagnostic(diagnostics, filePath, source,
+				error instanceof Error ? error.message : "Unable to load agent.");
 		}
 	}
 
