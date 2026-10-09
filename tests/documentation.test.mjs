@@ -18,6 +18,13 @@ test('README documents the minimum Node.js version required by the package', () 
   assert.ok(readme.includes(`Node.js ${engine.slice(2)} or newer`), `README must document Node.js ${engine}`);
 });
 
+test('README documents the bounded delegated task input size', () => {
+  const usage = section('Usage');
+  assert.match(usage, /Each task is limited to 4 MiB of UTF-8 text/);
+  assert.match(usage, /all task text submitted in one dispatch is limited to 16 MiB total/);
+  assert.match(usage, /chain context after substitution/);
+});
+
 test('README relative file links are included in the npm package', () => {
   const relativeLinks = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
     .map(([, target]) => target.split(/[?#]/, 1)[0])

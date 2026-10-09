@@ -155,6 +155,7 @@ setTimeout(async () => {
   else {
     const output = task === 'empty-final' ? [] : task === 'blocks' ? ['first block', 'second block']
       : task === 'dollars' ? '$& $$ $` $\' {previous}'
+      : task === 'huge-final' ? 'é'.repeat(2 * 1024 * 1024 + 1)
       : task.includes('large') ? 'é'.repeat(40000) : 'result: ' + task;
     emit(output, task.includes('fail') ? 'error' : 'stop');
     process.exitCode = task.includes('fail') && !task.includes('zero-exit') ? 1 : 0;

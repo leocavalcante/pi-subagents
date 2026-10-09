@@ -44,6 +44,18 @@ const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
 const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
+const MAX_TASK_BYTES = 4 * 1024 * 1024;
+const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
+
+function taskByteLength(task: string): number {
+	// UTF-8 bytes are never fewer than UTF-16 code units. Avoid scanning an
+	// arbitrarily large tool argument when its length already exceeds the cap.
+	return task.length > MAX_TASK_BYTES ? MAX_TASK_BYTES + 1 : Buffer.byteLength(task, "utf8");
+}
+
+function taskSizeError(): string {
+	return `Task exceeds the ${MAX_TASK_BYTES / (1024 * 1024)} MiB UTF-8 size limit.`;
+}
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -542,6 +554,11 @@ async function runSingleAgent(
 	};
 
 	signal?.throwIfAborted();
+	if (taskByteLength(task) > MAX_TASK_BYTES) {
+		currentResult.exitCode = 1;
+		currentResult.errorMessage = taskSizeError();
+		return currentResult;
+	}
 	if (!task.trim()) {
 		currentResult.exitCode = 1;
 		currentResult.errorMessage = "Delegated task is empty after chain context substitution.";
@@ -875,6 +892,11 @@ const DispatchOptions = {
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." })),
 };
 
+function taskTextSchema(description: string) {
+	return Type.String({ maxLength: MAX_TASK_BYTES,
+		description: `${description}. Maximum ${MAX_TASK_BYTES / (1024 * 1024)} MiB UTF-8 per task and ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB total per dispatch.` });
+}
+
 const WorkingDirectory = Type.String({
 	pattern: "^[^\\u0000]*$",
 	description: "Working directory for the agent process; must not contain a NUL character.",
@@ -883,7 +905,7 @@ const WorkingDirectory = Type.String({
 const TaskItem = Type.Object({
 	...DispatchOptions,
 	agent: Type.String({ description: "Name of the agent to invoke" }),
-	task: Type.String({ description: "Task to delegate to the agent" }),
+	task: taskTextSchema("Task to delegate to the agent"),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
 });
@@ -893,9 +915,7 @@ const ChainItem = Type.Object({
 	id: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64,
 		description: "Optional unique step ID. Later tasks reference this output with {steps.ID}." })),
 	agent: Type.String({ description: "Name of the agent to invoke" }),
-	task: Type.String({
-		description: "Task with {previous} for the preceding output or {steps.ID} for an earlier named step",
-	}),
+	task: taskTextSchema("Task with {previous} for the preceding output or {steps.ID} for an earlier named step"),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
 });
@@ -920,7 +940,7 @@ const SubagentParams = Type.Object({
 			description: "Name of the agent to invoke (for single mode)",
 		}),
 	),
-	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
+	task: Type.Optional(taskTextSchema("Task to delegate (for single mode)")),
 	tasks: Type.Optional(
 		Type.Array(TaskItem, {
 			description: "Array of {agent, task} for parallel execution",
@@ -1342,11 +1362,28 @@ export default function (pi: ExtensionAPI) {
 			}
 			const requested = hasChain ? params.chain! : hasTasks ? params.tasks! : [{ agent: params.agent!, task: params.task! }];
 			if (!requested.length || requested.some((item) =>
-				typeof item?.agent !== "string" || !item.agent.trim() || typeof item?.task !== "string" || !item.task.trim())) {
+				typeof item?.agent !== "string" || typeof item?.task !== "string")) {
 				return {
 					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
+			}
+			let submittedTaskBytes = 0;
+			for (const item of requested) {
+				const bytes = taskByteLength(item.task);
+				if (bytes > MAX_TASK_BYTES) return {
+					content: [{ type: "text", text: taskSizeError() }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				if (!item.agent.trim() || !item.task.trim()) return {
+					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				if (bytes > MAX_DISPATCH_TASK_BYTES - submittedTaskBytes) return {
+					content: [{ type: "text", text: `Combined task text exceeds the ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB UTF-8 size limit.` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				submittedTaskBytes += bytes;
 			}
 			const referenceError = params.chain ? validateChainReferences(params.chain) : undefined;
 			if (referenceError) return {

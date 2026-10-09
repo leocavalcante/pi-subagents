@@ -1069,6 +1069,45 @@ test('large tasks use stdin and relative cwd resolves from the parent session', 
   assert.equal(child.cwd, join(sandbox, 'project'));
 });
 
+test('task input limits use UTF-8 bytes and reject oversized dispatches before approval or job creation', async () => {
+  const maxTaskBytes = 4 * 1024 * 1024;
+  const maxDispatchBytes = 16 * 1024 * 1024;
+  const multibyteTask = '€'.repeat(Math.floor(maxTaskBytes / 3) + 1);
+  assert.ok(multibyteTask.length < maxTaskBytes, 'The schema character count is below the byte cap');
+  assert.ok(Buffer.byteLength(multibyteTask, 'utf8') > maxTaskBytes);
+
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async () => { approvals++; return true; } } };
+  const schema = tools.get('subagent').definition.parameters;
+  const invalid = [
+    { agent: 'project', task: multibyteTask, agentScope: 'project', background: true },
+    { tasks: [{ agent: 'project', task: multibyteTask }], agentScope: 'project', background: true },
+    { chain: [{ agent: 'project', task: multibyteTask }], agentScope: 'project', background: true },
+  ];
+  for (const params of invalid) {
+    assert.equal(Value.Check(schema, params), true, 'Schema character limits must not replace byte validation');
+    const result = await invoke('subagent', params, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /4 MiB UTF-8 size limit/);
+    assert.equal(JSON.stringify(result).includes(multibyteTask), false);
+    assert.equal(result.details.background, undefined);
+  }
+
+  const atLimit = 'x'.repeat(maxTaskBytes);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: atLimit }), true);
+  const overDispatch = { tasks: Array.from({ length: 5 }, () => ({ agent: 'project', task: atLimit })),
+    agentScope: 'project', background: true };
+  assert.equal(Value.Check(schema, overDispatch), true);
+  const combined = await invoke('subagent', overDispatch, context);
+  assert.equal(combined.isError, true);
+  assert.match(combined.content[0].text, new RegExp(`${maxDispatchBytes / (1024 * 1024)} MiB UTF-8 size limit`));
+  assert.equal(JSON.stringify(combined).includes(atLimit), false);
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+});
+
 test('spawn errors remain inspectable and release process slots', async () => {
   const id = await launch({ cwd: join(sandbox, 'does-not-exist') });
   const failed = await finish(id);
@@ -1258,6 +1297,20 @@ test('named chain outputs reuse earlier full captures alongside previous output 
   const dollars = "$& $$ $` $' {previous}";
   assert.equal(tasks[2], `earlier=first block\n\nsecond block; recent=${dollars}; named=${dollars}`);
   assert.ok(updates.some(update => update.details.results.some(step => step.stepId === 'middle')));
+});
+
+test('chain context is capped after substitution without launching an oversized step', async () => {
+  const result = await invoke('subagent', { chain: [
+    { agent: 'worker', task: 'huge-final' },
+    { agent: 'worker', task: 'continue: {previous}' },
+  ] });
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Chain stopped at step 2.*4 MiB UTF-8 size limit/);
+  assert.equal(result.details.results.length, 2);
+  assert.equal(result.details.results[0].exitCode, 0);
+  assert.equal(result.details.results[1].exitCode, 1);
+  assert.ok(Buffer.byteLength(result.details.results[1].task, 'utf8') > 4 * 1024 * 1024);
+  assert.equal(traces().filter(row => row.event === 'start').length, 1);
 });
 
 test('named outputs work in silent background chains and output pages expose step IDs', async () => {
