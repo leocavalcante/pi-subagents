@@ -112,7 +112,7 @@ The `subagent` tool accepts exactly one mode. Empty arrays, blank tasks, partial
 
 At the first chain step, `{previous}` is an empty string. A first task containing only that placeholder is rejected before approval or launch. If a later substitution makes the task blank, the chain stops at that step without starting another child.
 
-Use `cwd` to set a working directory. Relative paths resolve from the parent session's working directory. Parallel and chain entries accept their own `cwd`. Tasks reach children through stdin, so prompts do not depend on the operating system's command-line argument limit. Each task is limited to 4 MiB of UTF-8 text, including chain context after substitution; all task text submitted in one dispatch is limited to 16 MiB total.
+Use `cwd` to set a working directory. Relative paths resolve from the parent session's working directory. Parallel and chain entries accept their own `cwd`. Tasks reach children through stdin, so prompts do not depend on the operating system's command-line argument limit. Each task is limited to 4 MiB of UTF-8 text, including chain context after substitution; all task text submitted in one dispatch is limited to 16 MiB total. Expanded chain task text is also limited to 16 MiB total across all steps, checked before each substitution is allocated.
 
 Foreground execution is the default. Progress streams into the parent session. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Model-facing text is capped at 50 KiB per response, including headers and truncation notices. The same limit applies to progress updates, single tasks, chains, and entire parallel batches. Parallel tasks share the available text budget so every task's status remains visible. Captured results remain in tool details, and chains pass the full captured final text to the next step.
 
@@ -289,9 +289,9 @@ Each child has bounded output capture:
 
 - JSONL records can be up to 8 MiB in UTF-8. An oversized record fails the task, is discarded through the next newline, and does not stop stream draining.
 - Stderr retains its first 64 KiB, including a truncation notice. Further stderr is drained and discarded.
-- Message history retains at most 128 recent messages and 16 MiB of source JSON records. Evicting earlier messages does not change aggregate usage totals.
+- Message history retains at most 128 recent messages and 16 MiB of source JSON records per task. Parallel batches and chains share an additional 32 MiB aggregate history budget, distributed across their tasks/steps; a single-task dispatch keeps the 16 MiB per-task limit.
 
-Results and tool details report capture truncation. These are capture limits, separate from the 50 KiB model-visible output limit shared across all text blocks in one response. Discarded records and evicted history are not preserved elsewhere.
+Results and tool details report capture truncation. If a final assistant message cannot fit its task's allocated history budget, that task fails rather than passing an incomplete or empty result into a chain. These are capture limits, separate from the 50 KiB model-visible output limit shared across all text blocks in one response. Discarded records and evicted history are not preserved elsewhere.
 
 Pre-spawn failures, such as an unwritable prompt file or a synchronous spawn error, return a failed task result with the setup phase and a safe error code. They preserve earlier chain results and let independent batch tasks continue. Cancellation still aborts the operation. Raw setup-error messages are not exposed because they may contain private prompt data.
 

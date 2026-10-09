@@ -23,6 +23,14 @@ test('README documents the bounded delegated task input size', () => {
   assert.match(usage, /Each task is limited to 4 MiB of UTF-8 text/);
   assert.match(usage, /all task text submitted in one dispatch is limited to 16 MiB total/);
   assert.match(usage, /chain context after substitution/);
+  assert.match(usage, /Expanded chain task text is also limited to 16 MiB total across all steps/);
+});
+
+test('README documents aggregate capture limits for parallel and chained results', () => {
+  const capture = section('Output capture and cleanup');
+  assert.match(capture, /16 MiB of source JSON records per task/);
+  assert.match(capture, /parallel batches and chains share an additional 32 MiB aggregate history budget/i);
+  assert.match(capture, /final assistant message cannot fit its task's allocated history budget, that task fails/);
 });
 
 test('README relative file links are included in the npm package', () => {
