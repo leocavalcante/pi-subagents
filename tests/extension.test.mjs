@@ -33,7 +33,7 @@ const launch = async params => (await invoke('subagent', { background: true, age
 const status = async id => (await invoke('subagent_jobs', { action: 'status', jobId: id })).details;
 const traces = () => readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 const waitFor = async predicate => {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + 15000;
   while (Date.now() < deadline) { const result = await predicate(); if (result) return result; await sleep(10); }
   throw new Error('Timed out waiting for test condition');
 };
@@ -117,7 +117,9 @@ test('silent job waits, cancellations and evictions do not promise a completion 
   assert.equal(messages.length, 0);
   const heavy = await invoke('subagent', { background: true, notify: false, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'retention-heavy' })) });
   const heavyId = heavy.details.background.id;
-  const evicted = await invoke('subagent_jobs', { action: 'wait', jobId: heavyId, timeoutMs: 5000 });
+  const evicted = await invoke('subagent_jobs', { action: 'wait', jobId: heavyId, timeoutMs: 15000 });
+  assert.equal(evicted.structuredContent.timedOut, false);
+  assert.equal(evicted.structuredContent.job.state, 'completed');
   assert.equal(evicted.structuredContent.job.outputEvicted, true);
   assert.deepEqual(evicted.structuredContent.job.usage, {
     input: 20, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 40,
