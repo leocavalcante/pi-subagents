@@ -1498,15 +1498,65 @@ test('output pages reject active jobs and expose failed-job diagnoses after comp
   const active = await invoke('subagent_jobs', { action: 'output', jobId: id });
   assert.equal(active.isError, true);
   assert.match(active.structuredContent.error, /finished job/);
+  await waitFor(async () => (await status(id)).latest?.details?.results[0]?.messages?.length);
   const canceled = await invoke('subagent_jobs', { action: 'cancel', jobId: id });
   assert.equal(canceled.structuredContent.job.id, id);
   await finish(id);
+  const canceledOutput = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.equal(canceledOutput.structuredContent.output.partial, true);
+  assert.match(canceledOutput.structuredContent.output.text, /Partial, unverified output/);
   const failed = await launch({ task: 'zero-exit fail' });
   await finish(failed);
   const output = await invoke('subagent_jobs', { action: 'output', jobId: failed });
   assert.notEqual(output.isError, true, 'Reading a failed task is not an inspection failure');
   assert.equal(output.structuredContent.job.state, 'failed');
-  assert.equal(output.structuredContent.output.text, 'fixture failure');
+  assert.match(output.structuredContent.output.text, /fixture failure/);
+  assert.match(output.structuredContent.output.text, /Partial, unverified output/);
+  assert.equal(output.structuredContent.output.partial, true);
+  assert.equal(output.structuredContent.output.exitCode, 0);
+  assert.equal(output.structuredContent.output.processExitCode, 0);
+});
+
+test('failed protocol jobs expose safe context and paginated unverified partial output', async () => {
+  const id = await launch({ task: 'protocol-error-after-progress' });
+  const job = await finish(id);
+  assert.equal(job.state, 'failed');
+  const task = job.latest.details.results[0];
+  assert.equal(task.exitCode, 1, 'A protocol violation remains a task failure');
+  assert.equal(task.processExitCode, 0, "The child's raw process status remains separately available");
+  assert.deepEqual(task.failureContext, {
+    eventType: 'tool_result_end', role: 'other', record: 4, lastStopReason: 'stop',
+  });
+  assert.deepEqual(task.messages.map(message => message.role), ['assistant', 'toolResult', 'assistant']);
+  assert.equal(JSON.stringify(task).includes('DO_NOT_ECHO_EVENT_PAYLOAD'), false,
+    'The invalid event is rejected before capture');
+
+  let offset = 0;
+  let text = '';
+  for (;;) {
+    const page = await invoke('subagent_jobs', { action: 'output', jobId: id, offset, limit: 64 });
+    assert.notEqual(page.isError, true);
+    assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, page.structuredContent), true);
+    const output = page.structuredContent.output;
+    assert.equal(output.partial, true);
+    assert.equal(output.exitCode, 1);
+    assert.equal(output.processExitCode, 0);
+    assert.deepEqual(output.failureContext, task.failureContext);
+    assert.equal(output.offset, offset);
+    assert.ok(Buffer.byteLength(output.text) <= 64);
+    text += output.text;
+    if (output.nextOffset === null) break;
+    assert.ok(output.nextOffset > offset);
+    offset = output.nextOffset;
+  }
+  assert.match(text, /Invalid subagent JSON event: tool result event must contain a tool result message/);
+  assert.match(text, /Failure context: event=tool_result_end; role=other; record=4; lastStopReason=stop; processExitCode=0/);
+  assert.match(text, /Partial, unverified output from failed task/);
+  assert.match(text, /tool progress café/);
+  assert.match(text, /partial answer — résumé/);
+  assert.equal(text.includes('DO_NOT_ECHO_EVENT_PAYLOAD'), false);
+  assert.equal(text.includes('protocol-error-after-progress'), false, 'The task prompt is not echoed in protocol diagnostics');
+  assert.equal(text.includes('\uFFFD'), false, 'UTF-8 pagination must not split captured text');
 });
 
 test('invalid output queries do not mutate jobs or launch children', async () => {

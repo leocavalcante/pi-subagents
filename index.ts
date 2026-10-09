@@ -160,11 +160,24 @@ interface UsageStats {
 	turns: number;
 }
 
+type FailureEventType = "invalid_json" | "invalid_event" | "message_end" | "tool_result_end" | "oversized_record" | "process_exit";
+type FailureRole = "assistant" | "user" | "toolResult" | "system" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary" | "other";
+type FailureStopReason = "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
+
+interface FailureContext {
+	eventType: FailureEventType;
+	role?: FailureRole;
+	record?: number;
+	lastStopReason?: FailureStopReason;
+}
+
 interface SingleResult {
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
 	task: string;
 	exitCode: number;
+	processExitCode?: number | null;
+	failureContext?: FailureContext;
 	messages: Message[];
 	stderr: string;
 	usage: UsageStats;
@@ -232,12 +245,58 @@ function getFinalOutput(messages: Message[]): string {
 	return "";
 }
 
+function getPartialOutput(messages: Message[]): string {
+	const blocks: string[] = [];
+	for (const message of messages) {
+		if (message.role === "assistant") {
+			const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n\n");
+			if (text) blocks.push(`Assistant:\n${text}`);
+		} else if (message.role === "toolResult") {
+			const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n\n");
+			if (text) blocks.push(`Tool result:\n${text}`);
+		}
+	}
+	return blocks.join("\n\n");
+}
+
+function safeFailureRole(role: unknown): FailureRole | undefined {
+	if (typeof role !== "string") return undefined;
+	switch (role) {
+		case "assistant": case "user": case "toolResult": case "system": case "custom":
+		case "bashExecution": case "branchSummary": case "compactionSummary":
+			return role;
+		default:
+			// Never echo an arbitrary child-provided role into diagnostics.
+			return "other";
+	}
+}
+
+function formatFailureContext(result: SingleResult): string {
+	const context = result.failureContext;
+	if (!context && result.processExitCode === undefined) return "";
+	const parts: string[] = [];
+	if (context) {
+		parts.push(`event=${context.eventType}`);
+		if (context.role) parts.push(`role=${context.role}`);
+		if (context.record !== undefined) parts.push(`record=${context.record}`);
+		if (context.lastStopReason) parts.push(`lastStopReason=${context.lastStopReason}`);
+	}
+	if (result.processExitCode !== undefined) {
+		parts.push(`processExitCode=${result.processExitCode === null ? "null" : result.processExitCode}`);
+	}
+	return `[Failure context: ${parts.join("; ")}]`;
+}
+
 function isFailedResult(result: SingleResult): boolean {
 	return (
 		(result.exitCode !== 0 && result.exitCode !== -1) ||
 		result.stopReason === "error" ||
 		result.stopReason === "aborted"
 	);
+}
+
+function isPartialResult(result: SingleResult): boolean {
+	return result.exitCode === -1 || isFailedResult(result);
 }
 
 function getCaptureNotice(result: SingleResult): string {
@@ -249,11 +308,21 @@ function getCaptureNotice(result: SingleResult): string {
 }
 
 function getResultOutput(result: SingleResult): string {
-	const output = isFailedResult(result)
+	const failed = isFailedResult(result);
+	const partial = isPartialResult(result);
+	const output = failed
 		? result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)"
 		: getFinalOutput(result.messages) || "(no output)";
+	const sections = [output];
+	if (partial) {
+		const context = formatFailureContext(result);
+		if (context) sections.push(context);
+		const partial = getPartialOutput(result.messages);
+		if (partial) sections.push(`[Partial, unverified output from failed task]\n\n${partial}`);
+	}
 	const notice = getCaptureNotice(result);
-	return output + (notice ? `\n\n${notice}` : "");
+	if (notice) sections.push(notice);
+	return sections.join("\n\n");
 }
 
 // Keep at most one encoded output alive. The weak key lets finished-job
@@ -510,6 +579,18 @@ async function runSingleAgent(
 		let wasAborted = false;
 		let timedOut = false;
 		let protocolError: string | undefined;
+		let recordPosition = 0;
+		const setProtocolError = (message: string, eventType: FailureEventType, record?: number, role?: unknown) => {
+			if (protocolError) return; // Preserve the first malformed record and its causal context.
+			protocolError = message;
+			const safeRole = safeFailureRole(role);
+			currentResult.failureContext = {
+				eventType,
+				...(safeRole ? { role: safeRole } : {}),
+				...(record !== undefined ? { record } : {}),
+				...(currentResult.stopReason ? { lastStopReason: currentResult.stopReason as FailureStopReason } : {}),
+			};
+		};
 		const history = new MessageCapture<Message>();
 		const stderr = new TextCapture();
 		currentResult.capture = {};
@@ -575,27 +656,31 @@ async function runSingleAgent(
 			};
 
 			const processLine = (line: string) => {
+				const record = ++recordPosition;
 				if (!line.trim()) return;
 				let event: any;
 				try {
 					event = parseChildEvent(line);
 				} catch (error) {
-					protocolError = error instanceof RangeError ? error.message : "Invalid subagent JSON event: malformed JSON.";
+					setProtocolError(error instanceof RangeError ? error.message : "Invalid subagent JSON event: malformed JSON.", "invalid_json", record);
 					return;
 				}
 
 				if (!event || typeof event !== "object" || Array.isArray(event)) {
-					protocolError = "Invalid subagent JSON event: expected an object.";
+					setProtocolError("Invalid subagent JSON event: expected an object.", "invalid_event", record);
 					return;
 				}
 				const isMessageEnd = event.type === "message_end" || event.type === "tool_result_end";
 				if (isMessageEnd && (!event.message || typeof event.message !== "object" ||
 					Array.isArray(event.message) || typeof event.message.role !== "string")) {
-					protocolError = "Invalid subagent JSON event: malformed message.";
+					setProtocolError("Invalid subagent JSON event: malformed message.",
+						event.type === "tool_result_end" ? "tool_result_end" : "message_end", record,
+						event.message?.role);
 					return;
 				}
 				if (event.type === "tool_result_end" && event.message.role !== "toolResult") {
-					protocolError = "Invalid subagent JSON event: tool result event must contain a tool result message.";
+					setProtocolError("Invalid subagent JSON event: tool result event must contain a tool result message.",
+						"tool_result_end", record, event.message.role);
 					return;
 				}
 				if (isMessageEnd && isCapturedMessageRole(event.message.role)) {
@@ -603,7 +688,9 @@ async function runSingleAgent(
 						: event.message.role === "toolResult" ? toolResultMessageError(event.message)
 							: userMessageError(event.message);
 					if (error) {
-						protocolError = `Invalid subagent JSON event: ${error}.`;
+						setProtocolError(`Invalid subagent JSON event: ${error}.`,
+							event.type === "tool_result_end" ? "tool_result_end" : "message_end", record,
+							event.message.role);
 						return;
 					}
 				}
@@ -619,7 +706,8 @@ async function runSingleAgent(
 								cacheWrite: usage.cacheWrite, cost: usage.cost.total,
 							});
 						} catch (error) {
-							protocolError = error instanceof Error ? error.message : "Malformed subagent usage.";
+							setProtocolError(error instanceof Error ? error.message : "Malformed subagent usage.",
+								"message_end", record, msg.role);
 							return;
 						}
 					}
@@ -649,7 +737,9 @@ async function runSingleAgent(
 			};
 
 			const reader = new JsonLineCapture(processLine, () => {
-				protocolError = `Subagent JSON record exceeded ${MAX_JSON_RECORD_BYTES / (1024 * 1024)} MiB; oversized record discarded.`;
+				const record = ++recordPosition;
+				setProtocolError(`Subagent JSON record exceeded ${MAX_JSON_RECORD_BYTES / (1024 * 1024)} MiB; oversized record discarded.`,
+					"oversized_record", record);
 			});
 			const finish = (code: number | null) => {
 				if (settling || settled) return;
@@ -679,6 +769,7 @@ async function runSingleAgent(
 
 			proc.on("exit", (code) => {
 				leaderExited = true;
+				currentResult.processExitCode = code;
 				clearTimeout(deadlineTimer);
 				// close also waits for inherited pipe handles. Give normal output a
 				// drain window, then clean up descendants and close our pipe ends.
@@ -726,11 +817,11 @@ async function runSingleAgent(
 			else signal?.addEventListener("abort", killProc, { once: true });
 		});
 
-		if (exitCode === 0 && !wasAborted && !timedOut) {
+		if (exitCode === 0 && !wasAborted && !timedOut && !protocolError) {
 			if (currentResult.usage.turns === 0) {
-				protocolError ??= "Subagent exited without a completed assistant message.";
+				setProtocolError("Subagent exited without a completed assistant message.", "process_exit");
 			} else if (currentResult.stopReason === "toolUse") {
-				protocolError ??= "Subagent exited after a tool-use response without a final assistant response.";
+				setProtocolError("Subagent exited after a tool-use response without a final assistant response.", "process_exit");
 			}
 		}
 		currentResult.exitCode = protocolError || timedOut ? 1 : exitCode;
@@ -875,6 +966,12 @@ const UsageSummarySchema = Type.Object({
 	cacheWrite1h: Type.Optional(TokenCountSchema),
 	reasoning: Type.Optional(TokenCountSchema),
 });
+const FailureContextSchema = Type.Object({
+	eventType: StringEnum(["invalid_json", "invalid_event", "message_end", "tool_result_end", "oversized_record", "process_exit"] as const),
+	role: Type.Optional(StringEnum(["assistant", "user", "toolResult", "system", "custom", "bashExecution", "branchSummary", "compactionSummary", "other"] as const)),
+	record: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+	lastStopReason: Type.Optional(StringEnum(["stop", "length", "toolUse", "error", "aborted", "deferred"] as const)),
+});
 const JobMetadataSchema = Type.Object({
 	id: Type.String(), label: Type.String(), notify: Type.Boolean(),
 	state: StringEnum(["running", "canceling", "completed", "failed", "canceled"] as const),
@@ -887,7 +984,9 @@ const JobResponseSchema = Type.Object({
 	jobs: Type.Optional(Type.Array(JobMetadataSchema)),
 	job: Type.Optional(JobMetadataSchema),
 	output: Type.Optional(Type.Object({
-		taskIndex: Type.Integer(), agent: Type.String(), exitCode: Type.Integer(), stepId: Type.Optional(Type.String()),
+		taskIndex: Type.Integer(), agent: Type.String(), exitCode: Type.Integer(),
+		processExitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+		partial: Type.Boolean(), failureContext: Type.Optional(FailureContextSchema), stepId: Type.Optional(Type.String()),
 		text: Type.String(), offset: Type.Integer(), totalBytes: Type.Integer(),
 		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
 	})),
@@ -1032,7 +1131,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
-		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job. Use output to page through a finished task's captured text or failure diagnosis. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
+		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job. Use output to page through a finished task's captured text, failure diagnosis, and any partial, unverified assistant/tool output. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
 			action: JobActionSchema,
 			jobId: Type.Optional(Type.String({ description: "Job ID required except for list and clear." })),
@@ -1102,6 +1201,9 @@ export default function (pi: ExtensionAPI) {
 				try {
 					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384),
 						taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode,
+						...(task.processExitCode !== undefined ? { processExitCode: task.processExitCode } : {}),
+						partial: isPartialResult(task),
+						...(task.failureContext ? { failureContext: task.failureContext } : {}),
 						...(task.stepId !== undefined ? { stepId: task.stepId } : {}) };
 					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;
 					return reply(`${job.id} task ${taskIndex} [${output.agent}] bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
