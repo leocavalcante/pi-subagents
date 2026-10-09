@@ -76,6 +76,22 @@ if (task === 'wrong-role-tool-result') console.log(JSON.stringify({ type: 'tool_
 } }));
 if (task === 'malformed-legacy') console.log(JSON.stringify({ type: 'tool_result_end', message: { role: 'assistant' } }));
 if (task === 'malformed-message') console.log(JSON.stringify({ type: 'message_end', message: [] }));
+if (task === 'protocol-error-after-progress') {
+  await write(process.stdout, JSON.stringify(toolUseEvent) + '\n');
+  await write(process.stdout, JSON.stringify({ type: 'message_end', message: {
+    role: 'toolResult', toolCallId: 'c1', toolName: 'bash',
+    content: [{ type: 'text', text: 'tool progress café' }], isError: false,
+  } }) + '\n');
+  await write(process.stdout, JSON.stringify({ type: 'message_end', message: {
+    role: 'assistant', content: [{ type: 'text', text: 'partial answer — résumé' }],
+    stopReason: 'stop', model: 'fake', usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+  } }) + '\n');
+  await write(process.stdout, JSON.stringify({ type: 'tool_result_end', message: {
+    role: 'DO_NOT_ECHO_EVENT_PAYLOAD', content: [{ type: 'text', text: 'invalid tool result' }], isError: false,
+  } }) + '\n');
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'documented-message-roles') {
   const emitMessage = message => write(process.stdout, JSON.stringify({ type: 'message_end', message }) + '\n');
   const emitContext = async (role, fields = {}) => emitMessage({ role, timestamp: 1, ...fields });
