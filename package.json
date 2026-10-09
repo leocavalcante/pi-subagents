@@ -27,6 +27,7 @@
 		"usage.ts",
 		"chain.ts",
 		"CONTRIBUTING.md",
+		"SECURITY.md",
 		"LICENSE",
 		"README.md"
 	],
