@@ -28,6 +28,7 @@ test('README documents bounded model selectors and tool allowlists', () => {
   const overrides = section('Model and thinking overrides');
   assert.match(agents, /Model selectors are limited to 512 UTF-8 bytes and reject control characters/);
   assert.match(agents, /Tool arrays are limited to 256 entries; comma-separated values and the normalized `--tools` argument are each capped at 4 KiB of UTF-8 text/);
+  assert.match(agents, /Array entries cannot contain commas or control characters/);
   assert.match(overrides, /Model selectors .* limited to 512 UTF-8 bytes without control characters/);
 });
 
