@@ -801,7 +801,8 @@ test('Windows cancellation and deadlines skip the POSIX SIGKILL grace timer', { 
     'Cancellation should schedule only the bounded inherited-pipe drain timer');
 
   const beforeTimeout = graceTimers.length;
-  const timedOut = await launch({ task: 'delay=10000 windows timeout', timeoutMs: 100 });
+  // Allow the child to start on loaded Windows runners before testing the deadline.
+  const timedOut = await launch({ task: 'delay=10000 windows timeout', timeoutMs: 2000 });
   await waitFor(() => traces().some(t => t.event === 'start' && t.task.includes('windows timeout')));
   const result = await finish(timedOut);
   assert.equal(result.state, 'failed');
