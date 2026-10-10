@@ -2305,6 +2305,51 @@ test('per-call model and thinking overrides take precedence without broadening t
   assert.equal(last.thinking, 'off');
 });
 
+test('thinking null ignores agent and batch defaults while inheriting parent settings only with an inherited model', async () => {
+  const definition = tools.get('subagent').definition;
+  assert.equal(Value.Check(definition.parameters, { agent: 'thinking-default', task: 'null thinking', thinking: null }), true);
+  assert.equal(Value.Check(definition.parameters, { thinking: 'medium', tasks: [
+    { agent: 'thinking-default', task: 'nested null thinking', thinking: null },
+  ] }), true);
+  assert.equal(Value.Check(definition.parameters, { thinking: 'medium', chain: [
+    { agent: 'thinking-default', task: 'chain null thinking', thinking: null },
+  ] }), true);
+
+  const file = join(sandbox, 'agent/agents/thinking-default.md');
+  writeFileSync(file, '---\nname: thinking-default\ndescription: Thinking defaults\nthinking: low\n---\nThinking test instructions.\n');
+  try {
+    await invoke('subagent', { agent: 'thinking-default', task: 'configured thinking' });
+    assert.equal(traces().filter(entry => entry.event === 'start').at(-1).thinking, 'low');
+
+    await invoke('subagent', { agent: 'thinking-default', task: 'null inherits parent thinking', thinking: null });
+    const inherited = traces().filter(entry => entry.event === 'start').at(-1);
+    assert.equal(inherited.model, 'fake/parent');
+    assert.equal(inherited.thinking, 'high');
+
+    await invoke('subagent', { agent: 'thinking-default', task: 'null leaves explicit model thinking alone', model: 'fake/explicit:low', thinking: null });
+    const explicit = traces().filter(entry => entry.event === 'start').at(-1);
+    assert.equal(explicit.model, 'fake/explicit:low');
+    assert.equal(explicit.thinking, undefined, 'Pi should use the explicit model suffix/default');
+
+    await invoke('subagent', { model: 'fake/batch', thinking: 'medium', tasks: [
+      { agent: 'thinking-default', task: 'parallel null thinking', thinking: null },
+      { agent: 'thinking-default', task: 'parallel inherited thinking' },
+    ] });
+    const parallel = traces().filter(entry => entry.event === 'start');
+    assert.equal(parallel.find(entry => entry.task === 'parallel null thinking').thinking, undefined,
+      'entry null should override batch thinking and leave the explicit batch model unmodified');
+    assert.equal(parallel.find(entry => entry.task === 'parallel inherited thinking').thinking, 'medium');
+
+    await invoke('subagent', { thinking: 'medium', chain: [
+      { agent: 'thinking-default', task: 'chain null thinking', thinking: null },
+      { agent: 'thinking-default', task: 'chain batch thinking' },
+    ] });
+    const chain = traces().filter(entry => entry.event === 'start');
+    assert.equal(chain.find(entry => entry.task === 'chain null thinking').thinking, 'high');
+    assert.equal(chain.find(entry => entry.task === 'chain batch thinking').thinking, 'medium');
+  } finally { rmSync(file); }
+});
+
 test('model null ignores agent and batch model defaults while inheriting the parent model', async () => {
   const definition = tools.get('subagent').definition;
   assert.equal(Value.Check(definition.parameters, { agent: 'pinned', task: 'inherit parent model', model: null }), true);
@@ -2416,7 +2461,7 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
 test('invalid dispatch overrides fail before project approval or any child launch', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
-  for (const overrides of [{ model: '' }, { model: '  ' }, { model: 42 }, { thinking: 'invalid' }, { thinking: null }]) {
+  for (const overrides of [{ model: '' }, { model: '  ' }, { model: 42 }, { thinking: 'invalid' }, { thinking: 42 }]) {
     for (const params of [{ agent: 'project', task: 'x', ...overrides }, { tasks: [{ agent: 'project', task: 'x', ...overrides }] }, { chain: [{ agent: 'project', task: 'x', ...overrides }] }]) {
       assert.equal((await invoke('subagent', { ...params, agentScope: 'both' }, context)).isError, true);
     }

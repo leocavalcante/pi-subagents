@@ -667,7 +667,7 @@ interface DispatchDefaults {
 
 interface DispatchOverrides {
 	model?: string | null;
-	thinking?: ThinkingLevel;
+	thinking?: ThinkingLevel | null;
 }
 
 async function runSingleAgent(
@@ -718,7 +718,9 @@ async function runSingleAgent(
 	const model = overrides.model === null ? dispatchDefaults.model
 		: overrides.model !== undefined ? overrides.model.trim() : agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
-	const thinking = overrides.thinking ?? agent.thinking ?? (inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined);
+	const inheritedThinking = inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined;
+	const thinking = overrides.thinking === null ? inheritedThinking
+		: overrides.thinking ?? agent.thinking ?? inheritedThinking;
 	if (thinking) args.push("--thinking", thinking);
 	if (agent.tools) {
 		if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
@@ -1156,7 +1158,10 @@ const DispatchOptions = {
 			description: `Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes; maximum ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` }),
 		Type.Null({ description: "Ignore the agent's configured model and inherit the parent session model." }),
 	], { description: "Override the model, or set null to ignore the agent's configured model and inherit the parent session model." })),
-	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." })),
+	thinking: Type.Optional(Type.Union([
+		StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." }),
+		Type.Null({ description: "Ignore the agent's configured thinking level; inherit parent thinking only when the model is also inherited." }),
+	], { description: "Override the thinking level, or set null to ignore the agent default and inherit parent thinking only when the model is inherited." })),
 };
 
 const AgentNameSchema = Type.String({
@@ -1617,7 +1622,7 @@ export default function (pi: ExtensionAPI) {
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
-			"Set model or thinking to override agent configuration. Parallel/chain entries override batch defaults.",
+			"Set model or thinking to override agent configuration. Use null to ignore the agent's configured model or thinking default. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project"). Untrusted projects require UI approval or Pi project trust; tool arguments cannot bypass this.`,
@@ -1781,7 +1786,7 @@ export default function (pi: ExtensionAPI) {
 			const configurations: DispatchOverrides[] = [params, ...(params.tasks ?? []), ...(params.chain ?? [])];
 			if (configurations.some((item) =>
 				(item.model !== undefined && item.model !== null && !isSafeModelSelector(item.model)) ||
-				(item.thinking !== undefined && !THINKING_LEVELS.includes(item.thinking)))) {
+				(item.thinking !== undefined && item.thinking !== null && !THINKING_LEVELS.includes(item.thinking)))) {
 				return {
 					content: [{ type: "text", text: `model must be a non-empty selector of at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes without control characters and contain well-formed Unicode; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
 					details: makeDetails(mode)([]), isError: true,
@@ -1940,7 +1945,8 @@ export default function (pi: ExtensionAPI) {
 							step.agent,
 							taskWithContext,
 							step.cwd ?? params.cwd,
-							{ model: step.model !== undefined ? step.model : params.model, thinking: step.thinking ?? params.thinking },
+							{ model: step.model !== undefined ? step.model : params.model,
+								thinking: step.thinking !== undefined ? step.thinking : params.thinking },
 							step.timeoutMs !== undefined ? step.timeoutMs : params.timeoutMs,
 							i + 1,
 							signal,
@@ -2036,7 +2042,8 @@ export default function (pi: ExtensionAPI) {
 							t.agent,
 							t.task,
 							t.cwd ?? params.cwd,
-							{ model: t.model !== undefined ? t.model : params.model, thinking: t.thinking ?? params.thinking },
+							{ model: t.model !== undefined ? t.model : params.model,
+								thinking: t.thinking !== undefined ? t.thinking : params.thinking },
 							t.timeoutMs !== undefined ? t.timeoutMs : params.timeoutMs,
 							undefined,
 							signal,
