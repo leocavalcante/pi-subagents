@@ -28,6 +28,7 @@
 		"chain.ts",
 		"unicode.ts",
 		"progress.ts",
+		"windows-supervisor.cs",
 		"CONTRIBUTING.md",
 		"SECURITY.md",
 		"LICENSE",

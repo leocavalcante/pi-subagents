@@ -18,6 +18,10 @@ test('README documents the minimum Node.js version required by the package', () 
   assert.ok(readme.includes(`Node.js ${engine.slice(2)} or newer`), `README must document Node.js ${engine}`);
 });
 
+test('npm package includes the Windows process supervisor source', () => {
+  assert.ok(packageJson.files.includes('windows-supervisor.cs'));
+});
+
 test('README documents bounded agent descriptions', () => {
   const agents = section('Agent definitions');
   assert.match(agents, /Descriptions are limited to 1 KiB of UTF-8 text/);
@@ -116,12 +120,17 @@ test('README documents terminal-control escaping for foreground, background, and
   assert.match(security, /preserving the raw follow-up content and structured details/i);
 });
 
-test('README distinguishes POSIX process-group cleanup from Windows direct-child cleanup', () => {
+test('README distinguishes POSIX process-group cleanup from Windows Job Object supervision', () => {
   const deadlines = section('Task deadlines');
   assert.match(deadlines, /On POSIX, cleanup signals the child's process group/);
-  assert.match(deadlines, /On Windows, only the direct child is signaled; descendants may continue running after a timeout or cancellation/);
+  assert.match(deadlines, /On Windows, a supervisor is compiled on first use with the built-in Windows PowerShell C# compiler/);
+  assert.match(deadlines, /creates Pi suspended with only its standard I\/O handles inherited/);
+  assert.match(deadlines, /Job setup or cleanup failures fail closed/);
+  assert.match(deadlines, /waits at most 30 seconds for job settlement/);
   assert.match(deadlines, /Windows uses an immediate termination request instead of the POSIX escalation delay/);
 
   const cleanup = section('Output capture and cleanup');
-  assert.match(cleanup, /On Windows, descendants are not terminated when the direct child exits, whether normally or after cancellation or a deadline/);
+  assert.match(cleanup, /On POSIX, when a child exits, the extension sends SIGTERM to remaining members of its process group/);
+  assert.match(cleanup, /assigns it to a nested kill-on-close Job Object before resuming it/);
+  assert.match(cleanup, /confirms the job is empty before reporting success/);
 });

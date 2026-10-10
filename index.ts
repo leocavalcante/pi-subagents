@@ -14,6 +14,7 @@
 
 import { spawn } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
+import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -579,6 +580,97 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	return { command: "pi", args };
 }
 
+interface WindowsSupervisorState {
+	promise?: Promise<string>;
+	directories: Set<string>;
+	cleanupRegistered: boolean;
+}
+
+const windowsSupervisorKey = Symbol.for("@leocavalcante/pi-subagents/windows-supervisor");
+const windowsSupervisorState = ((globalThis as any)[windowsSupervisorKey] ??= {
+	directories: new Set<string>(), cleanupRegistered: false,
+}) as WindowsSupervisorState;
+if (!windowsSupervisorState.cleanupRegistered) {
+	windowsSupervisorState.cleanupRegistered = true;
+	process.once("exit", () => {
+		for (const directory of windowsSupervisorState.directories) {
+			try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* ignore */ }
+		}
+		windowsSupervisorState.directories.clear();
+	});
+}
+
+async function buildWindowsSupervisor(): Promise<string> {
+	let directory: string | undefined;
+	try {
+		directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-supervisor-"));
+		const outputPath = path.join(directory, "supervisor.exe");
+		const sourcePath = fileURLToPath(new URL("./windows-supervisor.cs", import.meta.url));
+		const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+		const command = "$ErrorActionPreference = 'Stop'; Add-Type -Path $env:PI_SUBAGENTS_SUPERVISOR_SOURCE -OutputAssembly $env:PI_SUBAGENTS_SUPERVISOR_OUTPUT -OutputType ConsoleApplication; exit 0";
+		const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
+		await new Promise<void>((resolve, reject) => {
+			const compiler = spawn(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedCommand], {
+				windowsHide: true,
+				stdio: "ignore",
+				env: {
+					...process.env,
+					PI_SUBAGENTS_SUPERVISOR_SOURCE: sourcePath,
+					PI_SUBAGENTS_SUPERVISOR_OUTPUT: outputPath,
+				},
+			});
+			compiler.once("error", () => reject(new Error("Windows process supervisor compilation failed.")));
+			compiler.once("close", (code) => code === 0 ? resolve() : reject(new Error("Windows process supervisor compilation failed.")));
+		});
+		const stat = await fs.promises.stat(outputPath);
+		if (!stat.isFile() || stat.size < 1 || stat.size > 4 * 1024 * 1024) throw new Error("Invalid supervisor output.");
+		windowsSupervisorState.directories.add(directory);
+		return outputPath;
+	} catch {
+		if (directory) {
+			try { await fs.promises.rm(directory, { recursive: true, force: true }); } catch { /* ignore */ }
+		}
+		throw Object.assign(new Error("Windows process supervisor compilation failed."), { code: "WIN_SUPERVISOR" });
+	}
+}
+
+function getWindowsSupervisor(): Promise<string> {
+	if (!windowsSupervisorState.promise) {
+		windowsSupervisorState.promise = buildWindowsSupervisor().catch((error) => {
+			windowsSupervisorState.promise = undefined;
+			throw error;
+		});
+	}
+	return windowsSupervisorState.promise;
+}
+
+function waitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return promise;
+	signal.throwIfAborted();
+	return new Promise<T>((resolve, reject) => {
+		const cleanup = () => signal.removeEventListener("abort", onAbort);
+		const onAbort = () => {
+			cleanup();
+			reject(signal.reason ?? new Error("Subagent was aborted"));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then((value) => {
+			cleanup();
+			resolve(value);
+		}, (error) => {
+			cleanup();
+			reject(error);
+		});
+	});
+}
+
+async function getChildInvocation(args: string[], cwd: string, signal?: AbortSignal): Promise<{ command: string; args: string[] }> {
+	const invocation = getPiInvocation(args);
+	if (process.platform !== "win32") return invocation;
+	const supervisor = await waitWithAbort(getWindowsSupervisor(), signal);
+	return { command: supervisor, args: [invocation.command, cwd, ...invocation.args] };
+}
+
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 interface DispatchDefaults {
@@ -752,13 +844,16 @@ async function runSingleAgent(
 		const stderr = new TextCapture();
 		currentResult.capture = {};
 
+		setupPhase = process.platform === "win32" ? "preparing Windows process supervisor" : "launching child process";
+		const invocation = await getChildInvocation(args, resolvedCwd, signal);
+		signal?.throwIfAborted();
 		setupPhase = "launching child process";
 		const exitCode = await new Promise<number>((resolve) => {
-			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: resolvedCwd,
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
+				windowsHide: process.platform === "win32",
 				// On POSIX, cancel the entire group, including tools spawned by the child.
 				detached: process.platform !== "win32",
 			});

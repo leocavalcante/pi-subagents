@@ -16,7 +16,8 @@ trace({ event: 'start', task, cwd: process.cwd(), model: flag('--model'), thinki
 if (args.includes('--append-system-prompt')) readFileSync(flag('--append-system-prompt'), 'utf8');
 if (task.includes('stubborn')) process.on('SIGTERM', () => {});
 if (task.includes('grandchild')) {
-  const source = `const fs = require('node:fs'); process.on('SIGTERM', () => fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild-term', pid: process.pid})+'\\n')); fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild', pid: process.pid})+'\\n'); setInterval(() => {}, 1000);`;
+  let source = `const task = ${JSON.stringify(task)}; const fs = require('node:fs'); process.on('SIGTERM', () => fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild-term', task, pid: process.pid})+'\\n')); fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild', task, pid: process.pid})+'\\n'); setInterval(() => {}, 1000);`;
+  if (task.includes('grandchild-marker')) source += `setTimeout(() => fs.appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({event: 'grandchild-marker', task, pid: process.pid})+'\\n'), 1800);`;
   const child = spawn(process.execPath, ['-e', source], { stdio: task.includes('grandchild-ignored') ? 'ignore' : ['ignore', 'inherit', 'inherit'] });
   if (task.includes('orphan')) child.unref();
 }
