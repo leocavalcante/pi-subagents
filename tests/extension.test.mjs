@@ -1309,6 +1309,22 @@ test('subagent_jobs renderers escape terminal controls without changing job outp
   assert.ok(renderedCall.includes('\\u009b2J'));
 });
 
+test('terminal display escaping bounds expansion for control-heavy tool output', () => {
+  initTheme('dark', false);
+  const definition = tools.get('subagent_jobs').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const esc = String.fromCharCode(27);
+  const hostile = `${esc}[2J`.repeat(40_000);
+  const rendered = definition.renderResult(
+    { content: [{ type: 'text', text: hostile }] }, { expanded: true }, theme, { isError: false },
+  ).render(80).join('\n');
+
+  assert.equal(rendered.includes(`${esc}[2J`), false, 'hostile cursor controls must be escaped');
+  assert.ok(rendered.includes('\\u001b[2J'), 'escaped control sequences remain readable');
+  assert.ok(rendered.length <= hostile.length + 128 * 1024,
+    `renderer added excessive output (${rendered.length} characters for ${hostile.length} input characters)`);
+});
+
 test('all modes and agent names are validated before foreground children start', async () => {
   for (const params of [
     { agent: 'worker', tasks: [{ agent: 'worker', task: 'x' }] },
