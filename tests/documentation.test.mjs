@@ -123,6 +123,7 @@ test('README documents temporary system-prompt storage and platform permissions'
   const security = section('Security');
   assert.match(security, /Agent system prompts are written briefly to a temporary UTF-8 file/);
   assert.match(security, /removed during invocation cleanup/);
+  assert.match(security, /Transient removal failures get bounded retries, and failed cleanup is retried at process exit/);
   assert.match(security, /On POSIX, the temporary directory and file grant no group or other access/);
   assert.match(security, /On Windows, access follows the ACLs inherited from the configured temporary directory/);
   assert.match(security, /other processes running as the same user/);

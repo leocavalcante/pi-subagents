@@ -70,6 +70,7 @@ import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
 import { isWellFormedUnicode } from "./unicode.ts";
 import { ProgressUpdateLimiter } from "./progress.ts";
+import { removeTemporaryDirectory, trackTemporaryDirectory } from "./temporary-files.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
@@ -549,6 +550,7 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 
 async function writePromptToTempFile(prompt: string): Promise<{ dir: string; filePath: string }> {
 	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
+	trackTemporaryDirectory(tmpDir);
 	const filePath = path.join(tmpDir, "system-prompt.md");
 	try {
 		await withFileMutationQueue(filePath, async () => {
@@ -559,7 +561,7 @@ async function writePromptToTempFile(prompt: string): Promise<{ dir: string; fil
 		});
 		return { dir: tmpDir, filePath };
 	} catch (error) {
-		await fs.promises.rm(tmpDir, { recursive: true, force: true });
+		await removeTemporaryDirectory(tmpDir);
 		throw error;
 	}
 }
@@ -582,28 +584,16 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 interface WindowsSupervisorState {
 	promise?: Promise<string>;
-	directories: Set<string>;
-	cleanupRegistered: boolean;
 }
 
 const windowsSupervisorKey = Symbol.for("@leocavalcante/pi-subagents/windows-supervisor");
-const windowsSupervisorState = ((globalThis as any)[windowsSupervisorKey] ??= {
-	directories: new Set<string>(), cleanupRegistered: false,
-}) as WindowsSupervisorState;
-if (!windowsSupervisorState.cleanupRegistered) {
-	windowsSupervisorState.cleanupRegistered = true;
-	process.once("exit", () => {
-		for (const directory of windowsSupervisorState.directories) {
-			try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* ignore */ }
-		}
-		windowsSupervisorState.directories.clear();
-	});
-}
+const windowsSupervisorState = ((globalThis as any)[windowsSupervisorKey] ??= {}) as WindowsSupervisorState;
 
 async function buildWindowsSupervisor(): Promise<string> {
 	let directory: string | undefined;
 	try {
 		directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-supervisor-"));
+		trackTemporaryDirectory(directory);
 		const outputPath = path.join(directory, "supervisor.exe");
 		const sourcePath = fileURLToPath(new URL("./windows-supervisor.cs", import.meta.url));
 		const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -624,12 +614,9 @@ async function buildWindowsSupervisor(): Promise<string> {
 		});
 		const stat = await fs.promises.stat(outputPath);
 		if (!stat.isFile() || stat.size < 1 || stat.size > 4 * 1024 * 1024) throw new Error("Invalid supervisor output.");
-		windowsSupervisorState.directories.add(directory);
 		return outputPath;
 	} catch {
-		if (directory) {
-			try { await fs.promises.rm(directory, { recursive: true, force: true }); } catch { /* ignore */ }
-		}
+		if (directory) await removeTemporaryDirectory(directory);
 		throw Object.assign(new Error("Windows process supervisor compilation failed."), { code: "WIN_SUPERVISOR" });
 	}
 }
@@ -1148,18 +1135,7 @@ async function runSingleAgent(
 		return currentResult;
 	} finally {
 		release?.();
-		if (tmpPromptPath)
-			try {
-				fs.unlinkSync(tmpPromptPath);
-			} catch {
-				/* ignore */
-			}
-		if (tmpPromptDir)
-			try {
-				fs.rmdirSync(tmpPromptDir);
-			} catch {
-				/* ignore */
-			}
+		if (tmpPromptDir) await removeTemporaryDirectory(tmpPromptDir);
 	}
 }
 
