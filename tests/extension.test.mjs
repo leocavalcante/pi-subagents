@@ -79,8 +79,13 @@ test('background returns before completion, retains progress, and sends a follow
   assert.ok(Date.now() - started < 300);
   assert.equal((await status(id)).state, 'running');
   assert.equal(messages.length, 0);
-  await waitFor(async () => (await status(id)).latest);
-  assert.match((await status(id)).latest.content[0].text, /progress/);
+  // The first Windows launch lazily compiles the supervisor before Pi can emit progress.
+  const firstUpdate = await waitFor(async () => {
+    const job = await status(id);
+    return job.latest ? { latest: job.latest } : job.finishedAt ? { finished: job } : undefined;
+  }, process.platform === 'win32' ? 60_000 : 15_000);
+  assert.ok(firstUpdate.latest, `Background job finished before progress: ${firstUpdate.finished?.state ?? 'unknown'}${firstUpdate.finished?.error ? ` (${firstUpdate.finished.error})` : ''}`);
+  assert.match(firstUpdate.latest.content[0].text, /progress/);
   const result = await finish(id);
   assert.equal(result.state, 'completed');
   assert.equal(messages.length, 1);
