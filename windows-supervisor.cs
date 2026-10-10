@@ -8,7 +8,7 @@ internal static class WindowsSupervisor
 {
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const int JobObjectBasicAccountingInformation = 1;
-    private const int JobObjectBasicLimitInformation = 2;
+    private const int JobObjectExtendedLimitInformation = 9;
     private const uint CreateSuspended = 0x00000004;
     private const uint CreateNoWindow = 0x08000000;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
@@ -36,6 +36,28 @@ internal static class WindowsSupervisor
         public UIntPtr Affinity;
         public uint PriorityClass;
         public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ExtendedLimitInformation
+    {
+        public BasicLimitInformation BasicLimitInformation;
+        public IoCounters IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -160,14 +182,14 @@ internal static class WindowsSupervisor
 
     private static bool ConfigureKillOnClose(IntPtr job)
     {
-        var information = new BasicLimitInformation();
-        information.LimitFlags = JobObjectLimitKillOnJobClose;
-        var size = Marshal.SizeOf(typeof(BasicLimitInformation));
+        var information = new ExtendedLimitInformation();
+        information.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+        var size = Marshal.SizeOf(typeof(ExtendedLimitInformation));
         var buffer = Marshal.AllocHGlobal(size);
         try
         {
             Marshal.StructureToPtr(information, buffer, false);
-            return SetInformationJobObject(job, JobObjectBasicLimitInformation, buffer, (uint)size);
+            return SetInformationJobObject(job, JobObjectExtendedLimitInformation, buffer, (uint)size);
         }
         finally
         {
