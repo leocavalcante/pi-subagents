@@ -23,7 +23,8 @@ test('README documents an available installation method', () => {
   const installation = section('Installation');
   assert.match(installation, /The npm package is not yet published/);
   assert.match(installation, /pi install git:github\.com\/leocavalcante\/pi-subagents/);
-  assert.match(installation, /pi install \.\/pi-subagents/);
+  assert.match(installation, /From the checkout root, install the local copy/);
+  assert.match(installation, /pi install \.\n```/);
   assert.doesNotMatch(installation, /pi install npm:/);
 });
 
