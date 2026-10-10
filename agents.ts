@@ -17,6 +17,7 @@ export interface AgentConfig {
 	tools?: string[];
 	model?: string;
 	thinking?: ThinkingLevel;
+	timeoutMs?: number;
 	systemPrompt: string;
 	source: "user" | "project";
 	filePath: string;
@@ -48,6 +49,7 @@ type AgentFrontmatter = {
 	tools?: unknown;
 	model?: unknown;
 	thinking?: unknown;
+	timeoutMs?: unknown;
 };
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
@@ -56,6 +58,7 @@ export const MAX_AGENT_DESCRIPTION_BYTES = 1024;
 export const MAX_AGENT_TOOL_LIST_BYTES = 4 * 1024;
 export const MAX_AGENT_TOOL_COUNT = 256;
 export const MAX_MODEL_SELECTOR_BYTES = 512;
+export const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const AGENT_NAME_PATTERN = "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u206f\\ufeff]+(?![\\s\\S])";
 const INVALID_AGENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/;
 const INVALID_AGENT_TOOL_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
@@ -319,12 +322,18 @@ function loadAgentsFromDir(
 			if (thinking !== undefined && !THINKING_LEVELS.includes(thinking as ThinkingLevel)) {
 				throw new Error(`thinking must be one of: ${THINKING_LEVELS.join(", ")}.`);
 			}
+			const timeoutMs = frontmatter.timeoutMs;
+			if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) ||
+				timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS)) {
+				throw new Error(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
+			}
 			const agent: AgentConfig = {
 				name: frontmatter.name.trim(),
 				description,
 				tools: parseToolList(frontmatter.tools),
 				model: frontmatter.model?.trim() || undefined,
 				thinking: thinking as ThinkingLevel | undefined,
+				timeoutMs: timeoutMs as number | undefined,
 				systemPrompt: body,
 				source,
 				filePath,

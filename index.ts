@@ -35,6 +35,7 @@ import {
 	MAX_AGENT_DESCRIPTION_BYTES,
 	MAX_AGENT_NAME_BYTES,
 	MAX_MODEL_SELECTOR_BYTES,
+	MAX_TIMEOUT_MS,
 	type AgentConfig,
 	type AgentScope,
 	discoverAgents,
@@ -75,7 +76,6 @@ const MAX_CONCURRENCY = 4;
 const MAX_ACTIVE_JOBS = 8;
 // Allow every configured active background job to fill its process worker pool.
 const MAX_PROCESS_QUEUE = MAX_ACTIVE_JOBS * MAX_CONCURRENCY;
-const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
 const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
@@ -600,6 +600,7 @@ async function runSingleAgent(
 		};
 	}
 
+	const effectiveTimeoutMs = timeoutMs ?? agent.timeoutMs;
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	const inheritsDispatchConfig = !overrides.model && !agent.model;
 	const model = overrides.model?.trim() ?? agent.model ?? dispatchDefaults.model;
@@ -632,7 +633,7 @@ async function runSingleAgent(
 		},
 		model,
 		step,
-		timeoutMs,
+		timeoutMs: effectiveTimeoutMs,
 	};
 
 	signal?.throwIfAborted();
@@ -956,12 +957,12 @@ async function runSingleAgent(
 				}
 				// Runtime deadlines exclude process creation and start only once the
 				// child is actually running.
-				if (timeoutMs !== undefined) {
+				if (effectiveTimeoutMs !== undefined) {
 					deadlineTimer = setTimeout(() => {
 						if (wasAborted || leaderExited || closed) return;
 						timedOut = true;
 						terminateGroup();
-					}, timeoutMs);
+					}, effectiveTimeoutMs);
 				}
 			});
 			proc.on("error", (error) => {
@@ -996,7 +997,7 @@ async function runSingleAgent(
 		currentResult.exitCode = protocolError || timedOut || finalAssistantMessageDropped ? 1 : exitCode;
 		if (timedOut) currentResult.timedOut = true;
 		const failureCauses = [
-			timedOut ? `Subagent timed out after ${timeoutMs} ms.` : undefined,
+			timedOut ? `Subagent timed out after ${effectiveTimeoutMs} ms.` : undefined,
 			protocolError,
 			finalAssistantMessageDropped ? "Final assistant message exceeded the available history capture budget." : undefined,
 		];
@@ -1275,7 +1276,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
-			"Reports invalid and duplicate definitions. Defaults to personal agents; use agentScope to include project agents.",
+			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
 		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }, { additionalProperties: false }),
 		outputSchema: Type.Object({
@@ -1289,6 +1290,7 @@ export default function (pi: ExtensionAPI) {
 				model: Type.Optional(Type.String()),
 				thinking: Type.Optional(Type.String()),
 				tools: Type.Optional(Type.Array(Type.String())),
+				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
 			})),
 			projectAgentsDir: Type.Union([Type.String(), Type.Null()]),
 			diagnostics: Type.Array(Type.Object({
@@ -1332,12 +1334,14 @@ export default function (pi: ExtensionAPI) {
 				...(agent.model !== undefined ? { model: agent.model } : {}),
 				...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
 				...(agent.tools !== undefined ? { tools: agent.tools } : {}),
+				...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
 			}));
 			const listing = agents.map((a) => {
 				const config = [
 					a.model && `model=${displayUntrustedText(a.model)}`,
 					a.thinking && `thinking=${a.thinking}`,
 					a.tools && `tools=${displayUntrustedText(a.tools.length ? a.tools.join(",") : "none")}`,
+					a.timeoutMs !== undefined && `timeoutMs=${a.timeoutMs}`,
 				].filter(Boolean).join("; ");
 				return `${displayUntrustedText(a.name)} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
 			}).join("\n");
@@ -1497,7 +1501,7 @@ export default function (pi: ExtensionAPI) {
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} or {steps.ID} output references).",
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
-			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it. Queue time is excluded.",
+			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; agent frontmatter can provide a default. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			"Set model or thinking to override agent configuration. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",

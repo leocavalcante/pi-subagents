@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
 
-const { discoverAgents, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const { discoverAgents, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS } = await jiti.import('../agents.ts');
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
@@ -253,6 +253,27 @@ test('agent tool allowlists reject ambiguous names and modifiers and are bounded
   assert.equal(JSON.stringify(result).includes(removeModifier), false);
   assert.equal(result.diagnostics.filter(d => d.message ===
     "tools entries must not contain commas, control characters, or start with '+' or '-'.").length, 5);
+});
+
+test('agent runtime timeout defaults are integer-bounded and invalid definitions fail closed', () => {
+  agent(userDir, 'minimum-timeout', `name: minimum-timeout\ndescription: Minimum timeout\ntimeoutMs: 1`);
+  agent(userDir, 'maximum-timeout', `name: maximum-timeout\ndescription: Maximum timeout\ntimeoutMs: ${MAX_TIMEOUT_MS}`);
+  const invalid = [
+    ['zero', '0'], ['negative', '-1'], ['fraction', '1.5'], ['over-limit', String(MAX_TIMEOUT_MS + 1)],
+    ['string', '"100"'], ['boolean', 'true'], ['null', 'null'], ['object', '{ value: 100 }'], ['array', '[100]'],
+  ];
+  for (const [name, value] of invalid) {
+    agent(userDir, `timeout-${name}`, `name: timeout-${name}\ndescription: Invalid timeout\ntimeoutMs: ${value}`);
+  }
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(entry => [entry.name, entry.timeoutMs]), [
+    ['maximum-timeout', MAX_TIMEOUT_MS], ['minimum-timeout', 1],
+  ]);
+  assert.equal(result.diagnostics.length, invalid.length);
+  assert.ok(result.diagnostics.every(diagnostic =>
+    diagnostic.message === `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`));
+  assert.equal(JSON.stringify(result).includes('Invalid timeout'), false);
 });
 
 test('normalizes config, preserves explicit empty tools, and supports thinking', () => {
