@@ -22,6 +22,7 @@ internal static class WindowsSupervisor
     private const int SetupFailureExitCode = 125;
     private const int JobCleanupTimeoutMs = 30000;
     private const int ErrorInsufficientBuffer = 122;
+    private static string FailureStage = "startup";
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BasicLimitInformation
@@ -315,7 +316,7 @@ internal static class WindowsSupervisor
 
     private static int FailClosed()
     {
-        Console.Error.WriteLine("Windows process supervision failed; refusing to report success.");
+        Console.Error.WriteLine("Windows process supervision failed during " + FailureStage + " (Win32 error " + Marshal.GetLastWin32Error() + ").");
         return SetupFailureExitCode;
     }
 
@@ -329,23 +330,33 @@ internal static class WindowsSupervisor
         var processInformation = new ProcessInformation();
         try
         {
+            FailureStage = "outer job creation";
             outerJob = CreateJobObject(IntPtr.Zero, null);
-            if (outerJob == IntPtr.Zero || !ConfigureKillOnClose(outerJob)) return FailClosed();
+            if (outerJob == IntPtr.Zero) return FailClosed();
+            FailureStage = "outer job configuration";
+            if (!ConfigureKillOnClose(outerJob)) return FailClosed();
+            FailureStage = "supervisor job assignment";
             if (!AssignProcessToJobObject(outerJob, GetCurrentProcess())) return FailClosed();
             supervisorContained = true;
 
+            FailureStage = "inner job creation";
             innerJob = CreateJobObject(IntPtr.Zero, null);
-            if (innerJob == IntPtr.Zero || !ConfigureKillOnClose(innerJob)) return FailClosed();
+            if (innerJob == IntPtr.Zero) return FailClosed();
+            FailureStage = "inner job configuration";
+            if (!ConfigureKillOnClose(innerJob)) return FailClosed();
+            FailureStage = "suspended child creation";
             if (!CreateSuspendedChild(arguments, out processInformation)) return FailClosed();
 
             // The suspended child is already a member of the outer Job Object, so
             // abrupt supervisor death during this assignment cannot orphan it.
+            FailureStage = "target job assignment";
             if (!AssignProcessToJobObject(innerJob, processInformation.Process))
             {
                 TerminateProcess(processInformation.Process, SetupFailureExitCode);
                 WaitForSingleObject(processInformation.Process, Infinite);
                 return FailClosed();
             }
+            FailureStage = "target resume";
             if (ResumeThread(processInformation.Thread) == ResumeThreadFailed)
             {
                 TerminateJobObject(innerJob, SetupFailureExitCode);
@@ -354,6 +365,7 @@ internal static class WindowsSupervisor
                 return FailClosed();
             }
 
+            FailureStage = "target process wait";
             if (WaitForSingleObject(processInformation.Process, Infinite) != WaitObject0)
             {
                 TerminateJobObject(innerJob, SetupFailureExitCode);
@@ -367,16 +379,18 @@ internal static class WindowsSupervisor
 
             // The supervisor is outside this inner Job Object, so it can terminate
             // and wait for every target descendant before reporting completion.
-            if (!TerminateJobObject(innerJob, childExitCode) || !WaitForJobEmpty(innerJob))
-                return FailClosed();
+            FailureStage = "job descendant termination";
+            if (!TerminateJobObject(innerJob, childExitCode)) return FailClosed();
+            FailureStage = "job descendant settlement";
+            if (!WaitForJobEmpty(innerJob)) return FailClosed();
 
             CloseHandle(innerJob);
             innerJob = IntPtr.Zero;
             return hasChildExitCode ? (int)childExitCode : SetupFailureExitCode;
         }
-        catch
+        catch (Exception exception)
         {
-            Console.Error.WriteLine("Windows process supervision failed; the subagent did not complete normally.");
+            Console.Error.WriteLine("Windows process supervision failed during " + FailureStage + " (managed error 0x" + exception.HResult.ToString("X8") + ").");
             return SetupFailureExitCode;
         }
         finally
