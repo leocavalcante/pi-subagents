@@ -53,10 +53,11 @@ test('README relative file links are included in the npm package', () => {
   }
 });
 
-test('README documents terminal-control escaping for foreground and background output', () => {
+test('README documents terminal-control escaping for foreground, background, and job output', () => {
   const security = section('Security');
   assert.match(security, /foreground subagent result renderer escapes terminal control characters in child output and tool-call previews/);
   assert.match(security, /background completion-message renderer also escapes child output and failure details for TUI display/i);
+  assert.match(security, /subagent_jobs.*call and result renderers likewise escape untrusted job IDs, captured output, and failure text only for display/i);
   assert.match(security, /preserving the raw follow-up content and structured details/i);
 });
 

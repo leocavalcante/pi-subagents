@@ -1367,6 +1367,26 @@ export default function (pi: ExtensionAPI) {
 			return reply(`${waitNotice}${job.id} ${job.state}: ${displayUntrustedText(job.label)}\n\n${output}`, job,
 				{ job: metadata, ...(waited ? { timedOut: waited.timedOut } : {}) });
 		},
+
+		renderCall(args, theme, _context) {
+			const action = escapeTerminalControls(truncateOutput(stringArg(args?.action), 64, "..."));
+			const jobId = typeof args?.jobId === "string"
+				? escapeTerminalControls(truncateOutput(args.jobId, 128, "...")) : "";
+			return new Text(
+				theme.fg("toolTitle", theme.bold("subagent_jobs ")) + theme.fg("accent", action) +
+					(jobId ? theme.fg("muted", ` ${jobId}`) : ""),
+				0, 0,
+			);
+		},
+
+		renderResult(result, { expanded }, theme, context) {
+			const content = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+			const escaped = escapeTerminalText(content);
+			const display = expanded ? escaped : previewText(escaped);
+			return new Markdown(display, 0, 0, getMarkdownTheme(), {
+				color: (text) => theme.fg(context.isError ? "error" : "toolOutput", text),
+			});
+		},
 	});
 
 	pi.registerTool({
