@@ -224,6 +224,8 @@ The `subagent_jobs` tool manages jobs:
 { "action": "clear" }
 ```
 
+Job IDs are generated UUIDs (36 characters); `jobId` inputs are bounded to that length.
+
 Status returns retained progress or the final result. Job-level error diagnostics are capped at 2 KiB without splitting UTF-8 characters. If both the run and completion delivery throw, the diagnostic keeps both causes. Do not poll continuously; non-silent jobs send completion messages automatically. Cancellation is idempotent and may briefly show `canceling` while child processes exit.
 
 `forget` removes one finished job record. `clear` removes all finished records without canceling active jobs. Forgetting an active job is rejected; cancel it and wait for cleanup first. These operations do not erase completion messages or Pi session history.

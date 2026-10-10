@@ -1082,6 +1082,8 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 }
 
 const JOB_ACTIONS = ["list", "status", "cancel", "forget", "clear", "output", "wait"] as const;
+const JOB_ID_MAX_LENGTH = 36; // node:crypto randomUUID() output.
+const JobIdSchema = Type.String({ maxLength: JOB_ID_MAX_LENGTH });
 type JobAction = typeof JOB_ACTIONS[number];
 const JobActionSchema = StringEnum(JOB_ACTIONS);
 const TokenCountSchema = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
@@ -1104,7 +1106,7 @@ const FailureContextSchema = Type.Object({
 	lastStopReason: Type.Optional(StringEnum(["stop", "length", "toolUse", "error", "aborted", "deferred"] as const)),
 });
 const JobMetadataSchema = Type.Object({
-	id: Type.String(), label: Type.String(), notify: Type.Boolean(),
+	id: JobIdSchema, label: Type.String(), notify: Type.Boolean(),
 	state: StringEnum(["running", "canceling", "completed", "failed", "canceled"] as const),
 	startedAt: Type.String(), finishedAt: Type.Optional(Type.String()),
 	error: Type.Optional(Type.String()), outputEvicted: Type.Optional(Type.Boolean()),
@@ -1121,7 +1123,7 @@ const JobResponseSchema = Type.Object({
 		text: Type.String(), offset: Type.Integer(), totalBytes: Type.Integer(),
 		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
 	})),
-	forgotten: Type.Optional(Type.String()), cleared: Type.Optional(Type.Integer()),
+	forgotten: Type.Optional(JobIdSchema), cleared: Type.Optional(Type.Integer()),
 	timedOut: Type.Optional(Type.Boolean()),
 	error: Type.Optional(Type.String()),
 });
@@ -1278,7 +1280,8 @@ export default function (pi: ExtensionAPI) {
 		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job. Use output to page through a finished task's captured text, failure diagnosis, and any partial, unverified assistant/tool output. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
 			action: JobActionSchema,
-			jobId: Type.Optional(Type.String({ description: "Job ID required except for list and clear." })),
+			jobId: Type.Optional(Type.String({ maxLength: JOB_ID_MAX_LENGTH,
+				description: "Generated UUID (36 characters), required except for list and clear." })),
 			taskIndex: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: zero-based task index. Default: 0." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: UTF-8 byte offset. Default: 0. Use nextOffset from the previous page." })),
 			limit: Type.Optional(Type.Integer({ minimum: 4, maximum: MAX_PAGE_BYTES, description: "Output only: maximum page bytes, from 4 to 32768. Default: 16384." })),
@@ -1298,6 +1301,9 @@ export default function (pi: ExtensionAPI) {
 			const fail = (error: string, job?: JobSnapshot<JobResult>) =>
 				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job, jobs.getObservation(job.id)) } : {}) }, true);
 			if (!action) return fail(`action must be one of: ${JOB_ACTIONS.join(", ")}.`);
+			if (params.jobId !== undefined && (typeof params.jobId !== "string" || params.jobId.length > JOB_ID_MAX_LENGTH)) {
+				return fail(`jobId must be a string no longer than ${JOB_ID_MAX_LENGTH} characters.`);
+			}
 			if (params.timeoutMs !== undefined && (action !== "wait" || !Number.isInteger(params.timeoutMs) ||
 				params.timeoutMs < 1 || params.timeoutMs > MAX_JOB_WAIT_MS)) {
 				return fail(`timeoutMs applies only to action: wait and must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`);

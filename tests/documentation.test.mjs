@@ -36,6 +36,11 @@ test('README documents aggregate capture limits for parallel and chained results
   assert.match(capture, /Child stdout is capped at 128 MiB per task/);
 });
 
+test('README documents bounded UUID job identifiers', () => {
+  const background = section('Background execution');
+  assert.match(background, /Job IDs are generated UUIDs \(36 characters\); `jobId` inputs are bounded to that length/);
+});
+
 test('README documents the bounded shared process queue', () => {
   const background = section('Background execution');
   assert.match(background, /limit of four direct child processes per extension runtime/);
