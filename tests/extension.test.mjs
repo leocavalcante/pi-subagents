@@ -1166,11 +1166,23 @@ test('asynchronous spawn failures expose only a safe setup diagnostic', async t 
 });
 
 test('malformed child events fail cleanly without crashing or retaining slots', async () => {
-  for (const task of ['malformed-null', 'malformed-content', 'malformed-usage', 'malformed-fractional-usage', 'malformed-json', 'non-finite-number', 'malformed-metadata', 'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result', 'malformed-user-message']) {
+  const malformedTasks = [
+    'malformed-null', 'malformed-content', 'malformed-usage', 'malformed-fractional-usage',
+    'malformed-json', 'ill-formed-unicode-event', 'non-finite-number', 'malformed-metadata',
+    'malformed-pending', 'malformed-legacy', 'malformed-message', 'malformed-tool-result',
+    'malformed-user-message',
+  ];
+  for (const task of malformedTasks) {
     const id = await launch({ task });
     const job = await finish(id);
     assert.equal(job.state, 'failed');
-    if (task === 'non-finite-number') {
+    if (task === 'ill-formed-unicode-event') {
+      const result = job.latest.details.results[0];
+      assert.match(job.latest.content[0].text, /ill-formed Unicode string/);
+      assert.deepEqual(result.failureContext, { eventType: 'invalid_json', record: 1 });
+      assert.deepEqual(result.messages, [], 'the malformed child record is rejected before retention');
+      assert.equal(JSON.stringify(job.latest).includes('DO_NOT_ECHO_UNICODE_'), false);
+    } else if (task === 'non-finite-number') {
       assert.match(job.latest.content[0].text, /outside the finite JavaScript range/);
       assert.equal(job.latest.details.results[0].messages.some(message =>
         message.content.some(part => part.type === 'toolCall' && part.id === 'huge')), false,

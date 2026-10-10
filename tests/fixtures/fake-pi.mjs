@@ -81,6 +81,14 @@ if (task === 'safe-token-overflow') console.log(JSON.stringify({ type: 'message_
 } }));
 if (task === 'non-finite-number') console.log('{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"huge","name":"tool","arguments":{"value":1e400}}],"stopReason":"toolUse"}}');
 if (task === 'malformed-json') console.log('{"type":');
+if (task === 'ill-formed-unicode-event') {
+  const unpaired = String.fromCharCode(0xd800);
+  await write(process.stdout, JSON.stringify({ type: 'message_end', message: {
+    role: 'assistant', content: [{ type: 'text', text: `DO_NOT_ECHO_UNICODE_${unpaired}` }], stopReason: 'stop',
+  } }) + '\n');
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'deep-json') {
   const nested = '['.repeat(20000) + '0' + ']'.repeat(20000);
   console.log('{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"deep","name":"opaque","arguments":{"nested":' + nested + '}}],"stopReason":"stop"}}');
