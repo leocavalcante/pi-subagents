@@ -1449,6 +1449,47 @@ test('renderers tolerate partial calls and invalid tool argument types', async (
   assert.ok(definition.renderResult(neighbor, { expanded: false }, theme, {}).render(120).join('\n').includes(neighborPath));
 });
 
+test('fallback tool-call previews bound nested arguments before JSON serialization', async () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const result = await invoke('subagent', { agent: 'worker', task: 'preview arguments' });
+  const original = result.details.results[0];
+  const args = {
+    previewMarker: 'bounded-preview-marker',
+    text: 'x'.repeat(1_000_000),
+    nested: { long: 'y'.repeat(1_000_000), items: Array.from({ length: 10_000 }, () => 'item') },
+    fourth: true,
+    fifth: 'not included',
+  };
+  const custom = {
+    ...result,
+    details: {
+      ...result.details,
+      results: [{ ...original, messages: [{ role: 'assistant', content: [
+        { type: 'toolCall', id: 'preview-call', name: 'custom_tool', arguments: args },
+      ] }] }],
+    },
+  };
+  const originalStringify = JSON.stringify;
+  let serializedArgs;
+  JSON.stringify = function (value, ...parameters) {
+    if (value?.previewMarker === 'bounded-preview-marker') serializedArgs = value;
+    return originalStringify.call(this, value, ...parameters);
+  };
+  try {
+    definition.renderResult(custom, { expanded: true }, theme, { isError: false }).render(80);
+  } finally {
+    JSON.stringify = originalStringify;
+  }
+  assert.notEqual(serializedArgs, args, 'the original captured arguments are not serialized for display');
+  assert.ok(serializedArgs.text.length <= 128);
+  assert.ok(serializedArgs.nested.long.length <= 128);
+  assert.match(serializedArgs.nested.items, /items/);
+  assert.ok(Buffer.byteLength(originalStringify(serializedArgs)) < 4096,
+    'the preview serialization stays small regardless of the captured argument size');
+  assert.equal(args.text.length, 1_000_000, 'captured arguments remain unchanged');
+});
+
 test('subagent renderers escape untrusted terminal controls without changing captured output', async () => {
   const definition = tools.get('subagent').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };

@@ -164,6 +164,39 @@ function stringArg(value: unknown, fallback = "..."): string {
 	return typeof value === "string" ? value : fallback;
 }
 
+const MAX_TOOL_PREVIEW_ENTRIES = 4;
+const MAX_TOOL_PREVIEW_DEPTH = 2;
+const MAX_TOOL_PREVIEW_KEY_BYTES = 64;
+const MAX_TOOL_PREVIEW_STRING_BYTES = 128;
+
+function previewToolArguments(args: Record<string, unknown>, depth = 0): Record<string, unknown> {
+	const preview: Record<string, unknown> = Object.create(null);
+	let entries = 0;
+	for (const key in args) {
+		if (!Object.hasOwn(args, key)) continue;
+		if (entries >= MAX_TOOL_PREVIEW_ENTRIES) {
+			preview["…"] = "additional arguments omitted";
+			break;
+		}
+		const safeKey = truncateOutput(key, MAX_TOOL_PREVIEW_KEY_BYTES, "…");
+		preview[safeKey] = previewToolValue(args[key], depth + 1);
+		entries++;
+	}
+	return preview;
+}
+
+function previewToolValue(value: unknown, depth: number): unknown {
+	if (typeof value === "string") return truncateOutput(value, MAX_TOOL_PREVIEW_STRING_BYTES, "…");
+	if (value === null || typeof value !== "object") return value;
+	if (depth >= MAX_TOOL_PREVIEW_DEPTH) return Array.isArray(value) ? `[${value.length} items]` : "{…}";
+	if (Array.isArray(value)) {
+		const preview = value.slice(0, MAX_TOOL_PREVIEW_ENTRIES).map((item) => previewToolValue(item, depth + 1));
+		if (value.length > MAX_TOOL_PREVIEW_ENTRIES) preview.push(`… ${value.length - MAX_TOOL_PREVIEW_ENTRIES} more items`);
+		return preview;
+	}
+	return previewToolArguments(value as Record<string, unknown>, depth);
+}
+
 function formatToolCall(
 	toolName: string,
 	args: Record<string, unknown>,
@@ -225,7 +258,8 @@ function formatToolCall(
 			);
 		}
 		default: {
-			const argsStr = JSON.stringify(args);
+			// Bound nested keys and values before stringify; child JSON records can be up to 8 MiB.
+			const argsStr = JSON.stringify(previewToolArguments(args)) ?? "{}";
 			const preview = escapeTerminalText(truncateOutput(argsStr, 256, "..."));
 			const displayName = escapeTerminalText(truncateOutput(toolName, 256, "..."));
 			return themeFg("accent", displayName) + themeFg("dim", ` ${preview}`);
