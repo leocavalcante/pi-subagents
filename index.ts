@@ -38,7 +38,15 @@ import {
 	isSafeAgentName,
 	THINKING_LEVELS,
 } from "./agents.ts";
-import { JobManager, ProcessPool, MAX_JOB_WAIT_MS, DEFAULT_JOB_WAIT_MS, type JobSnapshot, type JobState } from "./jobs.ts";
+import {
+	JobManager,
+	ProcessPool,
+	ProcessPoolCapacityError,
+	MAX_JOB_WAIT_MS,
+	DEFAULT_JOB_WAIT_MS,
+	type JobSnapshot,
+	type JobState,
+} from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_HISTORY_BYTES, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
 import { MAX_PAGE_BYTES, createOutputPager } from "./paging.ts";
@@ -48,6 +56,9 @@ import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, subs
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
 const MAX_CONCURRENCY = 4;
+const MAX_ACTIVE_JOBS = 8;
+// Allow every configured active background job to fill its process worker pool.
+const MAX_PROCESS_QUEUE = MAX_ACTIVE_JOBS * MAX_CONCURRENCY;
 const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
 const COLLAPSED_ITEM_COUNT = 10;
@@ -611,10 +622,12 @@ async function runSingleAgent(
 		}
 	};
 
-	const release = await pool.acquire(signal);
-	let setupPhase = "preparing system prompt";
+	let release: (() => void) | undefined;
+	let setupPhase = "waiting for a process slot";
 	let childCreated = false;
 	try {
+		release = await pool.acquire(signal);
+		setupPhase = "preparing system prompt";
 		signal?.throwIfAborted();
 		if (agent.systemPrompt.trim()) {
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
@@ -898,13 +911,18 @@ async function runSingleAgent(
 		// Cancellation still aborts the whole operation. Only pre-spawn failures
 		// become task results; do not disguise unrelated execution errors as setup.
 		if (signal?.aborted || childCreated) throw error;
+		if (error instanceof ProcessPoolCapacityError) {
+			currentResult.exitCode = 1;
+			currentResult.errorMessage = error.message;
+			return currentResult;
+		}
 		const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
 		const diagnostic = typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? ` (${code})` : "";
 		currentResult.exitCode = 1;
 		currentResult.errorMessage = `Subagent setup failed while ${setupPhase}${diagnostic}.`;
 		return currentResult;
 	} finally {
-		release();
+		release?.();
 		if (tmpPromptPath)
 			try {
 				fs.unlinkSync(tmpPromptPath);
@@ -1093,7 +1111,7 @@ function jobMetadata(job: JobSnapshot<JobResult>, observation?: Usage): Static<t
 }
 
 export default function (pi: ExtensionAPI) {
-	const pool = new ProcessPool(MAX_CONCURRENCY);
+	const pool = new ProcessPool(MAX_CONCURRENCY, MAX_PROCESS_QUEUE);
 	const jobs = new JobManager<JobResult, Usage>(
 		(job) => {
 			const output =
@@ -1118,7 +1136,7 @@ export default function (pi: ExtensionAPI) {
 			);
 		},
 		(result) => Boolean(result.isError) || Boolean(result.details?.results.some(isFailedResult)),
-		8, 32, { maxBytes: MAX_RETAINED_JOB_BYTES, measure: estimateJobBytes }, summarizeJobUsage,
+		MAX_ACTIVE_JOBS, 32, { maxBytes: MAX_RETAINED_JOB_BYTES, measure: estimateJobBytes }, summarizeJobUsage,
 	);
 	pi.on("session_shutdown", async () => {
 		await jobs.shutdown();
