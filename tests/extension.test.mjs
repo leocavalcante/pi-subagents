@@ -1862,6 +1862,34 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
   assert.equal(traces().length, 0, 'a joined path over the limit must be rejected before spawn');
 });
 
+test('top-level cwd defaults parallel and chain children while entry directories override it', async () => {
+  const alternate = join(sandbox, 'alternate');
+  mkdirSync(alternate, { recursive: true });
+  const parallel = await invoke('subagent', {
+    cwd: 'project',
+    tasks: [
+      { agent: 'worker', task: 'parallel-default-cwd' },
+      { agent: 'worker', task: 'parallel-entry-cwd', cwd: 'alternate' },
+    ],
+  });
+  assert.notEqual(parallel.isError, true);
+  const parallelChildren = new Map(traces().filter(t => t.event === 'start').map(t => [t.task, t.cwd]));
+  assert.equal(parallelChildren.get('parallel-default-cwd'), join(sandbox, 'project'));
+  assert.equal(parallelChildren.get('parallel-entry-cwd'), alternate);
+
+  const chain = await invoke('subagent', {
+    cwd: 'project',
+    chain: [
+      { agent: 'worker', task: 'chain-default-cwd' },
+      { agent: 'worker', task: 'chain-entry-cwd', cwd: 'alternate' },
+    ],
+  });
+  assert.equal(chain.isError, undefined);
+  const chainChildren = new Map(traces().filter(t => t.event === 'start').map(t => [t.task, t.cwd]));
+  assert.equal(chainChildren.get('chain-default-cwd'), join(sandbox, 'project'));
+  assert.equal(chainChildren.get('chain-entry-cwd'), alternate);
+});
+
 test('large tasks use stdin and relative cwd resolves from the parent session', async () => {
   const task = 'x'.repeat(256 * 1024);
   const result = await invoke('subagent', { agent: 'worker', task, cwd: 'project' });
