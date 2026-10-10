@@ -26,6 +26,11 @@ test('README documents bounded model selectors and tool allowlists', () => {
   assert.match(overrides, /Model selectors .* limited to 512 UTF-8 bytes without control characters/);
 });
 
+test('README documents bounded delegated working-directory paths', () => {
+  const usage = section('Usage');
+  assert.match(usage, /Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined/);
+});
+
 test('README documents the bounded delegated task input size', () => {
   const usage = section('Usage');
   assert.match(usage, /Each task is limited to 4 MiB of UTF-8 text/);
