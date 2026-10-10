@@ -64,6 +64,7 @@ import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResu
 import { MAX_PAGE_BYTES, createOutputPager, WeakOutputPagerCache } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
+import { isWellFormedUnicode } from "./unicode.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
@@ -632,7 +633,12 @@ async function runSingleAgent(
 	}
 	if (model !== undefined && !isSafeModelSelector(model)) {
 		currentResult.exitCode = 1;
-		currentResult.errorMessage = `Resolved model selector must be no longer than ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`;
+		currentResult.errorMessage = `Resolved model selector must be well-formed Unicode, no longer than ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes, and contain no control characters.`;
+		return currentResult;
+	}
+	if (task.length <= MAX_TASK_BYTES && !isWellFormedUnicode(task)) {
+		currentResult.exitCode = 1;
+		currentResult.errorMessage = "Task must contain well-formed Unicode.";
 		return currentResult;
 	}
 	if (expandedTaskTooLarge || taskByteLength(task) > MAX_TASK_BYTES) {
@@ -1543,7 +1549,11 @@ export default function (pi: ExtensionAPI) {
 			let submittedTaskBytes = 0;
 			for (const item of requested) {
 				if (!isSafeAgentName(item.agent)) return {
-					content: [{ type: "text", text: `Agent name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and contain no terminal or bidirectional controls.` }],
+					content: [{ type: "text", text: `Agent name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, contain no terminal or bidirectional controls, and be well-formed Unicode.` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				if (item.task.length <= MAX_TASK_BYTES && !isWellFormedUnicode(item.task)) return {
+					content: [{ type: "text", text: "Task must contain well-formed Unicode." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 				const bytes = taskByteLength(item.task);
@@ -1577,7 +1587,7 @@ export default function (pi: ExtensionAPI) {
 				(item.model !== undefined && !isSafeModelSelector(item.model)) ||
 				(item.thinking !== undefined && !THINKING_LEVELS.includes(item.thinking)))) {
 				return {
-					content: [{ type: "text", text: `model must be a non-empty selector of at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes without control characters; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
+					content: [{ type: "text", text: `model must be a non-empty selector of at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes without control characters and contain well-formed Unicode; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
@@ -1594,17 +1604,16 @@ export default function (pi: ExtensionAPI) {
 			const workingDirectories: unknown[] = [params.cwd,
 				...(params.tasks ?? []).map((task) => task.cwd),
 				...(params.chain ?? []).map((step) => step.cwd)];
-			if (workingDirectories.some((cwd) => cwd !== undefined &&
-				(typeof cwd !== "string" || cwd.includes("\0")))) {
-				return {
-					content: [{ type: "text", text: "cwd must be a string without NUL characters." }],
-					details: makeDetails(mode)([]),
-					isError: true,
-				};
-			}
 			if (workingDirectories.some((cwd) => typeof cwd === "string" && cwd.length > MAX_WORKING_DIRECTORY_LENGTH)) {
 				return {
 					content: [{ type: "text", text: `cwd must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+			if (workingDirectories.some((cwd) => cwd !== undefined &&
+				(typeof cwd !== "string" || cwd.includes("\0") || !isWellFormedUnicode(cwd)))) {
+				return {
+					content: [{ type: "text", text: "cwd must contain well-formed Unicode and no NUL characters." }],
 					details: makeDetails(mode)([]),
 					isError: true,
 				};
