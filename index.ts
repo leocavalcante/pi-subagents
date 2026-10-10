@@ -293,6 +293,10 @@ interface SubagentDetails {
 
 type JobResult = AgentToolResult<SubagentDetails>;
 
+function isToolParameterObject(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function reportUsage(result: JobResult): JobResult {
 	try {
 		const usage = sumUsage((result.details?.results ?? []).flatMap((task) => task.reportedUsage ? [task.reportedUsage] : []));
@@ -1282,6 +1286,13 @@ export default function (pi: ExtensionAPI) {
 		}),
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async execute(_id, params, _signal, _onUpdate, ctx) {
+			if (!isToolParameterObject(params)) {
+				const details = { agentScope: "user" as const, agents: [], projectAgentsDir: null, diagnostics: [] };
+				return {
+					content: [{ type: "text" as const, text: "Tool parameters must be an object." }],
+					details, structuredContent: details, isError: true,
+				};
+			}
 			const requestedAgentScope: unknown = params.agentScope;
 			if (requestedAgentScope !== undefined && requestedAgentScope !== "user" &&
 				requestedAgentScope !== "project" && requestedAgentScope !== "both") {
@@ -1344,7 +1355,8 @@ export default function (pi: ExtensionAPI) {
 		}),
 		outputSchema: JobResponseSchema,
 		async execute(_id, params, signal): Promise<AgentToolResult<JobToolDetails>> {
-			const requestedAction: unknown = params.action;
+			const paramsAreObject = isToolParameterObject(params);
+			const requestedAction: unknown = paramsAreObject ? params.action : undefined;
 			const action: JobAction | undefined = typeof requestedAction === "string" &&
 				(JOB_ACTIONS as readonly string[]).includes(requestedAction)
 				? requestedAction as JobAction : undefined;
@@ -1354,6 +1366,7 @@ export default function (pi: ExtensionAPI) {
 			});
 			const fail = (error: string, job?: JobSnapshot<JobResult>) =>
 				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job, jobs.getObservation(job.id)) } : {}) }, true);
+			if (!paramsAreObject) return fail("Tool parameters must be an object.");
 			if (!action) return fail(`action must be one of: ${JOB_ACTIONS.join(", ")}.`);
 			if (params.jobId !== undefined && (typeof params.jobId !== "string" || params.jobId.length > JOB_ID_MAX_LENGTH)) {
 				return fail(`jobId must be a string no longer than ${JOB_ID_MAX_LENGTH} characters.`);
@@ -1473,6 +1486,13 @@ export default function (pi: ExtensionAPI) {
 		parameters: SubagentParams,
 
 		execute: boundedSubagentExecute(async (_toolCallId, params, signal, onUpdate, ctx) => {
+			if (!isToolParameterObject(params)) {
+				return {
+					content: [{ type: "text", text: "Tool parameters must be an object." }],
+					details: { mode: "single", agentScope: "user", projectAgentsDir: null, results: [] },
+					isError: true,
+				};
+			}
 			const requestedAgentScope: unknown = params.agentScope;
 			if (requestedAgentScope !== undefined && requestedAgentScope !== "user" &&
 				requestedAgentScope !== "project" && requestedAgentScope !== "both") {

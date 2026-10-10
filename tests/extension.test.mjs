@@ -1364,6 +1364,21 @@ test('successful retry clears stale errors and redacted thinking remains valid',
   }
 });
 
+test('public tools reject non-object parameter payloads without throwing', async () => {
+  for (const params of [null, []]) {
+    for (const name of ['subagent', 'subagent_agents', 'subagent_jobs']) {
+      const result = await invoke(name, params);
+      assert.equal(result.isError, true, `${name} must reject ${params === null ? 'null' : 'array'} parameters`);
+      assert.match(result.content[0].text, /parameters must be an object/i);
+      assert.doesNotThrow(() => JSON.stringify(result));
+      const outputSchema = tools.get(name).definition.outputSchema;
+      if (outputSchema) assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+    }
+  }
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+});
+
 test('renderers tolerate partial calls and invalid tool argument types', async () => {
   const definition = tools.get('subagent').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };
