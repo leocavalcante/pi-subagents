@@ -4,6 +4,41 @@ import { isWellFormedUnicode } from "./unicode.ts";
 /** Bound JSON structure breadth and nesting before parsing untrusted child records. */
 export const MAX_JSON_STRUCTURE_TOKENS = 65_536;
 const ILL_FORMED_UNICODE_ERROR = "Subagent JSON event contains an ill-formed Unicode string.";
+const NON_FINITE_NUMBER_ERROR = "Subagent JSON event contains a number outside the finite JavaScript range.";
+
+/** Scan every raw JSON number so duplicate keys cannot hide an overflowing value. */
+function scanJsonNumber(line: string, start: number): { end: number; value: number } | undefined {
+	let end = start;
+	if (line.charCodeAt(end) === 45) end++; // Optional minus sign.
+	const integerStart = end;
+	const firstIntegerDigit = line.charCodeAt(end);
+	if (firstIntegerDigit === 48) end++;
+	else if (firstIntegerDigit >= 49 && firstIntegerDigit <= 57) {
+		do end++; while (line.charCodeAt(end) >= 48 && line.charCodeAt(end) <= 57);
+	} else return undefined;
+	if (end === integerStart) return undefined;
+
+	if (line.charCodeAt(end) === 46) {
+		end++;
+		const fractionStart = end;
+		while (line.charCodeAt(end) >= 48 && line.charCodeAt(end) <= 57) end++;
+		if (end === fractionStart) return undefined;
+	}
+	const exponent = line.charCodeAt(end);
+	if (exponent === 69 || exponent === 101) {
+		end++;
+		const sign = line.charCodeAt(end);
+		if (sign === 43 || sign === 45) end++;
+		const exponentStart = end;
+		while (line.charCodeAt(end) >= 48 && line.charCodeAt(end) <= 57) end++;
+		if (end === exponentStart) return undefined;
+	}
+
+	const next = line.charCodeAt(end);
+	if (end < line.length && next !== 9 && next !== 10 && next !== 13 && next !== 32 &&
+		next !== 44 && next !== 93 && next !== 125) return undefined;
+	return { end, value: Number(line.slice(start, end)) };
+}
 
 function hexEscapeCodeUnit(line: string, start: number): number | undefined {
 	if (start + 4 > line.length) return undefined;
@@ -54,6 +89,14 @@ export function parseChildEvent(line: string): unknown {
 			} else if (code >= 0xdc00 && code <= 0xdfff) throw new RangeError(ILL_FORMED_UNICODE_ERROR);
 			continue;
 		}
+		if (code === 45 || (code >= 48 && code <= 57)) {
+			const number = scanJsonNumber(line, i);
+			if (number) {
+				if (!Number.isFinite(number.value)) throw new RangeError(NON_FINITE_NUMBER_ERROR);
+				i = number.end - 1;
+				continue;
+			}
+		}
 		if (code === 34) inString = true;
 		else if (code === 91 || code === 123) { // Array or object opening.
 			if (++depth > 128) throw new RangeError("Subagent JSON nesting exceeded 128 levels.");
@@ -71,9 +114,8 @@ export function parseChildEvent(line: string): unknown {
 	const invalidData = invalidJsonData(value);
 	if (invalidData === "unicode") throw new RangeError(ILL_FORMED_UNICODE_ERROR);
 	if (invalidData === "number") {
-		// JSON.parse can turn a syntactically valid exponent such as 1e400
-		// into Infinity, which JSON.stringify later silently changes to null.
-		throw new RangeError("Subagent JSON event contains a number outside the finite JavaScript range.");
+		// Keep a post-parse defense in depth for values such as overflowing exponents.
+		throw new RangeError(NON_FINITE_NUMBER_ERROR);
 	}
 	return value;
 }

@@ -55,10 +55,13 @@ test('rejects JSON strings and keys containing escaped unpaired surrogates', () 
     /ill-formed Unicode/, 'validate malformed values before JSON.parse overwrites duplicate keys');
 });
 
-test('rejects parsed numbers outside the finite JavaScript range at any depth', () => {
+test('rejects non-finite JSON numbers at any depth before duplicate keys can hide them', () => {
   assert.deepEqual(parseChildEvent('{"value":1e308,"nested":[-1e308]}'), { value: 1e308, nested: [-1e308] });
   assert.throws(() => parseChildEvent('{"value":1e400}'), /outside the finite JavaScript range/);
   assert.throws(() => parseChildEvent('{"nested":[{"value":-1e400}]}'), /outside the finite JavaScript range/);
+  assert.deepEqual(parseChildEvent('{"value":1e308,"value":1}'), { value: 1 });
+  assert.throws(() => parseChildEvent('{"value":1e400,"value":1}'), /outside the finite JavaScript range/);
+  assert.throws(() => parseChildEvent('{"nested":[{"value":-1e400,"value":0}]}'), /outside the finite JavaScript range/);
 });
 
 test('accepts completed messages, redacted thinking, and arbitrary tool arguments', () => {
