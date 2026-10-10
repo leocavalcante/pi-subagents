@@ -25,6 +25,7 @@ test('npm package includes the Windows process supervisor source', () => {
 
 test('CONTRIBUTING explains how Windows process containment is validated', () => {
   assert.match(contributing, /Windows-only integration tests also verify Job Object containment on cancellation, deadlines, and normal leader exit/);
+  assert.match(contributing, /bare Pi executable names resolve through PATH instead of being shadowed by the task working directory/);
   assert.match(contributing, /source compilation alone does not validate this behavior—rely on Windows CI/);
 });
 

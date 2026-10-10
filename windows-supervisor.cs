@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -169,6 +170,10 @@ internal static class WindowsSupervisor
     [DllImport("kernel32.dll")]
     private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
 
+    [DllImport("kernel32.dll", EntryPoint = "SearchPathW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint SearchPath(string path, string fileName, string extension, uint bufferLength,
+        StringBuilder buffer, out IntPtr filePart);
+
     [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CreateProcess(string applicationName, StringBuilder commandLine,
@@ -261,6 +266,36 @@ internal static class WindowsSupervisor
             if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(handle);
     }
 
+    private static bool ResolveBareExecutable(string command, out string resolvedCommand)
+    {
+        resolvedCommand = command;
+        if (command.IndexOf('\\') >= 0 || command.IndexOf('/') >= 0 || command.IndexOf(':') >= 0) return true;
+
+        // CreateProcess with a null application name searches the current directory
+        // before PATH. Resolve bare names against PATH explicitly so a project cwd
+        // cannot shadow the Pi executable (notably on runtimes using the "pi" fallback).
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (String.IsNullOrEmpty(path)) return false;
+        var pathEntries = path.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+        if (pathEntries.Length == 0) return false;
+        path = String.Join(";", pathEntries);
+
+        var buffer = new StringBuilder(32768);
+        IntPtr filePart;
+        var length = SearchPath(path, command, ".exe", (uint)buffer.Capacity, buffer, out filePart);
+        if (length == 0 || length >= (uint)buffer.Capacity) return false;
+        try
+        {
+            resolvedCommand = Path.GetFullPath(buffer.ToString());
+            return Path.IsPathRooted(resolvedCommand);
+        }
+        catch
+        {
+            resolvedCommand = command;
+            return false;
+        }
+    }
+
     private static bool CreateSuspendedChild(string[] arguments, string workingDirectory, out ProcessInformation processInformation)
     {
         processInformation = new ProcessInformation();
@@ -297,9 +332,7 @@ internal static class WindowsSupervisor
             var commandLine = new StringBuilder(BuildCommandLine(arguments));
             if (commandLine.Length >= 32767) return false;
             var command = arguments[0];
-            var applicationName = command.IndexOf('\\') >= 0 || command.IndexOf('/') >= 0 || command.IndexOf(':') >= 0
-                ? command : null;
-            return CreateProcess(applicationName, commandLine, IntPtr.Zero, IntPtr.Zero, true,
+            return CreateProcess(command, commandLine, IntPtr.Zero, IntPtr.Zero, true,
                 CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent, IntPtr.Zero,
                 workingDirectory, ref startup, out processInformation);
         }
@@ -356,6 +389,11 @@ internal static class WindowsSupervisor
         var processInformation = new ProcessInformation();
         try
         {
+            FailureStage = "Pi executable resolution";
+            string resolvedCommand;
+            if (!ResolveBareExecutable(childArguments[0], out resolvedCommand)) return FailClosed();
+            childArguments[0] = resolvedCommand;
+
             FailureStage = "outer job creation";
             outerJob = CreateJobObject(IntPtr.Zero, null);
             if (outerJob == IntPtr.Zero) return FailClosed();
