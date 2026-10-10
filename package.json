@@ -26,6 +26,7 @@
 		"paging.ts",
 		"usage.ts",
 		"chain.ts",
+		"unicode.ts",
 		"CONTRIBUTING.md",
 		"SECURITY.md",
 		"LICENSE",

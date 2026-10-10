@@ -1454,21 +1454,25 @@ test('model selectors are bounded before child spawn or background retention', a
   const tooLong = 'x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1);
   const oversizedUtf8 = '€'.repeat(Math.ceil(MAX_MODEL_SELECTOR_BYTES / 3));
   const control = 'fake/worker\0model';
+  const unpaired = `fake/${String.fromCharCode(0xd800)}`;
   const invalid = [
     { agent: 'worker', task: 'invalid model', model: tooLong },
     { tasks: [{ agent: 'worker', task: 'invalid model', model: tooLong }] },
     { chain: [{ agent: 'worker', task: 'invalid model', model: tooLong }] },
     { agent: 'worker', task: 'invalid model', model: oversizedUtf8 },
     { agent: 'worker', task: 'invalid model', model: control },
+    { agent: 'worker', task: 'invalid model', model: unpaired },
   ];
   assert.equal(Value.Check(schema, invalid[0]), false, 'the schema rejects overlong selectors');
   assert.equal(Value.Check(schema, invalid[3]), true, 'runtime byte validation also rejects multibyte values below the character limit');
+  assert.equal(Value.Check(schema, invalid[5]), true, 'runtime validation rejects unpaired surrogates that JSON schemas cannot express');
   for (const request of invalid) {
     const result = await invoke('subagent', { ...request, background: true });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /model must be a non-empty selector of at most 512 UTF-8 bytes/);
     assert.equal(JSON.stringify(result).includes(tooLong), false);
     assert.equal(JSON.stringify(result).includes(control), false);
+    assert.equal(JSON.stringify(result).includes(unpaired), false);
     assert.equal(result.details.background, undefined);
   }
   assert.equal(traces().length, 0, 'invalid model selectors must not launch children');
@@ -1493,13 +1497,17 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
     ui: { confirm: async () => { approvals++; return true; } },
   };
   const tooLong = 'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH + 1);
+  const unpairedPath = `invalid${String.fromCharCode(0xd800)}path`;
   const invalid = [
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: null },
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: 'bad\0path' },
+    { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: unpairedPath },
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: tooLong },
     { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: {} }] },
+    { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: unpairedPath }] },
     { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: tooLong }] },
     { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: 'bad\0path' }] },
+    { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: unpairedPath }] },
     { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: tooLong }] },
   ];
   for (const params of invalid) {
@@ -1507,6 +1515,7 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /cwd/);
     assert.equal(JSON.stringify(result).includes(tooLong), false);
+    assert.equal(JSON.stringify(result).includes(unpairedPath), false);
   }
   assert.equal(approvals, 0);
   assert.equal(traces().length, 0);
@@ -1514,6 +1523,8 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'valid', cwd: 'project' }), true);
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: 'bad\0path' }), false);
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: tooLong }), false);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: unpairedPath }), true,
+    'runtime validation rejects unpaired surrogates that JSON schemas cannot express');
   const multibyteUnderLimit = '😀'.repeat(Math.floor(MAX_WORKING_DIRECTORY_LENGTH / 2));
   assert.ok(multibyteUnderLimit.length <= MAX_WORKING_DIRECTORY_LENGTH);
   assert.ok(Buffer.byteLength(multibyteUnderLimit, 'utf8') > MAX_WORKING_DIRECTORY_LENGTH);
@@ -1579,6 +1590,31 @@ test('task input limits use UTF-8 bytes and reject oversized dispatches before a
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
+test('delegated task text rejects unpaired surrogates before approval or job creation', async () => {
+  const unpaired = `invalid${String.fromCharCode(0xd800)}task`;
+  const schema = tools.get('subagent').definition.parameters;
+  const requests = [
+    { agent: 'project', task: unpaired },
+    { tasks: [{ agent: 'project', task: unpaired }] },
+    { chain: [{ agent: 'project', task: unpaired }] },
+  ];
+  for (const request of requests) assert.equal(Value.Check(schema, request), true);
+
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async () => { approvals++; return true; } } };
+  for (const request of requests) {
+    const result = await invoke('subagent', { ...request, agentScope: 'project', background: true }, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Task must contain well-formed Unicode/);
+    assert.equal(JSON.stringify(result).includes(unpaired), false);
+    assert.equal(result.details.background, undefined);
+  }
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+});
+
 test('spawn errors remain inspectable and release process slots', async () => {
   const id = await launch({ cwd: join(sandbox, 'does-not-exist') });
   const failed = await finish(id);
@@ -1613,7 +1649,7 @@ test('agent listings omit oversized descriptions from structured metadata', asyn
     const listed = await invoke('subagent_agents', {});
     assert.equal(listed.details.agents.some(agent => agent.name === 'oversized-description'), false);
     assert.ok(listed.details.diagnostics.some(diagnostic => diagnostic.filePath === file &&
-      diagnostic.message === `description must be at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`));
+      diagnostic.message === `description must be well-formed Unicode and at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`));
     assert.equal(JSON.stringify(listed).includes(description), false);
     const outputSchema = tools.get('subagent_agents').definition.outputSchema;
     assert.equal(Value.Check(outputSchema, listed.structuredContent), true);

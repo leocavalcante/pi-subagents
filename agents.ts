@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import { isUtf8 } from "node:buffer";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { isWellFormedUnicode } from "./unicode.ts";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
@@ -62,13 +63,13 @@ const INVALID_MODEL_SELECTOR_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 export function isSafeAgentName(name: string): boolean {
 	// UTF-8 is never shorter than UTF-16 code units; reject large names before scanning them.
-	return name.length > 0 && name.length <= MAX_AGENT_NAME_BYTES &&
+	return name.length > 0 && name.length <= MAX_AGENT_NAME_BYTES && isWellFormedUnicode(name) &&
 		Buffer.byteLength(name, "utf8") <= MAX_AGENT_NAME_BYTES && name.trim().length > 0 && !INVALID_AGENT_NAME.test(name);
 }
 
 /** Keep the value passed as a child argv element well below platform command-line limits. */
 export function isSafeModelSelector(value: unknown, allowBlank = false): value is string {
-	return typeof value === "string" && value.length <= MAX_MODEL_SELECTOR_BYTES &&
+	return typeof value === "string" && value.length <= MAX_MODEL_SELECTOR_BYTES && isWellFormedUnicode(value) &&
 		Buffer.byteLength(value, "utf8") <= MAX_MODEL_SELECTOR_BYTES &&
 		(allowBlank || value.trim().length > 0) && !INVALID_MODEL_SELECTOR_CONTROL.test(value);
 }
@@ -112,9 +113,9 @@ function addDiagnostic(
  */
 function parseToolList(value: unknown): string[] | undefined {
 	if (value === undefined) return undefined;
-	if (typeof value === "string" && (value.length > MAX_AGENT_TOOL_LIST_BYTES ||
+	if (typeof value === "string" && (value.length > MAX_AGENT_TOOL_LIST_BYTES || !isWellFormedUnicode(value) ||
 		Buffer.byteLength(value, "utf8") > MAX_AGENT_TOOL_LIST_BYTES)) {
-		throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
+		throw new Error(`tools must be valid Unicode, at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes, and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
 	}
 	if (Array.isArray(value) && value.length > MAX_AGENT_TOOL_COUNT) {
 		throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
@@ -130,6 +131,7 @@ function parseToolList(value: unknown): string[] | undefined {
 		if (item.length > MAX_AGENT_TOOL_LIST_BYTES) {
 			throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
 		}
+		if (!isWellFormedUnicode(item)) throw new Error("tools entries must contain well-formed Unicode.");
 		const tool = item.trim();
 		if (!tool) continue;
 		if (tool.includes(",") || tool.startsWith("+") || tool.startsWith("-") || INVALID_AGENT_TOOL_CONTROL.test(tool)) {
@@ -303,15 +305,15 @@ function loadAgentsFromDir(
 				throw new Error("name and description must be non-empty strings.");
 			}
 			const description = frontmatter.description.trim();
-			if (description.length > MAX_AGENT_DESCRIPTION_BYTES ||
+			if (description.length > MAX_AGENT_DESCRIPTION_BYTES || !isWellFormedUnicode(description) ||
 				Buffer.byteLength(description, "utf8") > MAX_AGENT_DESCRIPTION_BYTES) {
-				throw new Error(`description must be at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`);
+				throw new Error(`description must be well-formed Unicode and at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`);
 			}
 			if (!isSafeAgentName(frontmatter.name.trim())) {
-				throw new Error(`name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and contain no control or bidirectional formatting characters.`);
+				throw new Error(`name must be well-formed Unicode, at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, and contain no control or bidirectional formatting characters.`);
 			}
 			if (frontmatter.model !== undefined && !isSafeModelSelector(frontmatter.model, true)) {
-				throw new Error(`model must be at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`);
+				throw new Error(`model must be well-formed Unicode, at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes, and contain no control characters.`);
 			}
 			const thinking = frontmatter.thinking;
 			if (thinking !== undefined && !THINKING_LEVELS.includes(thinking as ThinkingLevel)) {

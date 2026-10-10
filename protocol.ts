@@ -1,4 +1,5 @@
 import { protocolUsageError } from "./usage.ts";
+import { isWellFormedUnicode } from "./unicode.ts";
 
 /** Bound JSON structure breadth and nesting before parsing untrusted child records. */
 export const MAX_JSON_STRUCTURE_TOKENS = 65_536;
@@ -30,7 +31,11 @@ export function parseChildEvent(line: string): unknown {
 		}
 	}
 	const value: unknown = JSON.parse(line);
-	if (hasNonFiniteJsonNumber(value)) {
+	const invalidData = invalidJsonData(value);
+	if (invalidData === "unicode") {
+		throw new RangeError("Subagent JSON event contains an ill-formed Unicode string.");
+	}
+	if (invalidData === "number") {
 		// JSON.parse can turn a syntactically valid exponent such as 1e400
 		// into Infinity, which JSON.stringify later silently changes to null.
 		throw new RangeError("Subagent JSON event contains a number outside the finite JavaScript range.");
@@ -57,15 +62,24 @@ export function userMessageError(message: unknown): string | undefined {
 }
 
 /** The JSON structure scanner bounds recursion to 128 levels. */
-function hasNonFiniteJsonNumber(value: unknown): boolean {
-	if (typeof value === "number") return !Number.isFinite(value);
-	if (Array.isArray(value)) return value.some(hasNonFiniteJsonNumber);
-	if (isObject(value)) {
-		for (const key in value) {
-			if (Object.hasOwn(value, key) && hasNonFiniteJsonNumber(value[key])) return true;
+function invalidJsonData(value: unknown): "unicode" | "number" | undefined {
+	if (typeof value === "string") return isWellFormedUnicode(value) ? undefined : "unicode";
+	if (typeof value === "number") return Number.isFinite(value) ? undefined : "number";
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const invalid = invalidJsonData(item);
+			if (invalid) return invalid;
 		}
 	}
-	return false;
+	if (isObject(value)) {
+		for (const key in value) {
+			if (!Object.hasOwn(value, key)) continue;
+			if (!isWellFormedUnicode(key)) return "unicode";
+			const invalid = invalidJsonData(value[key]);
+			if (invalid) return invalid;
+		}
+	}
+	return undefined;
 }
 
 const CAPTURED_MESSAGE_ROLES = new Set(["assistant", "user", "toolResult"]);

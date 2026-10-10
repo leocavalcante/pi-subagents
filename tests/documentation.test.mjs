@@ -21,6 +21,8 @@ test('README documents the minimum Node.js version required by the package', () 
 test('README documents bounded agent descriptions', () => {
   const agents = section('Agent definitions');
   assert.match(agents, /Descriptions are limited to 1 KiB of UTF-8 text/);
+  assert.match(agents, /definition files must be valid UTF-8/);
+  assert.match(agents, /metadata escapes that produce unpaired UTF-16 surrogates are rejected/);
 });
 
 test('README documents bounded model selectors and tool allowlists', () => {
@@ -40,6 +42,7 @@ test('README documents bounded delegated working-directory paths', () => {
 
 test('README documents the bounded delegated task input size', () => {
   const usage = section('Usage');
+  assert.match(usage, /Task, model-selector, and working-directory strings must be well-formed Unicode/);
   assert.match(usage, /Each task is limited to 4 MiB of UTF-8 text/);
   assert.match(usage, /all task text submitted in one dispatch is limited to 16 MiB total/);
   assert.match(usage, /chain context after substitution/);
@@ -53,6 +56,7 @@ test('README documents aggregate capture limits for parallel and chained results
   assert.match(capture, /final assistant message cannot fit its task's allocated history budget, that task fails/);
   assert.match(capture, /at most 65,536 structural tokens/);
   assert.match(capture, /structure beyond 65,536 tokens/);
+  assert.match(capture, /escaped unpaired surrogates/);
   assert.match(capture, /Child stdout is capped at 128 MiB per task/);
 });
 

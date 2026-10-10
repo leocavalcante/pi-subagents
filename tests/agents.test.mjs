@@ -125,7 +125,7 @@ test('agent descriptions are bounded by UTF-8 bytes and oversized values are not
   assert.equal(result.agents[1].description, atLimit);
   assert.equal(result.diagnostics.length, 2);
   assert.ok(result.diagnostics.every(d => d.message ===
-    `description must be at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`));
+    `description must be well-formed Unicode and at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`));
   assert.equal(JSON.stringify(result).includes(oversized), false);
   assert.equal(JSON.stringify(result).includes(multibyteOversized), false);
 });
@@ -141,7 +141,7 @@ test('agent names reject oversized UTF-8 and terminal or bidirectional controls'
   const result = discoverAgents(cwd, 'user');
   assert.deepEqual(result.agents.map(a => a.name), ['café']);
   assert.equal(result.diagnostics.length, 5);
-  assert.ok(result.diagnostics.every(d => d.message === 'name must be at most 256 UTF-8 bytes and contain no control or bidirectional formatting characters.'));
+  assert.ok(result.diagnostics.every(d => d.message === 'name must be well-formed Unicode, at most 256 UTF-8 bytes, and contain no control or bidirectional formatting characters.'));
 });
 
 test('malformed YAML and invalid definitions do not break discovery', () => {
@@ -173,6 +173,23 @@ test('agent definitions with invalid UTF-8 are rejected without exposing prompt 
   assert.equal(JSON.stringify(result).includes('�'), false);
 });
 
+test('agent metadata rejects YAML escapes that decode to unpaired surrogates', () => {
+  agent(userDir, 'bad-name-surrogate', 'name: "\\uD800"\ndescription: Invalid name');
+  agent(userDir, 'bad-description-surrogate', 'name: bad-description\ndescription: "\\uD800"');
+  agent(userDir, 'bad-model-surrogate', 'name: bad-model\ndescription: Invalid model\nmodel: "\\uD800"');
+  agent(userDir, 'bad-tools-surrogate', 'name: bad-tools\ndescription: Invalid tools\ntools: ["\\uD800"]');
+  agent(userDir, 'valid', 'name: worker\ndescription: Valid worker');
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(a => a.name), ['worker']);
+  assert.equal(result.diagnostics.length, 4);
+  assert.ok(result.diagnostics.some(d => d.message.startsWith('name must be well-formed Unicode')));
+  assert.ok(result.diagnostics.some(d => d.message.startsWith('description must be well-formed Unicode')));
+  assert.ok(result.diagnostics.some(d => d.message.startsWith('model must be well-formed Unicode')));
+  assert.ok(result.diagnostics.some(d => d.message === 'tools entries must contain well-formed Unicode.'));
+  assert.equal(JSON.stringify(result).includes('\\ud800'), false);
+});
+
 test('agent filename precedence and name ordering are locale-independent', () => {
   agent(userDir, 'a', 'name: worker\ndescription: Dot filename');
   agent(userDir, 'a_', 'name: worker\ndescription: Underscore filename');
@@ -198,7 +215,7 @@ test('model selectors are byte-bounded before becoming child arguments', () => {
   assert.equal(result.agents[0].model, atLimit);
   assert.equal(result.diagnostics.length, 3);
   assert.ok(result.diagnostics.every(d => d.message ===
-    `model must be at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`));
+    `model must be well-formed Unicode, at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes, and contain no control characters.`));
   assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1)), false);
 });
 
