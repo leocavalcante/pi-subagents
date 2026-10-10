@@ -1379,6 +1379,39 @@ test('public tools reject non-object parameter payloads without throwing', async
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
+test('public tool schemas and handlers reject unknown top-level and nested parameters', async () => {
+  const subagentSchema = tools.get('subagent').definition.parameters;
+  const cases = [
+    [{ agent: 'worker', task: 'unknown root', timeOutMs: 50 }, /subagent/],
+    [{ tasks: [{ agent: 'worker', task: 'unknown task field', timeOutMs: 50 }] }, /task/],
+    [{ chain: [{ agent: 'worker', task: 'unknown chain field', timeOutMs: 50 }] }, /chain step/],
+  ];
+  for (const [params, diagnostic] of cases) {
+    assert.equal(Value.Check(subagentSchema, params), false);
+    const result = await invoke('subagent', params);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Unsupported parameters/);
+    assert.match(result.content[0].text, diagnostic);
+    assert.equal(result.details.results.length, 0);
+  }
+
+  const agentSchema = tools.get('subagent_agents').definition.parameters;
+  const agentParams = { agentScope: 'user', unexpected: true };
+  assert.equal(Value.Check(agentSchema, agentParams), false);
+  const agents = await invoke('subagent_agents', agentParams);
+  assert.equal(agents.isError, true);
+  assert.match(agents.content[0].text, /Unsupported parameters/);
+
+  const jobsSchema = tools.get('subagent_jobs').definition.parameters;
+  const jobParams = { action: 'list', unexpected: true };
+  assert.equal(Value.Check(jobsSchema, jobParams), false);
+  const jobs = await invoke('subagent_jobs', jobParams);
+  assert.equal(jobs.isError, true);
+  assert.match(jobs.content[0].text, /Unsupported parameters/);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, jobs.structuredContent), true);
+  assert.equal(traces().length, 0, 'Invalid parameters must not start child processes');
+});
+
 test('renderers tolerate partial calls and invalid tool argument types', async () => {
   const definition = tools.get('subagent').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };
