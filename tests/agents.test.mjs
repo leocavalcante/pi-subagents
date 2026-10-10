@@ -356,6 +356,100 @@ test('project agent file symlinks stay within the project trust boundary', t => 
   assert.match(result.diagnostics[0].message, /outside the project root/i);
 });
 
+test('project agent reads reject directory swaps during path revalidation and open', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-agent-race-'));
+  const makeCase = name => {
+    const projectRoot = join(root, name);
+    const projectDir = join(projectRoot, '.pi/agents');
+    const cwd = join(projectRoot, 'nested');
+    const outsideDir = join(root, `${name}-outside`);
+    const savedProjectDir = join(projectRoot, '.pi/agents-saved');
+    const baseName = `race-${name}`;
+    const fileName = `${baseName}.md`;
+    mkdirSync(projectDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(outsideDir);
+    agent(projectDir, baseName, 'name: in-project\ndescription: In project');
+    agent(outsideDir, baseName, 'name: outside\ndescription: Outside project');
+    return { projectDir, cwd, outsideDir, savedProjectDir, filePath: join(projectDir, fileName), fileName };
+  };
+  const revalidationCase = makeCase('revalidation');
+  const openCase = makeCase('open');
+  const cases = { revalidation: revalidationCase, open: openCase };
+  const script = `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { jiti } from ${JSON.stringify(new URL('./pi-runtime.mjs', import.meta.url).href)};
+    const cases = ${JSON.stringify(cases)};
+    let revalidationSwap = false;
+    let openSwap = false;
+    const originalRealpathSync = fs.realpathSync;
+    const originalOpenSync = fs.openSync;
+    const movedDirectories = new Set();
+    const replaceDirectory = item => {
+      fs.renameSync(item.projectDir, item.savedProjectDir);
+      movedDirectories.add(item);
+      fs.symlinkSync(item.outsideDir, item.projectDir, process.platform === 'win32' ? 'junction' : 'dir');
+    };
+    const restoreDirectory = item => {
+      if (!movedDirectories.has(item)) return;
+      fs.rmSync(item.projectDir, { recursive: true, force: true });
+      fs.renameSync(item.savedProjectDir, item.projectDir);
+    };
+    fs.realpathSync = function (path, ...options) {
+      const resolved = originalRealpathSync.call(fs, path, ...options);
+      if (!revalidationSwap && path === cases.revalidation.filePath) {
+        replaceDirectory(cases.revalidation);
+        revalidationSwap = true;
+      }
+      return resolved;
+    };
+    fs.openSync = function (path, ...options) {
+      if (!openSwap && typeof path === 'string' && path.toLowerCase().endsWith(cases.open.fileName.toLowerCase())) {
+        replaceDirectory(cases.open);
+        openSwap = true;
+      }
+      return originalOpenSync.call(fs, path, ...options);
+    };
+    syncBuiltinESMExports();
+    let output;
+    try {
+      const { discoverAgents } = await jiti.import(${JSON.stringify(new URL('../agents.ts', import.meta.url).href)});
+      const revalidationResult = discoverAgents(cases.revalidation.cwd, 'project');
+      const openResult = discoverAgents(cases.open.cwd, 'project');
+      output = JSON.stringify({ revalidationSwap, openSwap, revalidationResult, openResult });
+    } finally {
+      fs.realpathSync = originalRealpathSync;
+      fs.openSync = originalOpenSync;
+      syncBuiltinESMExports();
+      restoreDirectory(cases.revalidation);
+      restoreDirectory(cases.open);
+    }
+    process.stdout.write(output);
+  `;
+  try {
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: process.cwd(),
+      env: process.env,
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.equal(child.error, undefined, `Race fixture child must finish: ${child.error?.message}`);
+    assert.equal(child.status, 0, child.stderr);
+    const result = JSON.parse(child.stdout);
+    assert.equal(result.revalidationSwap, true);
+    assert.equal(result.openSwap, true);
+    assert.deepEqual(result.revalidationResult.agents, []);
+    assert.equal(result.revalidationResult.diagnostics.length, 1);
+    assert.match(result.revalidationResult.diagnostics[0].message, /outside the project root/i);
+    assert.deepEqual(result.openResult.agents, []);
+    assert.equal(result.openResult.diagnostics.length, 1);
+    assert.match(result.openResult.diagnostics[0].message, /changed while opening/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('project agents directories that resolve outside the project are ignored', () => {
   const externalDir = join(sandbox, 'external-agents');
   mkdirSync(externalDir);

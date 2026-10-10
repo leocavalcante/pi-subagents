@@ -241,6 +241,24 @@ function loadAgentsFromDir(
 			}
 		}
 
+		let expectedFileIdentity: { dev: bigint; ino: bigint } | undefined;
+		if (realProjectRoot) {
+			try {
+				const expected = fs.statSync(contentPath, { bigint: true });
+				expectedFileIdentity = { dev: expected.dev, ino: expected.ino };
+				// Re-resolve after stat so a concurrent parent-directory swap cannot
+				// redirect openSync outside the project between the earlier check and read.
+				contentPath = fs.realpathSync(contentPath);
+			} catch {
+				addDiagnostic(diagnostics, filePath, source, "Unable to re-verify project agent file safely.");
+				continue;
+			}
+			if (!isPathInside(realProjectRoot, contentPath)) {
+				addDiagnostic(diagnostics, filePath, source, "Agent file resolves outside the project root.");
+				continue;
+			}
+		}
+
 		let content: string;
 		try {
 			let flags = fs.constants.O_RDONLY;
@@ -250,13 +268,18 @@ function loadAgentsFromDir(
 			}
 			const fd = fs.openSync(contentPath, flags);
 			try {
-				const stat = fs.fstatSync(fd);
+				// The name can still race after realpath; verify the opened file identity.
+				const stat = fs.fstatSync(fd, { bigint: true });
+				if (expectedFileIdentity &&
+					(stat.dev !== expectedFileIdentity.dev || stat.ino !== expectedFileIdentity.ino)) {
+					throw new Error("Agent definition changed while opening; rejecting unsafe path.");
+				}
 				if (!stat.isFile()) throw new Error("Agent definition is not a regular file.");
-				if (stat.size > MAX_AGENT_FILE_BYTES) {
+				if (stat.size > BigInt(MAX_AGENT_FILE_BYTES)) {
 					throw new Error(`Agent definition exceeds the ${MAX_AGENT_FILE_BYTES / 1024} KiB size limit.`);
 				}
 				const remaining = MAX_AGENT_DIRECTORY_BYTES - totalBytes;
-				if (stat.size > remaining) {
+				if (stat.size > BigInt(remaining)) {
 					addDiagnostic(diagnostics, filePath, source,
 						`Agent directory exceeds the ${MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024)} MiB content limit; remaining definitions were skipped.`);
 					break;
