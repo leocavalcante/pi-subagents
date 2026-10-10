@@ -664,11 +664,11 @@ function waitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
 	});
 }
 
-async function getChildInvocation(args: string[], signal?: AbortSignal): Promise<{ command: string; args: string[] }> {
+async function getChildInvocation(args: string[], cwd: string, signal?: AbortSignal): Promise<{ command: string; args: string[] }> {
 	const invocation = getPiInvocation(args);
 	if (process.platform !== "win32") return invocation;
 	const supervisor = await waitWithAbort(getWindowsSupervisor(), signal);
-	return { command: supervisor, args: [invocation.command, ...invocation.args] };
+	return { command: supervisor, args: [invocation.command, cwd, ...invocation.args] };
 }
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
@@ -845,7 +845,7 @@ async function runSingleAgent(
 		currentResult.capture = {};
 
 		setupPhase = process.platform === "win32" ? "preparing Windows process supervisor" : "launching child process";
-		const invocation = await getChildInvocation(args, signal);
+		const invocation = await getChildInvocation(args, resolvedCwd, signal);
 		signal?.throwIfAborted();
 		setupPhase = "launching child process";
 		const exitCode = await new Promise<number>((resolve) => {

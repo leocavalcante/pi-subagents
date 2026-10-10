@@ -261,7 +261,7 @@ internal static class WindowsSupervisor
             if (handle != IntPtr.Zero && handle != new IntPtr(-1)) CloseHandle(handle);
     }
 
-    private static bool CreateSuspendedChild(string[] arguments, out ProcessInformation processInformation)
+    private static bool CreateSuspendedChild(string[] arguments, string workingDirectory, out ProcessInformation processInformation)
     {
         processInformation = new ProcessInformation();
         IntPtr[] standardHandles;
@@ -301,7 +301,7 @@ internal static class WindowsSupervisor
                 ? command : null;
             return CreateProcess(applicationName, commandLine, IntPtr.Zero, IntPtr.Zero, true,
                 CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent, IntPtr.Zero,
-                Environment.CurrentDirectory, ref startup, out processInformation);
+                workingDirectory, ref startup, out processInformation);
         }
         finally
         {
@@ -344,7 +344,11 @@ internal static class WindowsSupervisor
 
     public static int Main(string[] arguments)
     {
-        if (arguments.Length == 0) return FailClosed();
+        if (arguments.Length < 2) return FailClosed();
+        var workingDirectory = arguments[1];
+        var childArguments = new string[arguments.Length - 1];
+        childArguments[0] = arguments[0];
+        Array.Copy(arguments, 2, childArguments, 1, arguments.Length - 2);
 
         IntPtr outerJob = IntPtr.Zero;
         IntPtr innerJob = IntPtr.Zero;
@@ -367,7 +371,7 @@ internal static class WindowsSupervisor
             FailureStage = "inner job configuration";
             if (!ConfigureKillOnClose(innerJob)) return FailClosed();
             FailureStage = "suspended child creation";
-            if (!CreateSuspendedChild(arguments, out processInformation)) return FailClosed();
+            if (!CreateSuspendedChild(childArguments, workingDirectory, out processInformation)) return FailClosed();
 
             // The suspended child is already a member of the outer Job Object, so
             // abrupt supervisor death during this assignment cannot orphan it.
