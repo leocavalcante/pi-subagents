@@ -66,12 +66,21 @@ if (['silent-exit', 'junk-exit', 'session-only-exit'].includes(task)) {
   trace({ event: 'end', task });
   process.exit(0);
 }
-if (task === 'nested-usage') {
+if (task.startsWith('nested-usage')) {
   const message = { role: 'toolResult', toolCallId: 'nested', toolName: 'nested', content: [], isError: false,
     usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cacheWrite1h: 5, reasoning: 7, totalTokens: 100,
       cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 } } };
-  console.log(JSON.stringify({ type: 'message_end', message }));
-  console.log(JSON.stringify({ type: 'tool_result_end', message }));
+  const legacy = task === 'nested-usage-different-copy'
+    ? { ...message, content: [{ type: 'text', text: 'different legacy payload' }] } : message;
+  if (task === 'nested-usage-legacy-only') {
+    console.log(JSON.stringify({ type: 'tool_result_end', message }));
+  } else if (task === 'nested-usage-legacy-first') {
+    console.log(JSON.stringify({ type: 'tool_result_end', message }));
+    console.log(JSON.stringify({ type: 'message_end', message }));
+  } else {
+    console.log(JSON.stringify({ type: 'message_end', message }));
+    console.log(JSON.stringify({ type: 'tool_result_end', message: legacy }));
+  }
 }
 if (task === 'malformed-cost-component' || task === 'malformed-nested-usage') {
   const toolResult = task === 'malformed-nested-usage';

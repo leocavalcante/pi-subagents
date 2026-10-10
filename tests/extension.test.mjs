@@ -408,6 +408,20 @@ test('nested tool usage counts once and does not change assistant context or tur
   assert.equal(result.details.results[0].usage.turns, 2);
   assert.equal(result.details.results[0].usage.contextTokens, 2);
   assert.equal(result.details.results[0].usage.cost, 1);
+  assert.equal(result.details.results[0].messages.filter(message => message.role === 'toolResult').length, 1,
+    'an identical legacy copy is not retained a second time');
+});
+
+test('legacy tool-result deduplication is adjacent, exact, and backward-compatible', async () => {
+  for (const task of ['nested-usage-legacy-first', 'nested-usage-legacy-only']) {
+    const result = await invoke('subagent', { agent: 'worker', task });
+    assert.equal(result.details.results[0].messages.filter(message => message.role === 'toolResult').length, 1,
+      task + ' should retain the tool result once');
+  }
+  const distinct = await invoke('subagent', { agent: 'worker', task: 'nested-usage-different-copy' });
+  const toolResults = distinct.details.results[0].messages.filter(message => message.role === 'toolResult');
+  assert.equal(toolResults.length, 2, 'non-identical messages sharing a call ID remain distinct');
+  assert.equal(toolResults[1].content[0].text, 'different legacy payload');
 });
 
 test('background job metadata reports cumulative chain usage without billing inspections', async () => {
