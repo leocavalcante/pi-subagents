@@ -1774,6 +1774,49 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
   } finally { rmSync(badFile); }
 });
 
+test('agent timeout defaults apply in every dispatch mode and yield to call overrides', async () => {
+  const file = join(sandbox, 'agent/agents/timeout-default.md');
+  writeFileSync(file, '---\nname: timeout-default\ndescription: Timeout default worker\ntimeoutMs: 250\n---\nTimed worker.\n');
+  try {
+    const listing = await invoke('subagent_agents', {});
+    const configured = listing.details.agents.find(agent => agent.name === 'timeout-default');
+    assert.equal(configured.timeoutMs, 250);
+    assert.match(listing.content[0].text, /timeoutMs=250/);
+    assert.equal(Value.Check(tools.get('subagent_agents').definition.outputSchema, listing.structuredContent), true);
+
+    const defaultDeadline = await invoke('subagent', {
+      agent: 'timeout-default', task: 'delay=2000 agent default timeout',
+    });
+    assert.equal(defaultDeadline.isError, true);
+    assert.equal(defaultDeadline.details.results[0].timedOut, true);
+    assert.equal(defaultDeadline.details.results[0].timeoutMs, 250);
+    assert.match(defaultDeadline.content[0].text, /timed out after 250 ms/);
+
+    const topLevelOverride = await invoke('subagent', {
+      agent: 'timeout-default', task: 'delay=500 top-level timeout override', timeoutMs: 1200,
+    });
+    assert.notEqual(topLevelOverride.isError, true);
+    assert.equal(topLevelOverride.details.results[0].timeoutMs, 1200);
+
+    for (const params of [
+      { timeoutMs: 100, tasks: [{ agent: 'timeout-default', task: 'delay=500 task override', timeoutMs: 1200 }] },
+      { timeoutMs: 100, chain: [{ agent: 'timeout-default', task: 'delay=500 chain override', timeoutMs: 1200 }] },
+    ]) {
+      const overridden = await invoke('subagent', params);
+      assert.notEqual(overridden.isError, true);
+      assert.equal(overridden.details.results[0].timeoutMs, 1200);
+    }
+
+    const background = await invoke('subagent', {
+      background: true, agent: 'timeout-default', task: 'delay=2000 background default timeout',
+    });
+    const finished = await finish(background.details.background.id);
+    assert.equal(finished.state, 'failed');
+    assert.equal(finished.latest.details.results[0].timedOut, true);
+    assert.equal(finished.latest.details.results[0].timeoutMs, 250);
+  } finally { rmSync(file); }
+});
+
 test('agent listings omit oversized descriptions from structured metadata', async () => {
   const file = join(sandbox, 'agent/agents/oversized-description.md');
   const description = `PRIVATE_DESCRIPTION_${'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES)}`;

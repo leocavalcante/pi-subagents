@@ -60,19 +60,20 @@ description: General-purpose worker
 Complete the delegated task. Report the changes made and checks run.
 ```
 
-An agent can set `model`, `thinking`, and `tools` in its frontmatter. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
+An agent can set `model`, `thinking`, `tools`, and a default `timeoutMs` in its frontmatter. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
 
 ```yaml
 model: anthropic/claude-sonnet-4-5
 thinking: high
 tools: [read, bash]
+timeoutMs: 120000
 ```
 
 Without `model`, it inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
 
 Without `tools`, it uses Pi's defaults. Both `tools: read, bash` and `tools: [read, bash]` work. Set `tools: []` to disable the initial tool selection. Entries cannot contain commas or control characters because the child CLI parses a comma-separated list; they also cannot start with `+` or `-`, which Pi interprets as modifiers to the default tool selection rather than allowlist names. Tool arrays are limited to 256 entries; comma-separated values and the normalized `--tools` argument are each capped at 4 KiB of UTF-8 text. This is not a sandbox; extensions can still change the selection.
 
-Definitions need non-empty `name` and `description` fields. Agent definition files must be valid UTF-8, and metadata escapes that produce unpaired UTF-16 surrogates are rejected rather than silently normalized. Agent names are limited to 256 UTF-8 bytes and cannot contain terminal or bidirectional formatting controls; this keeps identifiers safe in trust prompts, diagnostics, and UI output. Descriptions are limited to 1 KiB of UTF-8 text so listing metadata remains compact. Untrusted metadata shown in listings and project-agent confirmations is escaped for display. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents. Duplicate names in the same directory produce a diagnostic naming both files. The last valid definition in locale-independent lexical filename order still wins. Intentional project-over-personal overrides do not produce a duplicate warning.
+Definitions need non-empty `name` and `description` fields. Agent `timeoutMs` defaults must be whole milliseconds from 1 to 86400000 (24 hours); call-level values can override the definition. Agent definition files must be valid UTF-8, and metadata escapes that produce unpaired UTF-16 surrogates are rejected rather than silently normalized. Agent names are limited to 256 UTF-8 bytes and cannot contain terminal or bidirectional formatting controls; this keeps identifiers safe in trust prompts, diagnostics, and UI output. Descriptions are limited to 1 KiB of UTF-8 text so listing metadata remains compact. Untrusted metadata shown in listings and project-agent confirmations is escaped for display. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents. Duplicate names in the same directory produce a diagnostic naming both files. The last valid definition in locale-independent lexical filename order still wins. Intentional project-over-personal overrides do not produce a duplicate warning.
 
 Project-local definitions live in `.pi/agents/*.md`. The tool loads only personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents. Project definitions override personal definitions of the same name when using `"both"`. Project agent directories and files may use symlinks that resolve within the project root; links resolving outside it are skipped and reported as diagnostics. Personal agent symlinks are unchanged.
 
@@ -80,7 +81,7 @@ Agent discovery is bounded for both personal and project directories: it scans a
 
 ## Usage
 
-Use `subagent_agents` to list agent descriptions, source paths, model and tool settings, and invalid definitions without running an agent:
+Use `subagent_agents` to list agent descriptions, source paths, model and tool settings, configured timeout defaults, and invalid definitions without running an agent:
 
 ```json
 {}
@@ -171,7 +172,7 @@ Set `timeoutMs` to bound a child's runtime:
 }
 ```
 
-There is no deadline by default. Values must be whole milliseconds between 1 and 86400000, up to 24 hours. The timer starts at child spawn; permission prompts, prompt-file preparation, and waiting for a process slot do not count.
+There is no deadline by default. Values must be whole milliseconds between 1 and 86400000, up to 24 hours. The timer starts at child spawn; permission prompts, prompt-file preparation, and waiting for a process slot do not count. An agent definition may set `timeoutMs` as its default, shown by `subagent_agents`; a per-entry or top-level call value overrides it. The precedence is entry, top-level call, agent frontmatter, then no deadline.
 
 For parallel and chain modes, a top-level `timeoutMs` is the default for each child, not a deadline for the entire batch. An entry's `timeoutMs` overrides that default. Deadlines also work with background execution.
 

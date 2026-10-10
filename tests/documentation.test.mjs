@@ -25,6 +25,17 @@ test('README documents bounded agent descriptions', () => {
   assert.match(agents, /metadata escapes that produce unpaired UTF-16 surrogates are rejected/);
 });
 
+test('README documents agent timeout defaults and precedence', () => {
+  const agents = section('Agent definitions');
+  const usage = section('Usage');
+  const deadlines = section('Task deadlines');
+  assert.match(agents, /default `timeoutMs` in its frontmatter/);
+  assert.match(usage, /configured timeout defaults/);
+  assert.match(agents, /whole milliseconds from 1 to 86400000 \(24 hours\)/);
+  assert.match(deadlines, /a per-entry or top-level call value overrides it/);
+  assert.match(deadlines, /entry, top-level call, agent frontmatter, then no deadline/);
+});
+
 test('README documents bounded model selectors and tool allowlists', () => {
   const agents = section('Agent definitions');
   const overrides = section('Model and thinking overrides');
