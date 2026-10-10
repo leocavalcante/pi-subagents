@@ -89,6 +89,19 @@ test('background returns before completion, retains progress, and sends a follow
   assert.equal(child.thinking, 'high');
 });
 
+test('foreground cancellation preserves an explicit null abort reason and releases its slot', async () => {
+  const controller = new AbortController();
+  const pending = invoke('subagent', { agent: 'worker', task: 'delay=10000 null-abort-reason' }, ctx(), controller.signal).then(
+    () => ({ resolved: true }),
+    reason => ({ reason }),
+  );
+  await waitFor(() => traces().some(entry => entry.event === 'start' && entry.task === 'delay=10000 null-abort-reason'));
+  controller.abort(null);
+  assert.deepEqual(await pending, { reason: null });
+  const next = await invoke('subagent', { agent: 'worker', task: 'after null abort reason' });
+  assert.notEqual(next.isError, true, 'Child process slot must be released after cancellation');
+});
+
 test('progress callback failures do not interrupt child capture or cleanup', async () => {
   const cases = [
     { name: 'single', params: { agent: 'worker', task: 'progress callback single' }, results: 1 },

@@ -954,7 +954,7 @@ async function runSingleAgent(
 			finalAssistantMessageDropped ? "Final assistant message exceeded the available history capture budget." : undefined,
 		];
 		if (failureCauses.some(Boolean)) currentResult.errorMessage = failureCauses.filter(Boolean).join(" ");
-		if (wasAborted) throw signal?.reason ?? new Error("Subagent was aborted");
+		if (wasAborted) throw signal && signal.reason !== undefined ? signal.reason : new Error("Subagent was aborted");
 		return currentResult;
 	} catch (error) {
 		// Cancellation still aborts the whole operation. Only pre-spawn failures
