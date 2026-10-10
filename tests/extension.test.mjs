@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { jiti, loadExtensions } from './pi-runtime.mjs';
 import { Value } from 'typebox/value';
+import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -84,6 +85,31 @@ test('background returns before completion, retains progress, and sends a follow
   const child = traces().find(t => t.event === 'start');
   assert.equal(child.model, 'fake/parent');
   assert.equal(child.thinking, 'high');
+});
+
+test('background completion rendering escapes terminal controls without changing follow-up content', async () => {
+  const id = await launch({ task: 'terminal-control-text' });
+  await finish(id);
+  assert.equal(messages.length, 1);
+
+  const followUp = messages[0].message;
+  const hostile = `terminal ${String.fromCharCode(27)}]52;c;pi-subagents-test${String.fromCharCode(7)} ${String.fromCharCode(27)}[2J${String.fromCharCode(0x9b)}2J\nnext line`;
+  assert.ok(followUp.content.includes(hostile), 'the model-facing follow-up keeps the original child output');
+  assert.equal(followUp.details.latest.details.results[0].messages.at(-1).content[0].text, hostile,
+    'structured child output remains unchanged');
+
+  const renderer = extension.messageRenderers.get('subagent-background');
+  assert.equal(typeof renderer, 'function');
+  initTheme('dark', false);
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text };
+  const rendered = renderer(followUp, { expanded: false, outputPad: 1 }, theme).render(100).join('\n');
+  assert.equal(rendered.includes(`${String.fromCharCode(27)}]52;`), false, 'child OSC sequences must not reach the terminal');
+  assert.equal(rendered.includes(`${String.fromCharCode(27)}[2J`), false, 'child CSI sequences must not reach the terminal');
+  assert.equal(rendered.includes(String.fromCharCode(7)), false, 'child BEL controls must not reach the terminal');
+  assert.equal(rendered.includes(String.fromCharCode(0x9b)), false, 'C1 controls must not reach the terminal');
+  assert.ok(rendered.includes('\\u001b]52;c;pi-subagents-test\\u0007'));
+  assert.ok(rendered.includes('\\u009b2J'));
+  assert.ok(rendered.includes('next line'));
 });
 
 test('silent background jobs work across modes and expose the notification policy', async () => {
