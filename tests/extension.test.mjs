@@ -633,6 +633,67 @@ test('cancellation during prompt creation prevents spawning and cleans up the pr
   }
 });
 
+test('cancellation before spawn is retried and deadlines start after spawn', async t => {
+  const children = [];
+  const spawn = t.mock.method(childProcess, 'spawn', () => {
+    const child = new EventEmitter();
+    child.pid = undefined;
+    child.killRequests = 0;
+    child.stdin = new EventEmitter();
+    child.stdin.end = () => {};
+    child.stdout = new EventEmitter();
+    child.stdout.destroy = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stderr.destroy = () => {};
+    child.finish = () => {
+      if (child.closed) return;
+      child.closed = true;
+      clearTimeout(child.fallbackTimer);
+      child.emit('exit', null);
+      child.emit('close', null);
+    };
+    child.kill = () => {
+      child.killRequests++;
+      child.killAt ??= Date.now();
+      queueMicrotask(child.finish);
+      return false;
+    };
+    child.spawnTimer = setTimeout(() => {
+      child.pid = Symbol('synthetic child PID');
+      child.spawnAt = Date.now();
+      child.emit('spawn');
+    }, 60);
+    child.fallbackTimer = setTimeout(child.finish, 500);
+    children.push(child);
+    return child;
+  });
+  syncBuiltinESMExports();
+  try {
+    const controller = new AbortController();
+    const canceledPending = invoke('subagent', { agent: 'worker', task: 'abort before spawn' }, ctx(), controller.signal)
+      .then(result => ({ result }), error => ({ error }));
+    await waitFor(() => children.length === 1);
+    controller.abort();
+    const canceled = await canceledPending;
+    assert.equal(canceled.error, controller.signal.reason);
+    assert.equal(children[0].killRequests, 1, 'Cancellation must be retried once a PID is available');
+
+    const timed = await invoke('subagent', { agent: 'worker', task: 'deadline starts at spawn', timeoutMs: 30 });
+    const child = children[1];
+    assert.equal(timed.details.results[0].timedOut, true);
+    assert.ok(child.killRequests > 0, 'An expired deadline must terminate the spawned child');
+    assert.ok(child.killAt - child.spawnAt >= 20, 'The deadline must start when the child emits spawn');
+  } finally {
+    for (const child of children) {
+      clearTimeout(child.spawnTimer);
+      child.finish();
+    }
+    spawn.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test('cancel handles running and queued tasks, with SIGKILL escalation', async () => {
   const started = await invoke('subagent', { background: true, tasks: Array.from({ length: 8 }, () => ({ agent: 'worker', task: 'delay=10000 stubborn' })) });
   const id = started.details.background.id;
