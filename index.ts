@@ -75,6 +75,7 @@ const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
 const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
+const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
@@ -620,6 +621,12 @@ async function runSingleAgent(
 	};
 
 	signal?.throwIfAborted();
+	const resolvedCwd = cwd ? path.resolve(defaultCwd, cwd) : defaultCwd;
+	if (resolvedCwd.length > MAX_WORKING_DIRECTORY_LENGTH) {
+		currentResult.exitCode = 1;
+		currentResult.errorMessage = `Resolved working directory exceeds the ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code-unit limit.`;
+		return currentResult;
+	}
 	if (model !== undefined && !isSafeModelSelector(model)) {
 		currentResult.exitCode = 1;
 		currentResult.errorMessage = `Resolved model selector must be no longer than ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`;
@@ -689,7 +696,7 @@ async function runSingleAgent(
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
-				cwd: cwd ? path.resolve(defaultCwd, cwd) : defaultCwd,
+				cwd: resolvedCwd,
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
 				// On POSIX, cancel the entire group, including tools spawned by the child.
@@ -1003,7 +1010,8 @@ function taskTextSchema(description: string) {
 
 const WorkingDirectory = Type.String({
 	pattern: "^[^\\u0000]*$",
-	description: "Working directory for the agent process; must not contain a NUL character.",
+	maxLength: MAX_WORKING_DIRECTORY_LENGTH,
+	description: `Working directory for the agent process; maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units and no NUL characters.`,
 });
 
 const TaskItem = Type.Object({
@@ -1576,6 +1584,22 @@ export default function (pi: ExtensionAPI) {
 				(typeof cwd !== "string" || cwd.includes("\0")))) {
 				return {
 					content: [{ type: "text", text: "cwd must be a string without NUL characters." }],
+					details: makeDetails(mode)([]),
+					isError: true,
+				};
+			}
+			if (workingDirectories.some((cwd) => typeof cwd === "string" && cwd.length > MAX_WORKING_DIRECTORY_LENGTH)) {
+				return {
+					content: [{ type: "text", text: `cwd must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` }],
+					details: makeDetails(mode)([]),
+					isError: true,
+				};
+			}
+			const resolvedWorkingDirectories = workingDirectories.map((cwd) =>
+				typeof cwd === "string" && cwd ? path.resolve(ctx.cwd, cwd) : ctx.cwd);
+			if (resolvedWorkingDirectories.some((cwd) => cwd.length > MAX_WORKING_DIRECTORY_LENGTH)) {
+				return {
+					content: [{ type: "text", text: `Resolved cwd must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` }],
 					details: makeDetails(mode)([]),
 					isError: true,
 				};

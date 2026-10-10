@@ -15,6 +15,7 @@ import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const { MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
 const traceFile = join(sandbox, 'trace.jsonl');
@@ -1410,28 +1411,49 @@ test('model selectors are bounded before child spawn or background retention', a
   assert.equal(traces().find(entry => entry.event === 'start').model, valid);
 });
 
-test('working directory arguments reject non-strings and NUL before project approval or spawn', async () => {
+test('working directory arguments reject non-strings, NUL, and overlong paths before approval or spawn', async () => {
   let approvals = 0;
   const context = {
     ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
     ui: { confirm: async () => { approvals++; return true; } },
   };
+  const tooLong = 'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH + 1);
   const invalid = [
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: null },
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: 'bad\0path' },
+    { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: tooLong },
     { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: {} }] },
+    { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: tooLong }] },
     { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: 'bad\0path' }] },
+    { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: tooLong }] },
   ];
   for (const params of invalid) {
     const result = await invoke('subagent', params, context);
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /cwd/);
+    assert.equal(JSON.stringify(result).includes(tooLong), false);
   }
   assert.equal(approvals, 0);
   assert.equal(traces().length, 0);
   const schema = tools.get('subagent').definition.parameters;
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'valid', cwd: 'project' }), true);
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: 'bad\0path' }), false);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: tooLong }), false);
+  const multibyteUnderLimit = '😀'.repeat(Math.floor(MAX_WORKING_DIRECTORY_LENGTH / 2));
+  assert.ok(multibyteUnderLimit.length <= MAX_WORKING_DIRECTORY_LENGTH);
+  assert.ok(Buffer.byteLength(multibyteUnderLimit, 'utf8') > MAX_WORKING_DIRECTORY_LENGTH);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'valid unicode cwd', cwd: multibyteUnderLimit }), true);
+  const atLimit = 'a/'.repeat(Math.floor(MAX_WORKING_DIRECTORY_LENGTH / 2)) + 'a';
+  assert.equal(atLimit.length, MAX_WORKING_DIRECTORY_LENGTH);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'resolved cwd', cwd: atLimit }), true);
+  const resolvedTooLong = await invoke('subagent', {
+    agent: 'project', task: 'resolved cwd', agentScope: 'project', cwd: atLimit,
+  }, context);
+  assert.equal(resolvedTooLong.isError, true);
+  assert.match(resolvedTooLong.content[0].text, /Resolved cwd must not exceed/);
+  assert.equal(JSON.stringify(resolvedTooLong).includes(atLimit), false);
+  assert.equal(approvals, 0, 'a joined path over the limit must be rejected before project approval');
+  assert.equal(traces().length, 0, 'a joined path over the limit must be rejected before spawn');
 });
 
 test('large tasks use stdin and relative cwd resolves from the parent session', async () => {
