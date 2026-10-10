@@ -146,7 +146,7 @@ Set `model` or `thinking` on a call without editing the agent definition:
 }
 ```
 
-Parallel and chain entries accept the same fields. Each field resolves independently, with precedence: entry, top-level call, agent frontmatter, then parent session. Parent thinking is inherited only when the model is also inherited from the parent. If neither the call nor the agent sets `thinking`, an explicit model uses Pi's configured default or model suffix instead.
+Parallel and chain entries accept the same fields. Each field resolves independently, with precedence: entry, top-level call, agent frontmatter, then parent session. Set `model: null` on a call or entry to ignore the agent's configured model and inherit the parent's active model; an entry-level `null` also overrides a top-level batch model. Omitted model values use the normal precedence. Parent thinking is inherited only when the model is also inherited from the parent. If neither the call nor the agent sets `thinking`, an explicit model uses Pi's configured default or model suffix instead.
 
 Model selectors support Pi's `provider/id` and `:thinking` syntax and are limited to 512 UTF-8 bytes without control characters. A resolved `thinking` setting overrides a model suffix. These options work in foreground and background modes and leave the agent's tools and project approval unchanged.
 
