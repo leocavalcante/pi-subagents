@@ -182,6 +182,25 @@ test('finished output retention has a byte budget without dropping job metadata 
   await jobs.shutdown();
 });
 
+test('waits re-entered from completion delivery resolve after output retention', async () => {
+  const delivered = [];
+  let jobs;
+  let completionWait;
+  jobs = new JobManager(job => {
+    delivered.push(job);
+    completionWait = jobs.wait(job.id, 1000);
+  }, () => false, 8, 32, { maxBytes: 3, measure: result => result.length });
+  const job = jobs.start('re-entrant wait', async () => 'too large');
+  const waiting = jobs.wait(job.id, 1000);
+  const finished = await waiting;
+  const reentered = await completionWait;
+  assert.equal(finished.job.outputEvicted, true);
+  assert.equal(reentered.job.outputEvicted, true);
+  assert.equal(reentered.job.latest, undefined);
+  assert.equal(delivered[0].latest, 'too large', 'Completion delivery still receives the result before eviction');
+  await jobs.shutdown();
+});
+
 test('compact observations are detached, survive output eviction, and share job lifetime', async () => {
   const jobs = new JobManager(() => {}, () => false, 8, 32,
     { maxBytes: 0, measure: () => 1 }, result => result.total === undefined ? undefined : result);
