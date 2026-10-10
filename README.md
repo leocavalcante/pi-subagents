@@ -287,7 +287,7 @@ Malformed usage and arithmetic overflow fail the task without exposing provider 
 
 Each child has bounded output capture:
 
-- JSONL records can be up to 8 MiB in UTF-8. An oversized record fails the task, is discarded through the next newline, and does not stop stream draining.
+- JSONL records can be up to 8 MiB in UTF-8, with at most 65,536 structural tokens (container starts, commas, and colons outside strings) and 128 nesting levels. Breadth and nesting are checked before parsing; over-limit records fail the task, are discarded through the next newline, and do not stop stream draining.
 - Stderr retains its first 64 KiB, including a truncation notice. Further stderr is drained and discarded.
 - Message history retains at most 128 recent messages and 16 MiB of source JSON records per task. Parallel batches and chains share an additional 32 MiB aggregate history budget, distributed across their tasks/steps; a single-task dispatch keeps the 16 MiB per-task limit.
 
@@ -295,7 +295,7 @@ Results and tool details report capture truncation. If a final assistant message
 
 Pre-spawn failures, such as an unwritable prompt file or a synchronous spawn error, return a failed task result with the setup phase and a safe error code. They preserve earlier chain results and let independent batch tasks continue. Cancellation still aborts the operation. Raw setup-error messages are not exposed because they may contain private prompt data.
 
-A zero exit code alone is not success. The child must emit a completed assistant message; a final `toolUse` turn without a subsequent assistant response is incomplete and fails the task (a chain stops at that step). Malformed UTF-8 or JSONL, JSON nesting beyond 128 levels, numbers outside JavaScript's finite range, or malformed user, assistant, or tool-result messages (including metadata, content, or usage where applicable) cause the task to fail without crashing the parent. Redacted thinking blocks are supported, and a successful retry clears errors from earlier attempts.
+A zero exit code alone is not success. The child must emit a completed assistant message; a final `toolUse` turn without a subsequent assistant response is incomplete and fails the task (a chain stops at that step). Malformed UTF-8 or JSONL, JSON structure beyond 65,536 tokens, nesting beyond 128 levels, numbers outside JavaScript's finite range, or malformed user, assistant, or tool-result messages (including metadata, content, or usage where applicable) cause the task to fail without crashing the parent. Redacted thinking blocks are supported, and a successful retry clears errors from earlier attempts.
 
 On POSIX, when a child exits, the extension sends SIGTERM to remaining members of its process group and gives them one second to exit before sending SIGKILL. This applies even when descendants close or ignore the output pipes, so child-launched processes in that group do not survive the invocation. Keep the delegated process running and use `background: true` to decouple long-lived work from the caller. Processes that escape the group are not terminated. On Windows, descendants are not terminated when the direct child exits, whether normally or after cancellation or a deadline, and may keep running independently. Inherited output pipes get one second to drain, then the extension closes its pipe ends so they cannot hold the invocation open indefinitely. Results report this pipe cleanup.
 

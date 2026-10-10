@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } = await jiti.import('../protocol.ts');
+const { assistantMessageError, isCapturedMessageRole, parseChildEvent, MAX_JSON_STRUCTURE_TOKENS, toolResultMessageError, userMessageError } = await jiti.import('../protocol.ts');
 const message = extra => ({ content: [{ type: 'text', text: 'answer' }], stopReason: 'stop', ...extra });
 
 test('captures only result-relevant roles while leaving Pi AgentMessage roles extensible', () => {
@@ -18,6 +18,27 @@ test('JSON nesting is bounded without counting brackets inside escaped strings',
   assert.doesNotThrow(() => parseChildEvent('['.repeat(128) + '0' + ']'.repeat(128)));
   assert.throws(() => parseChildEvent('['.repeat(129) + '0' + ']'.repeat(129)), /nesting exceeded 128/);
   assert.throws(() => parseChildEvent('{bad}'), SyntaxError);
+});
+
+test('JSON structural breadth is bounded before parsing and punctuation inside strings is ignored', () => {
+  const atLimit = `[${'0,'.repeat(MAX_JSON_STRUCTURE_TOKENS - 1)}0]`;
+  assert.equal(parseChildEvent(atLimit).length, MAX_JSON_STRUCTURE_TOKENS);
+
+  const overLimit = `[${'0,'.repeat(MAX_JSON_STRUCTURE_TOKENS)}0]`;
+  const originalParse = JSON.parse;
+  let parsed = false;
+  JSON.parse = (...args) => { parsed = true; return originalParse(...args); };
+  try {
+    assert.throws(() => parseChildEvent(overLimit), /structure exceeded 65536 tokens/);
+    assert.equal(parsed, false, 'The breadth check must reject before allocating the parsed tree');
+  } finally {
+    JSON.parse = originalParse;
+  }
+  const broadObject = `{${'"key":0,'.repeat(MAX_JSON_STRUCTURE_TOKENS / 2)}"key":0}`;
+  assert.throws(() => parseChildEvent(broadObject), /structure exceeded 65536 tokens/);
+
+  const punctuation = `[]{}:,\\"`.repeat(20_000);
+  assert.deepEqual(parseChildEvent(JSON.stringify({ text: punctuation })), { text: punctuation });
 });
 
 test('rejects parsed numbers outside the finite JavaScript range at any depth', () => {
