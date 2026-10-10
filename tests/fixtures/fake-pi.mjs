@@ -89,6 +89,11 @@ if (task === 'ill-formed-unicode-event') {
   trace({ event: 'end', task });
   process.exit(0);
 }
+if (task === 'duplicate-ill-formed-unicode-event') {
+  await write(process.stdout, '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop","text":"DO_NOT_ECHO_DUPLICATE_\\uD800","text":"safe"}}\n');
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'deep-json') {
   const nested = '['.repeat(20000) + '0' + ']'.repeat(20000);
   console.log('{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"deep","name":"opaque","arguments":{"nested":' + nested + '}}],"stopReason":"stop"}}');

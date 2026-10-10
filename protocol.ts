@@ -3,6 +3,21 @@ import { isWellFormedUnicode } from "./unicode.ts";
 
 /** Bound JSON structure breadth and nesting before parsing untrusted child records. */
 export const MAX_JSON_STRUCTURE_TOKENS = 65_536;
+const ILL_FORMED_UNICODE_ERROR = "Subagent JSON event contains an ill-formed Unicode string.";
+
+function hexEscapeCodeUnit(line: string, start: number): number | undefined {
+	if (start + 4 > line.length) return undefined;
+	let value = 0;
+	for (let index = start; index < start + 4; index++) {
+		const code = line.charCodeAt(index);
+		const digit = code >= 48 && code <= 57 ? code - 48
+			: code >= 65 && code <= 70 ? code - 55
+				: code >= 97 && code <= 102 ? code - 87 : -1;
+		if (digit < 0) return undefined;
+		value = (value << 4) | digit;
+	}
+	return value;
+}
 
 export function parseChildEvent(line: string): unknown {
 	let depth = 0;
@@ -12,9 +27,31 @@ export function parseChildEvent(line: string): unknown {
 	for (let i = 0; i < line.length; i++) {
 		const code = line.charCodeAt(i);
 		if (inString) {
-			if (escaped) escaped = false;
-			else if (code === 92) escaped = true; // Backslash.
+			if (escaped) {
+				escaped = false;
+				if (code === 117) { // Validate escaped UTF-16 before JSON.parse can discard duplicate fields.
+					const codeUnit = hexEscapeCodeUnit(line, i + 1);
+					if (codeUnit !== undefined && codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+						throw new RangeError(ILL_FORMED_UNICODE_ERROR);
+					}
+					if (codeUnit !== undefined && codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+						const lowEscape = i + 5;
+						const lowCodeUnit = line.charCodeAt(lowEscape) === 92 && line.charCodeAt(lowEscape + 1) === 117
+							? hexEscapeCodeUnit(line, lowEscape + 2) : undefined;
+						if (lowCodeUnit === undefined || lowCodeUnit < 0xdc00 || lowCodeUnit > 0xdfff) {
+							throw new RangeError(ILL_FORMED_UNICODE_ERROR);
+						}
+						i += 10; // Skip the validated low-surrogate escape.
+					}
+				}
+			} else if (code === 92) escaped = true; // Backslash.
 			else if (code === 34) inString = false; // Quote.
+			else if (code >= 0xd800 && code <= 0xdbff) {
+				if (i + 1 >= line.length) throw new RangeError(ILL_FORMED_UNICODE_ERROR);
+				const lowSurrogate = line.charCodeAt(i + 1);
+				if (lowSurrogate < 0xdc00 || lowSurrogate > 0xdfff) throw new RangeError(ILL_FORMED_UNICODE_ERROR);
+				i++; // Raw JSON text may contain a well-formed surrogate pair.
+			} else if (code >= 0xdc00 && code <= 0xdfff) throw new RangeError(ILL_FORMED_UNICODE_ERROR);
 			continue;
 		}
 		if (code === 34) inString = true;
@@ -32,9 +69,7 @@ export function parseChildEvent(line: string): unknown {
 	}
 	const value: unknown = JSON.parse(line);
 	const invalidData = invalidJsonData(value);
-	if (invalidData === "unicode") {
-		throw new RangeError("Subagent JSON event contains an ill-formed Unicode string.");
-	}
+	if (invalidData === "unicode") throw new RangeError(ILL_FORMED_UNICODE_ERROR);
 	if (invalidData === "number") {
 		// JSON.parse can turn a syntactically valid exponent such as 1e400
 		// into Infinity, which JSON.stringify later silently changes to null.
