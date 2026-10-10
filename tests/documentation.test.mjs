@@ -29,6 +29,8 @@ test('CONTRIBUTING explains how Windows process containment is validated', () =>
   assert.match(contributing, /Windows-only integration tests also verify Job Object containment on cancellation, deadlines, and normal leader exit/);
   assert.match(contributing, /bare Pi executable names resolve through PATH instead of being shadowed by the task working directory/);
   assert.match(contributing, /source compilation alone does not validate this behavior—rely on Windows CI/);
+  assert.match(contributing, /type check and tests on Linux, macOS, and Windows with Node\.js 22, 24, and 26/);
+  assert.match(contributing, /POSIX process-group cleanup on both Linux and macOS/);
 });
 
 test('README documents bounded agent descriptions', () => {
