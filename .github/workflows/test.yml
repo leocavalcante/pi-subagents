@@ -15,8 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep the existing ubuntu-latest check names and test Ubuntu 26 ahead of its rollout.
-        os: [ubuntu-latest, ubuntu-26.04, windows-latest]
+        # Keep existing Ubuntu check names, test Ubuntu 26 ahead of rollout, and exercise POSIX on macOS.
+        os: [ubuntu-latest, ubuntu-26.04, macos-latest, windows-latest]
         node: [22, 24, 26]
         include:
           - os: ubuntu-latest
