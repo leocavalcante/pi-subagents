@@ -1140,6 +1140,22 @@ test('validation and project permission denial happen before launching a job', a
   assert.equal((await invoke('subagent_jobs', { action: 'status', jobId: 'missing' })).isError, true);
 });
 
+test('maximum-length valid agent names do not overflow system-prompt filenames', async () => {
+  const name = 'a'.repeat(256);
+  const definitionPath = join(sandbox, 'agent/agents/long-name.md');
+  writeFileSync(definitionPath,
+    `---\nname: ${name}\ndescription: Long-name worker\n---\nLong-name system prompt.\n`);
+  try {
+    const result = await invoke('subagent', { agent: name, task: 'long agent name prompt' });
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details.results[0].exitCode, 0);
+    const child = traces().find(entry => entry.event === 'start' && entry.task === 'long agent name prompt');
+    assert.ok(child?.promptFile, 'The child must receive the agent system prompt file.');
+  } finally {
+    rmSync(definitionPath, { force: true });
+  }
+});
+
 test('failed prompt writes remove their temporary directory and release the slot', async t => {
   let promptPath;
   const write = t.mock.method(fsPromises, 'writeFile', async file => {
@@ -1159,7 +1175,7 @@ test('failed prompt writes remove their temporary directory and release the slot
 test('setup failures return task-level results and preserve independent or earlier work', async t => {
   const originalWrite = fsPromises.writeFile;
   const write = t.mock.method(fsPromises, 'writeFile', async (...args) => {
-    if (String(args[0]).endsWith('prompt-pinned.md')) {
+    if (String(args[1]).includes('Pinned instructions.')) {
       throw Object.assign(new Error('private prompt payload'), { code: 'EACCES' });
     }
     return originalWrite(...args);

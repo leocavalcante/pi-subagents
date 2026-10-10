@@ -512,10 +512,9 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 	return results;
 }
 
-async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
+async function writePromptToTempFile(prompt: string): Promise<{ dir: string; filePath: string }> {
 	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
-	const safeName = agentName.replace(/[^\w.-]+/g, "_");
-	const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
+	const filePath = path.join(tmpDir, "system-prompt.md");
 	try {
 		await withFileMutationQueue(filePath, async () => {
 			await fs.promises.writeFile(filePath, prompt, {
@@ -692,7 +691,7 @@ async function runSingleAgent(
 		setupPhase = "preparing system prompt";
 		signal?.throwIfAborted();
 		if (agent.systemPrompt.trim()) {
-			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
+			const tmp = await writePromptToTempFile(agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
 			args.push("--append-system-prompt", tmpPromptPath);
