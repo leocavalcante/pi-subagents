@@ -53,6 +53,13 @@ test('README relative file links are included in the npm package', () => {
   }
 });
 
+test('README documents terminal-control escaping for foreground and background output', () => {
+  const security = section('Security');
+  assert.match(security, /foreground subagent result renderer escapes terminal control characters in child output and tool-call previews/);
+  assert.match(security, /background completion-message renderer also escapes child output and failure details for TUI display/i);
+  assert.match(security, /preserving the raw follow-up content and structured details/i);
+});
+
 test('README distinguishes POSIX process-group cleanup from Windows direct-child cleanup', () => {
   const deadlines = section('Task deadlines');
   assert.match(deadlines, /On POSIX, cleanup signals the child's process group/);
