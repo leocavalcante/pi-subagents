@@ -52,6 +52,7 @@ import {
 	JsonLineCapture,
 	MessageCapture,
 	TextCapture,
+	MAX_CHILD_JSON_RECORDS,
 	MAX_CHILD_STDOUT_BYTES,
 	MAX_HISTORY_BYTES,
 	MAX_JSON_RECORD_BYTES,
@@ -234,7 +235,7 @@ interface UsageStats {
 	turns: number;
 }
 
-type FailureEventType = "invalid_json" | "invalid_utf8" | "invalid_event" | "message_end" | "tool_result_end" | "oversized_record" | "stdout_limit" | "process_exit";
+type FailureEventType = "invalid_json" | "invalid_utf8" | "invalid_event" | "message_end" | "tool_result_end" | "oversized_record" | "record_limit" | "stdout_limit" | "process_exit";
 type FailureRole = "assistant" | "user" | "toolResult" | "system" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary" | "other";
 type FailureStopReason = "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
 
@@ -832,6 +833,11 @@ async function runSingleAgent(
 			}, MAX_JSON_RECORD_BYTES, () => {
 				const record = ++recordPosition;
 				setProtocolError("Invalid subagent JSON event: malformed UTF-8.", "invalid_utf8", record);
+			}, MAX_CHILD_JSON_RECORDS, () => {
+				const record = ++recordPosition;
+				setProtocolError(`Subagent JSON record count exceeded ${MAX_CHILD_JSON_RECORDS}; remaining output discarded.`,
+					"record_limit", record);
+				terminateGroup();
 			});
 			const stdout = new BoundedByteStream(MAX_CHILD_STDOUT_BYTES, (chunk) => reader.append(chunk), () => {
 				currentResult.capture!.stdoutTruncated = true;
@@ -1081,7 +1087,7 @@ const UsageSummarySchema = Type.Object({
 	reasoning: Type.Optional(TokenCountSchema),
 });
 const FailureContextSchema = Type.Object({
-	eventType: StringEnum(["invalid_json", "invalid_utf8", "invalid_event", "message_end", "tool_result_end", "oversized_record", "stdout_limit", "process_exit"] as const),
+	eventType: StringEnum(["invalid_json", "invalid_utf8", "invalid_event", "message_end", "tool_result_end", "oversized_record", "record_limit", "stdout_limit", "process_exit"] as const),
 	role: Type.Optional(StringEnum(["assistant", "user", "toolResult", "system", "custom", "bashExecution", "branchSummary", "compactionSummary", "other"] as const)),
 	record: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 	lastStopReason: Type.Optional(StringEnum(["stop", "length", "toolUse", "error", "aborted", "deferred"] as const)),

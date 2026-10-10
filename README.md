@@ -287,6 +287,7 @@ Malformed usage and arithmetic overflow fail the task without exposing provider 
 
 Each child has bounded output capture:
 
+- Each child may emit at most 100,000 JSONL records, including blank records. Exceeding the count fails the task, stops parsing subsequent output, and initiates child termination while pipes continue to drain.
 - JSONL records can be up to 8 MiB in UTF-8, with at most 65,536 structural tokens (container starts, commas, and colons outside strings) and 128 nesting levels. Breadth and nesting are checked before parsing; over-limit records fail the task, are discarded through the next newline, and do not stop stream draining.
 - Child stdout is capped at 128 MiB per task across all records. If a chunk would exceed the limit, the task fails and that chunk and later output are drained and discarded while existing process cleanup terminates the child.
 - Stderr retains its first 64 KiB, including a truncation notice. Further stderr is drained and discarded.

@@ -12,7 +12,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { jiti, loadExtensions } from './pi-runtime.mjs';
 import { Value } from 'typebox/value';
 
-const { MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
+const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
 const traceFile = join(sandbox, 'trace.jsonl');
@@ -745,6 +745,50 @@ test('cumulative stdout overflow terminates the child, reports truncation, and r
     assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, output.structuredContent), true);
   } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
   assert.notEqual((await invoke('subagent', { agent: 'worker', task: 'after stdout limit' })).isError, true,
+    'The process slot must be available after child cleanup');
+});
+
+test('per-child JSONL record limit stops parsing, terminates the child, and releases its slot', async t => {
+  const originalSpawn = childProcess.spawn;
+  let killRequests = 0;
+  const spawn = t.mock.method(childProcess, 'spawn', (...args) => {
+    if (!args[1].includes('fake/pinned:high')) return originalSpawn(...args);
+    const child = new EventEmitter();
+    let childKillRequests = 0;
+    child.pid = Symbol('synthetic child PID');
+    child.kill = () => {
+      killRequests++;
+      if (++childKillRequests === 1) queueMicrotask(() => { child.emit('exit', null); child.emit('close', null); });
+      return false;
+    };
+    child.stdin = new EventEmitter();
+    child.stdin.end = () => {};
+    child.stdout = new EventEmitter();
+    child.stdout.destroy = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stderr.destroy = () => {};
+    queueMicrotask(() => {
+      child.emit('spawn');
+      child.stdout.emit('data', Buffer.alloc(MAX_CHILD_JSON_RECORDS + 100, 0x0a));
+    });
+    return child;
+  });
+  syncBuiltinESMExports();
+  try {
+    const launched = await invoke('subagent', { background: true, agent: 'pinned', task: 'JSONL record limit' });
+    const job = await finish(launched.details.background.id);
+    const task = job.latest.details.results[0];
+    assert.equal(job.state, 'failed');
+    assert.equal(task.failureContext.eventType, 'record_limit');
+    assert.equal(task.failureContext.record, MAX_CHILD_JSON_RECORDS + 1);
+    assert.match(task.errorMessage, /JSON record count exceeded 100000/);
+    assert.ok(killRequests > 0, 'The record limit must initiate existing child termination');
+    const output = await invoke('subagent_jobs', { action: 'output', jobId: launched.details.background.id });
+    assert.equal(output.structuredContent.output.failureContext.eventType, 'record_limit');
+    assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, output.structuredContent), true);
+  } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
+  assert.notEqual((await invoke('subagent', { agent: 'worker', task: 'after JSONL record limit' })).isError, true,
     'The process slot must be available after child cleanup');
 });
 
