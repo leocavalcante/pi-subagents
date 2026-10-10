@@ -14,10 +14,10 @@ The npm package is not yet published; install from GitHub:
 pi install git:github.com/leocavalcante/pi-subagents
 ```
 
-For a local checkout:
+From the checkout root, install the local copy with:
 
 ```sh
-pi install ./pi-subagents
+pi install .
 ```
 
 Run `/reload` in Pi after installation. Remove any previous copy or symlink at `~/.pi/agent/extensions/subagent` before installing the package to avoid registering the tool twice.
