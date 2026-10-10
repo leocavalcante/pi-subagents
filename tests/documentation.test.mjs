@@ -33,6 +33,7 @@ test('README documents agent timeout defaults and precedence', () => {
   assert.match(usage, /configured timeout defaults/);
   assert.match(agents, /whole milliseconds from 1 to 86400000 \(24 hours\)/);
   assert.match(deadlines, /a per-entry or top-level call value overrides it/);
+  assert.match(deadlines, /Set `timeoutMs` to `null` on a call or entry to explicitly disable that deadline/);
   assert.match(deadlines, /entry, top-level call, agent frontmatter, then no deadline/);
 });
 

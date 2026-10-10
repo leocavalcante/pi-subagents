@@ -567,7 +567,7 @@ async function runSingleAgent(
 	task: string,
 	cwd: string | undefined,
 	overrides: DispatchOverrides,
-	timeoutMs: number | undefined,
+	timeoutMs: number | null | undefined,
 	step: number | undefined,
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
@@ -600,7 +600,7 @@ async function runSingleAgent(
 		};
 	}
 
-	const effectiveTimeoutMs = timeoutMs ?? agent.timeoutMs;
+	const effectiveTimeoutMs = timeoutMs === null ? undefined : timeoutMs ?? agent.timeoutMs;
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	const inheritsDispatchConfig = !overrides.model && !agent.model;
 	const model = overrides.model?.trim() ?? agent.model ?? dispatchDefaults.model;
@@ -1041,6 +1041,10 @@ const TimeoutSchema = Type.Integer({
 	description: "Per-task runtime deadline in milliseconds, starting at child spawn. Queue time excluded. No deadline by default.",
 });
 
+const DispatchTimeoutSchema = Type.Union([TimeoutSchema, Type.Null()], {
+	description: "Override the per-task runtime deadline. Use null to disable the deadline for this call or entry, including any agent default.",
+});
+
 const DispatchOptions = {
 	model: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
 		description: `Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes; maximum ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` })),
@@ -1078,7 +1082,7 @@ const TaskItem = Type.Object({
 	...DispatchOptions,
 	agent: AgentNameSchema,
 	task: taskTextSchema("Task to delegate to the agent"),
-	timeoutMs: Type.Optional(TimeoutSchema),
+	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
 }, { additionalProperties: false });
 
@@ -1088,7 +1092,7 @@ const ChainItem = Type.Object({
 		description: "Optional unique step ID. Later tasks reference this output with {steps.ID}." })),
 	agent: AgentNameSchema,
 	task: taskTextSchema("Task with {previous} for the preceding output or {steps.ID} for an earlier named step"),
-	timeoutMs: Type.Optional(TimeoutSchema),
+	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
 }, { additionalProperties: false });
 
@@ -1128,7 +1132,7 @@ const SubagentParams = Type.Object({
 		minimum: 1, maximum: MAX_CONCURRENCY, default: MAX_CONCURRENCY,
 		description: "Parallel mode only: maximum simultaneous tasks in this batch, from 1 to 4. Shared process budget still applies.",
 	})),
-	timeoutMs: Type.Optional(TimeoutSchema),
+	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
 }, { additionalProperties: false });
 
@@ -1503,7 +1507,7 @@ export default function (pi: ExtensionAPI) {
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} or {steps.ID} output references).",
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
-			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; agent frontmatter can provide a default. Queue time is excluded.",
+			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			"Set model or thinking to override agent configuration. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
@@ -1677,7 +1681,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const deadlines = [params.timeoutMs, ...(params.tasks ?? []).map((t) => t.timeoutMs),
 				...(params.chain ?? []).map((t) => t.timeoutMs)];
-			if (deadlines.some((value) => value !== undefined &&
+			if (deadlines.some((value) => value !== undefined && value !== null &&
 				(!Number.isInteger(value) || value < 1 || value > MAX_TIMEOUT_MS))) {
 				return {
 					content: [{ type: "text", text: `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.` }],
@@ -1829,7 +1833,7 @@ export default function (pi: ExtensionAPI) {
 							taskWithContext,
 							step.cwd,
 							{ model: step.model ?? params.model, thinking: step.thinking ?? params.thinking },
-							step.timeoutMs ?? params.timeoutMs,
+							step.timeoutMs !== undefined ? step.timeoutMs : params.timeoutMs,
 							i + 1,
 							signal,
 							chainUpdate,
@@ -1925,7 +1929,7 @@ export default function (pi: ExtensionAPI) {
 							t.task,
 							t.cwd,
 							{ model: t.model ?? params.model, thinking: t.thinking ?? params.thinking },
-							t.timeoutMs ?? params.timeoutMs,
+							t.timeoutMs !== undefined ? t.timeoutMs : params.timeoutMs,
 							undefined,
 							signal,
 							// Per-task update callback

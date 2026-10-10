@@ -1777,12 +1777,20 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
 test('agent timeout defaults apply in every dispatch mode and yield to call overrides', async () => {
   const file = join(sandbox, 'agent/agents/timeout-default.md');
   writeFileSync(file, '---\nname: timeout-default\ndescription: Timeout default worker\ntimeoutMs: 250\n---\nTimed worker.\n');
+  const invalidFile = join(sandbox, 'agent/agents/timeout-null-default.md');
+  writeFileSync(invalidFile, '---\nname: timeout-null-default\ndescription: Invalid timeout default\ntimeoutMs: null\n---\nInvalid config.\n');
   try {
     const listing = await invoke('subagent_agents', {});
     const configured = listing.details.agents.find(agent => agent.name === 'timeout-default');
     assert.equal(configured.timeoutMs, 250);
     assert.match(listing.content[0].text, /timeoutMs=250/);
+    assert.ok(listing.details.diagnostics.some(diagnostic => diagnostic.filePath === invalidFile && /timeoutMs must be an integer/.test(diagnostic.message)));
     assert.equal(Value.Check(tools.get('subagent_agents').definition.outputSchema, listing.structuredContent), true);
+
+    const subagentSchema = tools.get('subagent').definition.parameters;
+    assert.equal(Value.Check(subagentSchema, { agent: 'timeout-default', task: 'schema opt-out', timeoutMs: null }), true);
+    assert.equal(Value.Check(subagentSchema, { tasks: [{ agent: 'timeout-default', task: 'schema entry opt-out', timeoutMs: null }] }), true);
+    assert.equal(Value.Check(subagentSchema, { chain: [{ agent: 'timeout-default', task: 'schema chain opt-out', timeoutMs: null }] }), true);
 
     const defaultDeadline = await invoke('subagent', {
       agent: 'timeout-default', task: 'delay=2000 agent default timeout',
@@ -1797,6 +1805,40 @@ test('agent timeout defaults apply in every dispatch mode and yield to call over
     });
     assert.notEqual(topLevelOverride.isError, true);
     assert.equal(topLevelOverride.details.results[0].timeoutMs, 1200);
+
+    const disabledSingleDeadline = await invoke('subagent', {
+      agent: 'timeout-default', task: 'delay=500 explicitly disable agent deadline', timeoutMs: null,
+    });
+    assert.notEqual(disabledSingleDeadline.isError, true);
+    assert.equal(disabledSingleDeadline.details.results[0].exitCode, 0);
+    assert.equal(disabledSingleDeadline.details.results[0].timedOut, undefined);
+    assert.equal(disabledSingleDeadline.details.results[0].timeoutMs, undefined);
+
+    const disabledEntryDeadline = await invoke('subagent', {
+      timeoutMs: 100,
+      tasks: [
+        { agent: 'timeout-default', task: 'delay=500 explicitly disable entry deadline', timeoutMs: null },
+        { agent: 'timeout-default', task: 'delay=500 inherit batch deadline' },
+      ],
+    });
+    assert.equal(disabledEntryDeadline.isError, true);
+    assert.equal(disabledEntryDeadline.details.results[0].exitCode, 0);
+    assert.equal(disabledEntryDeadline.details.results[0].timeoutMs, undefined);
+    assert.equal(disabledEntryDeadline.details.results[1].timedOut, true);
+    assert.equal(disabledEntryDeadline.details.results[1].timeoutMs, 100);
+
+    const disabledChainEntryDeadline = await invoke('subagent', {
+      timeoutMs: 100,
+      chain: [
+        { agent: 'timeout-default', task: 'delay=500 explicitly disable chain entry deadline', timeoutMs: null },
+        { agent: 'timeout-default', task: 'delay=500 inherit chain deadline' },
+      ],
+    });
+    assert.equal(disabledChainEntryDeadline.isError, true);
+    assert.equal(disabledChainEntryDeadline.details.results[0].exitCode, 0);
+    assert.equal(disabledChainEntryDeadline.details.results[0].timeoutMs, undefined);
+    assert.equal(disabledChainEntryDeadline.details.results[1].timedOut, true);
+    assert.equal(disabledChainEntryDeadline.details.results[1].timeoutMs, 100);
 
     for (const params of [
       { timeoutMs: 100, tasks: [{ agent: 'timeout-default', task: 'delay=500 task override', timeoutMs: 1200 }] },
@@ -1832,7 +1874,7 @@ test('agent timeout defaults apply in every dispatch mode and yield to call over
     assert.equal(completedOutput.structuredContent.output.timedOut, false);
     assert.equal(completedOutput.structuredContent.output.timeoutMs, 5000);
     assert.equal(Value.Check(jobOutputSchema, completedOutput.structuredContent), true);
-  } finally { rmSync(file); }
+  } finally { rmSync(file); rmSync(invalidFile); }
 });
 
 test('agent listings omit oversized descriptions from structured metadata', async () => {
