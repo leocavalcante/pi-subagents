@@ -46,6 +46,7 @@ import {
 	JobManager,
 	ProcessPool,
 	ProcessPoolCapacityError,
+	JobWaiterCapacityError,
 	MAX_JOB_WAIT_MS,
 	DEFAULT_JOB_WAIT_MS,
 	type JobSnapshot,
@@ -1336,7 +1337,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
-		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job. Use output to page through a finished task's captured text, failure diagnosis, and any partial, unverified assistant/tool output. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
+		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job; at most 32 waits may be pending across the session. Use output to page through a finished task's captured text, failure diagnosis, and any partial, unverified assistant/tool output. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
 			action: JobActionSchema,
 			jobId: Type.Optional(Type.String({ maxLength: JOB_ID_MAX_LENGTH,
@@ -1388,8 +1389,15 @@ export default function (pi: ExtensionAPI) {
 					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
-			const waited = action === "wait" && params.jobId
-				? await jobs.wait(params.jobId, params.timeoutMs ?? DEFAULT_JOB_WAIT_MS, signal) : undefined;
+			let waited: Awaited<ReturnType<typeof jobs.wait>> = undefined;
+			if (action === "wait" && params.jobId) {
+				try {
+					waited = await jobs.wait(params.jobId, params.timeoutMs ?? DEFAULT_JOB_WAIT_MS, signal);
+				} catch (error) {
+					if (!(error instanceof JobWaiterCapacityError)) throw error;
+					return fail(error.message, jobs.get(params.jobId));
+				}
+			}
 			const job = action === "wait" ? waited?.job : params.jobId
 				? action === "cancel" ? jobs.cancel(params.jobId) : jobs.get(params.jobId)
 				: undefined;
