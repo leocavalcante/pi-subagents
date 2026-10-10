@@ -75,10 +75,25 @@ const MAX_TASK_BYTES = 4 * 1024 * 1024;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
+const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
+const MAX_TERMINAL_ESCAPE_EXPANSION = 64 * 1024;
 
 function escapeTerminalControls(value: string): string {
 	return value.replace(UNSAFE_DISPLAY_CHARACTERS,
 		(character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+function escapeTerminalText(value: string): string {
+	// Keep newlines and tabs for ordinary text/Markdown layout, but make terminal
+	// escape bytes and other non-printing controls visible before TUI rendering.
+	// Bound expansion so control-heavy child output cannot multiply retained text.
+	let expandedBy = 0;
+	return value.replace(UNSAFE_TERMINAL_TEXT_CHARACTERS, (character) => {
+		// Every match is one UTF-16 code unit; the visible escape adds five.
+		if (expandedBy + 5 > MAX_TERMINAL_ESCAPE_EXPANSION) return "?";
+		expandedBy += 5;
+		return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+	});
 }
 
 function displayUntrustedText(value: string): string {
@@ -132,7 +147,7 @@ function formatUsageStats(
 	if (usage.contextTokens && usage.contextTokens > 0) {
 		parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
 	}
-	if (model) parts.push(model);
+	if (model) parts.push(escapeTerminalText(truncateOutput(model, 256, "...")));
 	return parts.join(" ");
 }
 
@@ -148,13 +163,13 @@ function formatToolCall(
 	const shortenPath = (p: string) => {
 		const home = os.homedir();
 		const shortened = p === home || p.startsWith(`${home}${path.sep}`) ? `~${p.slice(home.length)}` : p;
-		return truncateOutput(shortened, 512, "...");
+		return escapeTerminalText(truncateOutput(shortened, 512, "..."));
 	};
 
 	switch (toolName) {
 		case "bash": {
 			const command = stringArg(args.command) || "...";
-			const preview = truncateOutput(command, 120, "...");
+			const preview = escapeTerminalText(truncateOutput(command, 120, "..."));
 			return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
 		}
 		case "read": {
@@ -189,12 +204,12 @@ function formatToolCall(
 			return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));
 		}
 		case "find": {
-			const pattern = truncateOutput(stringArg(args.pattern, "*"), 512, "...");
+			const pattern = escapeTerminalText(truncateOutput(stringArg(args.pattern, "*"), 512, "..."));
 			const rawPath = stringArg(args.path, ".");
 			return themeFg("muted", "find ") + themeFg("accent", pattern) + themeFg("dim", ` in ${shortenPath(rawPath)}`);
 		}
 		case "grep": {
-			const pattern = truncateOutput(stringArg(args.pattern, ""), 512, "...");
+			const pattern = escapeTerminalText(truncateOutput(stringArg(args.pattern, ""), 512, "..."));
 			const rawPath = stringArg(args.path, ".");
 			return (
 				themeFg("muted", "grep ") + themeFg("accent", `/${pattern}/`) + themeFg("dim", ` in ${shortenPath(rawPath)}`)
@@ -202,8 +217,9 @@ function formatToolCall(
 		}
 		default: {
 			const argsStr = JSON.stringify(args);
-			const preview = truncateOutput(argsStr, 256, "...");
-			return themeFg("accent", truncateOutput(toolName, 256, "...")) + themeFg("dim", ` ${preview}`);
+			const preview = escapeTerminalText(truncateOutput(argsStr, 256, "..."));
+			const displayName = escapeTerminalText(truncateOutput(toolName, 256, "..."));
+			return themeFg("accent", displayName) + themeFg("dim", ` ${preview}`);
 		}
 	}
 }
@@ -1833,7 +1849,8 @@ export default function (pi: ExtensionAPI) {
 		}),
 
 		renderCall(args, theme, _context) {
-			const scope = `${stringArg(args.agentScope, "user")}${args.background ? ", background" : ""}${args.background && args.notify === false ? ", silent" : ""}`;
+			const scopeText = `${stringArg(args.agentScope, "user")}${args.background ? ", background" : ""}${args.background && args.notify === false ? ", silent" : ""}`;
+			const scope = escapeTerminalControls(truncateOutput(scopeText, 128, "..."));
 			if (Array.isArray(args.chain) && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -1843,7 +1860,7 @@ export default function (pi: ExtensionAPI) {
 					const step = args.chain[i];
 					// Clean up {previous} placeholder for display
 					const cleanTask = stringArg(step?.task, "").replace(/\{previous\}|\{steps\.[^{}]*\}/g, "").trim();
-					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
+					const preview = escapeTerminalText(cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask);
 					text +=
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
@@ -1861,7 +1878,7 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
 					const task = stringArg(t?.task, "");
-					const preview = task.length > 40 ? `${task.slice(0, 40)}...` : task;
+					const preview = escapeTerminalText(task.length > 40 ? `${task.slice(0, 40)}...` : task);
 					text += `\n  ${theme.fg("accent", previewAgentName(stringArg(t?.agent)))}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
@@ -1869,7 +1886,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const agentName = previewAgentName(stringArg(args.agent));
 			const task = stringArg(args.task);
-			const preview = task.length > 60 ? `${task.slice(0, 60)}...` : task;
+			const preview = escapeTerminalText(task.length > 60 ? `${task.slice(0, 60)}...` : task);
 			let text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
@@ -1882,7 +1899,7 @@ export default function (pi: ExtensionAPI) {
 			const details = result.details as SubagentDetails | undefined;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
-				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+				return new Text(text?.type === "text" ? escapeTerminalText(text.text) : "(no output)", 0, 0);
 			}
 
 			const mdTheme = getMarkdownTheme();
@@ -1894,7 +1911,8 @@ export default function (pi: ExtensionAPI) {
 				if (skipped > 0) text += theme.fg("muted", `... ${skipped} earlier items\n`);
 				for (const item of toShow) {
 					if (item.type === "text") {
-						const preview = expanded ? item.text : previewText(item.text);
+						const textPreview = expanded ? item.text : previewText(item.text);
+						const preview = escapeTerminalText(textPreview);
 						text += `${theme.fg("toolOutput", preview)}\n`;
 					} else {
 						text += `${theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme))}\n`;
@@ -1909,7 +1927,7 @@ export default function (pi: ExtensionAPI) {
 				const icon =
 					r.exitCode === -1 ? theme.fg("warning", "⏳") : isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
-				const finalOutput = getFinalOutput(r.messages);
+				const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
 
 				if (expanded) {
 					const container = new Container();
@@ -1917,10 +1935,10 @@ export default function (pi: ExtensionAPI) {
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
 					const failure = getFailureReason(r);
-					if (failure) container.addChild(new Text(theme.fg("error", `Error: ${truncateOutput(failure)}`), 0, 0));
+					if (failure) container.addChild(new Text(theme.fg("error", `Error: ${escapeTerminalText(truncateOutput(failure))}`), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
-					container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
+					container.addChild(new Text(theme.fg("dim", escapeTerminalText(r.task)), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
 					if (displayItems.length === 0 && !finalOutput) {
@@ -1949,7 +1967,7 @@ export default function (pi: ExtensionAPI) {
 
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
-				if (isError) text += `\n${theme.fg("error", `Error: ${previewText(getFailureReason(r))}`)}`;
+				if (isError) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(getFailureReason(r)))}`)}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
@@ -2014,15 +2032,15 @@ export default function (pi: ExtensionAPI) {
 						const rIcon = r.exitCode === -1 ? theme.fg("warning", "⏳")
 							: isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
 
 						container.addChild(new Spacer(1));
 						container.addChild(
 							new Text(`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
 						);
-						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", escapeTerminalText(r.task)), 0, 0));
 						const failure = getFailureReason(r);
-						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${truncateOutput(failure)}`), 0, 0));
+						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${escapeTerminalText(truncateOutput(failure))}`), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -2065,7 +2083,7 @@ export default function (pi: ExtensionAPI) {
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
 					const failure = getFailureReason(r);
-					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(failure)}`)}`;
+					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(failure))}`)}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 					const captureNotice = getCaptureNotice(r);
@@ -2100,13 +2118,13 @@ export default function (pi: ExtensionAPI) {
 					for (const r of details.results) {
 						const rIcon = isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
 
 						container.addChild(new Spacer(1));
 						container.addChild(new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0));
-						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", escapeTerminalText(r.task)), 0, 0));
 						const failure = getFailureReason(r);
-						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${truncateOutput(failure)}`), 0, 0));
+						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${escapeTerminalText(truncateOutput(failure))}`), 0, 0));
 
 						// Show tool calls
 						for (const item of displayItems) {
@@ -2149,7 +2167,7 @@ export default function (pi: ExtensionAPI) {
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
 					const failure = getFailureReason(r);
-					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(failure)}`)}`;
+					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(failure))}`)}`;
 					if (displayItems.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
@@ -2165,7 +2183,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const text = result.content[0];
-			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
+			return new Text(text?.type === "text" ? escapeTerminalText(text.text) : "(no output)", 0, 0);
 		},
 	});
 }

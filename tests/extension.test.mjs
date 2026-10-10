@@ -1103,6 +1103,53 @@ test('renderers tolerate partial calls and invalid tool argument types', async (
   assert.ok(definition.renderResult(neighbor, { expanded: false }, theme, {}).render(120).join('\n').includes(neighborPath));
 });
 
+test('subagent renderers escape untrusted terminal controls without changing captured output', async () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const esc = String.fromCharCode(27);
+  const c1Csi = String.fromCharCode(0x9b);
+  const bell = String.fromCharCode(7);
+  const hostile = `terminal ${esc}]52;c;pi-subagents-test${bell} ${esc}[2J${c1Csi}2J\nnext line`;
+  const render = (result, expanded) => definition.renderResult(result, { expanded }, theme, {}).render(100).join('\n');
+
+  const output = await invoke('subagent', { agent: 'worker', task: 'terminal-control-text' });
+  assert.equal(output.details.results[0].messages.at(-1).content[0].text, hostile,
+    'the original child output remains available in structured details');
+  for (const expanded of [false, true]) {
+    const rendered = render(output, expanded);
+    assert.equal(rendered.includes(esc), false, `untrusted ANSI must not reach the terminal (expanded=${expanded})`);
+    assert.equal(rendered.includes(c1Csi), false, `C1 controls must not reach the terminal (expanded=${expanded})`);
+    assert.ok(rendered.includes('\\u001b]52;c;pi-subagents-test\\u0007'));
+    assert.ok(rendered.includes('\\u009b2J'));
+    assert.ok(rendered.includes('next line'));
+  }
+
+  const toolCall = await invoke('subagent', { agent: 'worker', task: 'terminal-control-tool-call' });
+  for (const expanded of [false, true]) assert.equal(render(toolCall, expanded).includes(esc), false);
+
+  const failed = await invoke('subagent', { agent: 'worker', task: 'terminal-control-crash' });
+  assert.equal(failed.details.results[0].stderr.startsWith('terminal '), true);
+  for (const expanded of [false, true]) assert.equal(render(failed, expanded).includes(esc), false);
+
+  for (const params of [
+    { tasks: [{ agent: 'worker', task: 'terminal-control-text' }] },
+    { chain: [{ agent: 'worker', task: 'terminal-control-text' }] },
+  ]) {
+    const multi = await invoke('subagent', params);
+    for (const expanded of [false, true]) assert.equal(render(multi, expanded).includes(esc), false);
+  }
+
+  const hostileCalls = [
+    definition.renderCall({ agent: 'worker', task: hostile }, theme, {}),
+    definition.renderCall({ agentScope: hostile, tasks: [{ agent: 'worker', task: hostile }] }, theme, {}),
+    definition.renderCall({ agentScope: hostile, chain: [{ agent: 'worker', task: hostile }] }, theme, {}),
+  ];
+  for (const call of hostileCalls) assert.equal(call.render(100).join('\n').includes(esc), false);
+  const fallback = definition.renderResult({ content: [{ type: 'text', text: hostile }] }, { expanded: true }, theme, {})
+    .render(100).join('\n');
+  assert.equal(fallback.includes(esc), false);
+});
+
 test('all modes and agent names are validated before foreground children start', async () => {
   for (const params of [
     { agent: 'worker', tasks: [{ agent: 'worker', task: 'x' }] },
