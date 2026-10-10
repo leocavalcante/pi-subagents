@@ -1065,9 +1065,20 @@ const SubagentParams = Type.Object({
 type SubagentExecute = ToolDefinition<typeof SubagentParams, SubagentDetails>["execute"];
 
 function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
-	return async (id, params, signal, onUpdate, ctx) => boundResultText(await execute(
-		id, params, signal, onUpdate ? (partial) => onUpdate(boundResultText(partial)) : undefined, ctx,
-	));
+	return async (id, params, signal, onUpdate, ctx) => {
+		let updatesEnabled = onUpdate !== undefined;
+		const safeUpdate: OnUpdateCallback | undefined = onUpdate ? (partial) => {
+			if (!updatesEnabled) return;
+			try {
+				onUpdate(boundResultText(partial));
+			} catch {
+				// Progress is best-effort. A host/UI callback must not escape a child
+				// stream event handler and bypass process cleanup.
+				updatesEnabled = false;
+			}
+		} : undefined;
+		return boundResultText(await execute(id, params, signal, safeUpdate, ctx));
+	};
 }
 
 const JOB_ACTIONS = ["list", "status", "cancel", "forget", "clear", "output", "wait"] as const;
