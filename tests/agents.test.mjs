@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
 
-const { discoverAgents, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const { discoverAgents, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
@@ -160,6 +160,23 @@ test('model selectors are byte-bounded before becoming child arguments', () => {
   assert.ok(result.diagnostics.every(d => d.message ===
     `model must be at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`));
   assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1)), false);
+});
+
+test('agent tool allowlists are bounded before becoming a child argument', () => {
+  const atLimit = 'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES);
+  agent(userDir, 'valid-tools', `name: valid-tools\ndescription: At-limit tool argument\ntools: ["${atLimit}"]`);
+  agent(userDir, 'oversized-tools', `name: oversized-tools\ndescription: Oversized tool argument\ntools: ["${'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)}"]`);
+  agent(userDir, 'multibyte-tools', `name: multibyte-tools\ndescription: Oversized UTF-8 tool argument\ntools: ["${'€'.repeat(Math.ceil(MAX_AGENT_TOOL_LIST_BYTES / 3))}"]`);
+  agent(userDir, 'oversized-list-string', `name: oversized-list-string\ndescription: Oversized comma-separated list\ntools: "${'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)}"`);
+  agent(userDir, 'multibyte-list-string', `name: multibyte-list-string\ndescription: Oversized UTF-8 comma-separated list\ntools: "${'€'.repeat(Math.ceil(MAX_AGENT_TOOL_LIST_BYTES / 3))}"`);
+  agent(userDir, 'many-tools', `name: many-tools\ndescription: Too many tool names\ntools: ${JSON.stringify(Array.from({ length: MAX_AGENT_TOOL_COUNT + 1 }, (_, i) => `tool-${i}`))}`);
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(a => a.name), ['valid-tools']);
+  assert.deepEqual(result.agents[0].tools, [atLimit]);
+  assert.equal(result.diagnostics.length, 5);
+  assert.ok(result.diagnostics.every(d => /tools must be/.test(d.message)));
+  assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)), false);
 });
 
 test('normalizes config, preserves explicit empty tools, and supports thinking', () => {

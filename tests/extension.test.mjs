@@ -14,7 +14,7 @@ import { Value } from 'typebox/value';
 import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
-const { MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const { MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
 const traceFile = join(sandbox, 'trace.jsonl');
@@ -1506,6 +1506,24 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
     assert.deepEqual(project.details.agents.map(a => a.name), ['project']);
     assert.equal(traces().length, 0);
   } finally { rmSync(badFile); }
+});
+
+test('oversized agent tool lists are diagnosed and never reach child processes', async () => {
+  const file = join(sandbox, 'agent/agents/oversized-tools.md');
+  const toolName = 'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1);
+  writeFileSync(file, `---\nname: oversized-tools\ndescription: Oversized argv test\ntools: ["${toolName}"]\n---\nPrompt.\n`);
+  try {
+    const listed = await invoke('subagent_agents', {});
+    assert.equal(listed.details.agents.some(agent => agent.name === 'oversized-tools'), false);
+    assert.ok(listed.details.diagnostics.some(diagnostic => /tools must be/.test(diagnostic.message)));
+    const result = await invoke('subagent', { agent: 'oversized-tools', task: 'must not spawn' });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Unknown agent/);
+    assert.equal(JSON.stringify(result).includes(toolName), false);
+    assert.equal(traces().length, 0);
+  } finally {
+    rmSync(file, { force: true });
+  }
 });
 
 test('project agent metadata is escaped in listings and trust confirmations', async () => {
