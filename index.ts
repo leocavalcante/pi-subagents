@@ -49,7 +49,7 @@ import {
 } from "./jobs.ts";
 import { JsonLineCapture, MessageCapture, TextCapture, MAX_HISTORY_BYTES, MAX_JSON_RECORD_BYTES } from "./capture.ts";
 import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
-import { MAX_PAGE_BYTES, createOutputPager } from "./paging.ts";
+import { MAX_PAGE_BYTES, createOutputPager, WeakOutputPagerCache } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
 
@@ -377,16 +377,10 @@ function getResultOutput(result: SingleResult): string {
 	return sections.join("\n\n");
 }
 
-// Keep at most one encoded output alive. The weak key lets finished-job
-// eviction release its result; the pager itself retains only the UTF-8 bytes.
-let outputPagerCache: { result: WeakRef<SingleResult>; pager: ReturnType<typeof createOutputPager> } | undefined;
+const outputPagerCache = new WeakOutputPagerCache<SingleResult>();
 
 function pageResultOutput(result: SingleResult, offset: number, limit: number) {
-	let pager = outputPagerCache?.result.deref() === result ? outputPagerCache.pager : undefined;
-	if (!pager) {
-		pager = createOutputPager(getResultOutput(result));
-		outputPagerCache = { result: new WeakRef(result), pager };
-	}
+	const pager = outputPagerCache.get(result, () => createOutputPager(getResultOutput(result)));
 	return pager(offset, limit);
 }
 
