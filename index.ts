@@ -297,6 +297,10 @@ function isToolParameterObject(value: unknown): value is Record<string, unknown>
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function hasUnexpectedToolParameters(value: unknown, allowedKeys: readonly string[]): boolean {
+	return isToolParameterObject(value) && Object.keys(value).some((key) => !allowedKeys.includes(key));
+}
+
 function reportUsage(result: JobResult): JobResult {
 	try {
 		const usage = sumUsage((result.details?.results ?? []).flatMap((task) => task.reportedUsage ? [task.reportedUsage] : []));
@@ -1060,13 +1064,22 @@ const WorkingDirectory = Type.String({
 	description: `Working directory for the agent process; maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units and no NUL characters.`,
 });
 
+const TASK_ITEM_KEYS = ["model", "thinking", "agent", "task", "timeoutMs", "cwd"] as const;
+const CHAIN_ITEM_KEYS = ["model", "thinking", "id", "agent", "task", "timeoutMs", "cwd"] as const;
+const SUBAGENT_TOOL_KEYS = [
+	"model", "thinking", "background", "notify", "agent", "task", "tasks", "chain",
+	"agentScope", "concurrency", "timeoutMs", "cwd",
+] as const;
+const AGENT_TOOL_KEYS = ["agentScope"] as const;
+const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "offset", "limit", "timeoutMs"] as const;
+
 const TaskItem = Type.Object({
 	...DispatchOptions,
 	agent: AgentNameSchema,
 	task: taskTextSchema("Task to delegate to the agent"),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
-});
+}, { additionalProperties: false });
 
 const ChainItem = Type.Object({
 	...DispatchOptions,
@@ -1076,7 +1089,7 @@ const ChainItem = Type.Object({
 	task: taskTextSchema("Task with {previous} for the preceding output or {steps.ID} for an earlier named step"),
 	timeoutMs: Type.Optional(TimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
-});
+}, { additionalProperties: false });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
@@ -1264,7 +1277,7 @@ export default function (pi: ExtensionAPI) {
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
 			"Reports invalid and duplicate definitions. Defaults to personal agents; use agentScope to include project agents.",
 		].join(" "),
-		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }),
+		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }, { additionalProperties: false }),
 		outputSchema: Type.Object({
 			agentScope: AgentScopeSchema,
 			agents: Type.Array(Type.Object({
@@ -1290,6 +1303,13 @@ export default function (pi: ExtensionAPI) {
 				const details = { agentScope: "user" as const, agents: [], projectAgentsDir: null, diagnostics: [] };
 				return {
 					content: [{ type: "text" as const, text: "Tool parameters must be an object." }],
+					details, structuredContent: details, isError: true,
+				};
+			}
+			if (hasUnexpectedToolParameters(params, AGENT_TOOL_KEYS)) {
+				const details = { agentScope: "user" as const, agents: [], projectAgentsDir: null, diagnostics: [] };
+				return {
+					content: [{ type: "text" as const, text: "Unsupported parameters were provided to subagent_agents." }],
 					details, structuredContent: details, isError: true,
 				};
 			}
@@ -1352,7 +1372,7 @@ export default function (pi: ExtensionAPI) {
 			limit: Type.Optional(Type.Integer({ minimum: 4, maximum: MAX_PAGE_BYTES, description: "Output only: maximum page bytes, from 4 to 32768. Default: 16384." })),
 			timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_JOB_WAIT_MS, default: DEFAULT_JOB_WAIT_MS,
 				description: "Wait only: maximum milliseconds to wait, from 1 to 60000. Default: 30000. Does not cancel the job." })),
-		}),
+		}, { additionalProperties: false }),
 		outputSchema: JobResponseSchema,
 		async execute(_id, params, signal): Promise<AgentToolResult<JobToolDetails>> {
 			const paramsAreObject = isToolParameterObject(params);
@@ -1367,6 +1387,7 @@ export default function (pi: ExtensionAPI) {
 			const fail = (error: string, job?: JobSnapshot<JobResult>) =>
 				reply(error, undefined, { error, ...(job ? { job: jobMetadata(job, jobs.getObservation(job.id)) } : {}) }, true);
 			if (!paramsAreObject) return fail("Tool parameters must be an object.");
+			if (hasUnexpectedToolParameters(params, JOB_TOOL_KEYS)) return fail("Unsupported parameters were provided to subagent_jobs.");
 			if (!action) return fail(`action must be one of: ${JOB_ACTIONS.join(", ")}.`);
 			if (params.jobId !== undefined && (typeof params.jobId !== "string" || params.jobId.length > JOB_ID_MAX_LENGTH)) {
 				return fail(`jobId must be a string no longer than ${JOB_ID_MAX_LENGTH} characters.`);
@@ -1549,6 +1570,12 @@ export default function (pi: ExtensionAPI) {
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
+			if (hasUnexpectedToolParameters(params, SUBAGENT_TOOL_KEYS)) {
+				return {
+					content: [{ type: "text", text: "Unsupported parameters were provided to subagent." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
 			if (params.background !== undefined && typeof params.background !== "boolean") {
 				return {
 					content: [{ type: "text", text: "background must be a boolean." }],
@@ -1587,6 +1614,13 @@ export default function (pi: ExtensionAPI) {
 				typeof item?.agent !== "string" || typeof item?.task !== "string")) {
 				return {
 					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+			const itemKeys = hasChain ? CHAIN_ITEM_KEYS : TASK_ITEM_KEYS;
+			if (requested.some((item) => hasUnexpectedToolParameters(item, itemKeys))) {
+				return {
+					content: [{ type: "text", text: `Unsupported parameters were provided to a ${hasChain ? "chain step" : "task"}.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
