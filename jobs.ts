@@ -178,7 +178,12 @@ export class JobManager<T, Observation = never> {
 		signal?.throwIfAborted();
 		const job = this.jobs.get(id);
 		if (!job) return undefined;
-		if (job.snapshot.finishedAt) return { job: { ...job.snapshot }, timedOut: false };
+		if (job.snapshot.finishedAt) {
+			// finishedAt is set before synchronous completion delivery and retention.
+			// A re-entrant wait must observe the post-retention snapshot, too.
+			await job.done;
+			return { job: { ...job.snapshot }, timedOut: false };
+		}
 		return new Promise<JobWaitResult<T>>((resolve, reject) => {
 			const cleanup = () => {
 				clearTimeout(timer);
