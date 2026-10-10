@@ -14,6 +14,7 @@ import { Value } from 'typebox/value';
 import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
+const { MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
 const traceFile = join(sandbox, 'trace.jsonl');
@@ -1372,6 +1373,43 @@ test('agent selectors enforce UTF-8 and control limits before approval or backgr
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
+test('model selectors are bounded before child spawn or background retention', async () => {
+  const schema = tools.get('subagent').definition.parameters;
+  const tooLong = 'x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1);
+  const oversizedUtf8 = '€'.repeat(Math.ceil(MAX_MODEL_SELECTOR_BYTES / 3));
+  const control = 'fake/worker\0model';
+  const invalid = [
+    { agent: 'worker', task: 'invalid model', model: tooLong },
+    { tasks: [{ agent: 'worker', task: 'invalid model', model: tooLong }] },
+    { chain: [{ agent: 'worker', task: 'invalid model', model: tooLong }] },
+    { agent: 'worker', task: 'invalid model', model: oversizedUtf8 },
+    { agent: 'worker', task: 'invalid model', model: control },
+  ];
+  assert.equal(Value.Check(schema, invalid[0]), false, 'the schema rejects overlong selectors');
+  assert.equal(Value.Check(schema, invalid[3]), true, 'runtime byte validation also rejects multibyte values below the character limit');
+  for (const request of invalid) {
+    const result = await invoke('subagent', { ...request, background: true });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /model must be a non-empty selector of at most 512 UTF-8 bytes/);
+    assert.equal(JSON.stringify(result).includes(tooLong), false);
+    assert.equal(JSON.stringify(result).includes(control), false);
+    assert.equal(result.details.background, undefined);
+  }
+  assert.equal(traces().length, 0, 'invalid model selectors must not launch children');
+  assert.equal((await invoke('subagent_jobs', { action: 'list' })).details.jobs.length, 0);
+  const oversizedParentModel = await invoke('subagent', { agent: 'worker', task: 'invalid parent model' }, {
+    ...ctx(), model: { provider: 'fake', id: 'x'.repeat(MAX_MODEL_SELECTOR_BYTES) },
+  });
+  assert.equal(oversizedParentModel.isError, true, 'the inherited parent selector is checked after resolution too');
+  assert.match(oversizedParentModel.content[0].text, /Resolved model selector/);
+  assert.equal(traces().length, 0);
+
+  const valid = 'x'.repeat(MAX_MODEL_SELECTOR_BYTES);
+  const result = await invoke('subagent', { agent: 'worker', task: 'boundary model', model: valid });
+  assert.notEqual(result.isError, true);
+  assert.equal(traces().find(entry => entry.event === 'start').model, valid);
+});
+
 test('working directory arguments reject non-strings and NUL before project approval or spawn', async () => {
   let approvals = 0;
   const context = {
@@ -1482,7 +1520,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     '---',
     `name: ${JSON.stringify(name)}`,
     `description: ${JSON.stringify(description)}`,
-    `model: ${JSON.stringify(`fake/${escape}[31m`)}`,
+    'model: fake/safe',
     `tools: ${JSON.stringify(['read', `custom${String.fromCharCode(10)}${escape}`])}`,
     suffix,
     '---',

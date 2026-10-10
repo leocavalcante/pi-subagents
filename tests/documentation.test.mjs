@@ -18,6 +18,13 @@ test('README documents the minimum Node.js version required by the package', () 
   assert.ok(readme.includes(`Node.js ${engine.slice(2)} or newer`), `README must document Node.js ${engine}`);
 });
 
+test('README documents the bounded model selector argument size', () => {
+  const agents = section('Agent definitions');
+  const overrides = section('Model and thinking overrides');
+  assert.match(agents, /Model selectors are limited to 512 UTF-8 bytes and reject control characters/);
+  assert.match(overrides, /Model selectors .* limited to 512 UTF-8 bytes without control characters/);
+});
+
 test('README documents the bounded delegated task input size', () => {
   const usage = section('Usage');
   assert.match(usage, /Each task is limited to 4 MiB of UTF-8 text/);
