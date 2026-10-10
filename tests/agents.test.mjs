@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
 
-const { discoverAgents, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const { discoverAgents, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
@@ -104,6 +104,30 @@ test('agent diagnostics are bounded with one omission notice', () => {
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 64);
   assert.equal(result.diagnostics.at(-1).message, 'Further agent diagnostics omitted.');
+});
+
+test('agent descriptions are bounded by UTF-8 bytes and oversized values are not echoed', () => {
+  const atLimit = 'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES);
+  const multibyteAtLimit = '😀'.repeat(MAX_AGENT_DESCRIPTION_BYTES / 4);
+  const oversized = 'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES + 1);
+  const multibyteOversized = '€'.repeat(Math.floor(MAX_AGENT_DESCRIPTION_BYTES / 3) + 1);
+  assert.equal(Buffer.byteLength(multibyteAtLimit, 'utf8'), MAX_AGENT_DESCRIPTION_BYTES);
+  assert.ok(multibyteOversized.length < MAX_AGENT_DESCRIPTION_BYTES);
+  assert.ok(Buffer.byteLength(multibyteOversized, 'utf8') > MAX_AGENT_DESCRIPTION_BYTES);
+  agent(userDir, 'a-unicode-limit', `name: a-unicode-limit\ndescription: ${JSON.stringify(multibyteAtLimit)}`);
+  agent(userDir, 'valid', `name: valid\ndescription: ${JSON.stringify(atLimit)}`);
+  agent(userDir, 'oversized', `name: oversized\ndescription: ${JSON.stringify(oversized)}`);
+  agent(userDir, 'multibyte', `name: multibyte\ndescription: ${JSON.stringify(multibyteOversized)}`);
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(a => a.name), ['a-unicode-limit', 'valid']);
+  assert.equal(result.agents[0].description, multibyteAtLimit);
+  assert.equal(result.agents[1].description, atLimit);
+  assert.equal(result.diagnostics.length, 2);
+  assert.ok(result.diagnostics.every(d => d.message ===
+    `description must be at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`));
+  assert.equal(JSON.stringify(result).includes(oversized), false);
+  assert.equal(JSON.stringify(result).includes(multibyteOversized), false);
 });
 
 test('agent names reject oversized UTF-8 and terminal or bidirectional controls', () => {

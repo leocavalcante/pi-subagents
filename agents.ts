@@ -50,6 +50,7 @@ type AgentFrontmatter = {
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 export const MAX_AGENT_NAME_BYTES = 256;
+export const MAX_AGENT_DESCRIPTION_BYTES = 1024;
 export const MAX_AGENT_TOOL_LIST_BYTES = 4 * 1024;
 export const MAX_AGENT_TOOL_COUNT = 256;
 export const MAX_MODEL_SELECTOR_BYTES = 512;
@@ -293,6 +294,11 @@ function loadAgentsFromDir(
 			) {
 				throw new Error("name and description must be non-empty strings.");
 			}
+			const description = frontmatter.description.trim();
+			if (description.length > MAX_AGENT_DESCRIPTION_BYTES ||
+				Buffer.byteLength(description, "utf8") > MAX_AGENT_DESCRIPTION_BYTES) {
+				throw new Error(`description must be at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`);
+			}
 			if (!isSafeAgentName(frontmatter.name.trim())) {
 				throw new Error(`name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and contain no control or bidirectional formatting characters.`);
 			}
@@ -305,7 +311,7 @@ function loadAgentsFromDir(
 			}
 			const agent: AgentConfig = {
 				name: frontmatter.name.trim(),
-				description: frontmatter.description.trim(),
+				description,
 				tools: parseToolList(frontmatter.tools),
 				model: frontmatter.model?.trim() || undefined,
 				thinking: thinking as ThinkingLevel | undefined,

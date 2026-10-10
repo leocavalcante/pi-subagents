@@ -18,6 +18,11 @@ test('README documents the minimum Node.js version required by the package', () 
   assert.ok(readme.includes(`Node.js ${engine.slice(2)} or newer`), `README must document Node.js ${engine}`);
 });
 
+test('README documents bounded agent descriptions', () => {
+  const agents = section('Agent definitions');
+  assert.match(agents, /Descriptions are limited to 1 KiB of UTF-8 text/);
+});
+
 test('README documents bounded model selectors and tool allowlists', () => {
   const agents = section('Agent definitions');
   const overrides = section('Model and thinking overrides');
