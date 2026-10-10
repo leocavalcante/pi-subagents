@@ -66,6 +66,7 @@ test('README documents the bounded shared process queue', () => {
   assert.match(background, /limit of four direct child processes per extension runtime/);
   assert.match(background, /At most 32 additional task requests can wait/);
   assert.match(background, /excess requests fail with a retryable queue-full result/);
+  assert.match(background, /shared 32 MiB budget, estimated from serialized message records, retained model metadata, task text, stderr, and result text/);
 });
 
 test('README relative file links are included in the npm package', () => {
