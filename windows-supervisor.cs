@@ -378,16 +378,16 @@ internal static class WindowsSupervisor
             FailureStage = "target job assignment";
             if (!AssignProcessToJobObject(innerJob, processInformation.Process))
             {
+                // It remains in the outer job; do not wait indefinitely if even
+                // this best-effort termination request fails.
                 TerminateProcess(processInformation.Process, SetupFailureExitCode);
-                WaitForSingleObject(processInformation.Process, Infinite);
                 return FailClosed();
             }
             FailureStage = "target resume";
             if (ResumeThread(processInformation.Thread) == ResumeThreadFailed)
             {
+                // Closing either kill-on-close job on return contains the target.
                 TerminateJobObject(innerJob, SetupFailureExitCode);
-                WaitForSingleObject(processInformation.Process, Infinite);
-                WaitForJobEmpty(innerJob);
                 return FailClosed();
             }
 
