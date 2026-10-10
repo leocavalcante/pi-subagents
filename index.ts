@@ -31,6 +31,7 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
 	AGENT_NAME_PATTERN,
+	MAX_AGENT_DESCRIPTION_BYTES,
 	MAX_AGENT_NAME_BYTES,
 	MAX_MODEL_SELECTOR_BYTES,
 	type AgentConfig,
@@ -1221,6 +1222,7 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent agents",
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
+			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
 			"Reports invalid and duplicate definitions. Defaults to personal agents; use agentScope to include project agents.",
 		].join(" "),
 		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }),
@@ -1228,7 +1230,8 @@ export default function (pi: ExtensionAPI) {
 			agentScope: AgentScopeSchema,
 			agents: Type.Array(Type.Object({
 				name: Type.String(),
-				description: Type.String(),
+				description: Type.String({ maxLength: MAX_AGENT_DESCRIPTION_BYTES,
+					description: `At most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.` }),
 				source: StringEnum(["user", "project"] as const),
 				filePath: Type.String(),
 				model: Type.Optional(Type.String()),

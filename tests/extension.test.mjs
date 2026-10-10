@@ -14,7 +14,7 @@ import { Value } from 'typebox/value';
 import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
-const { MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
 const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
@@ -1528,6 +1528,29 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
     assert.deepEqual(project.details.agents.map(a => a.name), ['project']);
     assert.equal(traces().length, 0);
   } finally { rmSync(badFile); }
+});
+
+test('agent listings omit oversized descriptions from structured metadata', async () => {
+  const file = join(sandbox, 'agent/agents/oversized-description.md');
+  const description = `PRIVATE_DESCRIPTION_${'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES)}`;
+  writeFileSync(file, `---\nname: oversized-description\ndescription: ${JSON.stringify(description)}\n---\nPrompt.\n`);
+  try {
+    const listed = await invoke('subagent_agents', {});
+    assert.equal(listed.details.agents.some(agent => agent.name === 'oversized-description'), false);
+    assert.ok(listed.details.diagnostics.some(diagnostic => diagnostic.filePath === file &&
+      diagnostic.message === `description must be at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`));
+    assert.equal(JSON.stringify(listed).includes(description), false);
+    const outputSchema = tools.get('subagent_agents').definition.outputSchema;
+    assert.equal(Value.Check(outputSchema, listed.structuredContent), true);
+    assert.equal(Value.Check(outputSchema, {
+      agentScope: 'user',
+      agents: [{ name: 'oversized-description', description, source: 'user', filePath: file }],
+      projectAgentsDir: null,
+      diagnostics: [],
+    }), false);
+  } finally {
+    rmSync(file, { force: true });
+  }
 });
 
 test('oversized agent tool lists are diagnosed and never reach child processes', async () => {
