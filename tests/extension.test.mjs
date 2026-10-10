@@ -1553,11 +1553,13 @@ test('agent listings omit oversized descriptions from structured metadata', asyn
   }
 });
 
-test('ambiguous agent tool entries are rejected and never reach child processes', async () => {
+test('ambiguous and modifier agent tool entries are rejected before child processes launch', async () => {
   const invalid = [
     { name: 'comma-tool', value: 'private-tool-probe,private-extra-probe' },
     { name: 'nul-tool', value: `read${String.fromCharCode(0)}bash` },
     { name: 'escape-tool', value: `read${String.fromCharCode(27)}bash` },
+    { name: 'add-modifier', value: '+private-tool-probe' },
+    { name: 'remove-modifier', value: '-bash' },
   ];
   const files = invalid.map(({ name, value }) => {
     const file = join(sandbox, 'agent/agents', `${name}.md`);
@@ -1569,7 +1571,7 @@ test('ambiguous agent tool entries are rejected and never reach child processes'
     for (const { name, value } of invalid) {
       assert.equal(listed.details.agents.some(agent => agent.name === name), false);
       assert.ok(listed.details.diagnostics.some(diagnostic => diagnostic.message ===
-        'tools entries must not contain commas or control characters.'));
+        "tools entries must not contain commas, control characters, or start with '+' or '-'."));
       assert.equal(JSON.stringify(listed).includes(value), false);
       const result = await invoke('subagent', { agent: name, task: 'must not spawn' });
       assert.equal(result.isError, true);

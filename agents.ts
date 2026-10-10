@@ -131,8 +131,8 @@ function parseToolList(value: unknown): string[] | undefined {
 		}
 		const tool = item.trim();
 		if (!tool) continue;
-		if (tool.includes(",") || INVALID_AGENT_TOOL_CONTROL.test(tool)) {
-			throw new Error("tools entries must not contain commas or control characters.");
+		if (tool.includes(",") || tool.startsWith("+") || tool.startsWith("-") || INVALID_AGENT_TOOL_CONTROL.test(tool)) {
+			throw new Error("tools entries must not contain commas, control characters, or start with '+' or '-'.");
 		}
 		if (seen.has(tool)) continue;
 		const bytes = Buffer.byteLength(tool, "utf8") + (tools.length > 0 ? 1 : 0);
