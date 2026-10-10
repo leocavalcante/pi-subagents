@@ -7,7 +7,7 @@ const terminalControlText = `terminal ${String.fromCharCode(27)}]52;c;pi-subagen
 const trace = entry => {
   const safeEntry = { ...entry };
   if (typeof safeEntry.task === 'string' && safeEntry.task.length > 512 &&
-    (/^(retention-heavy|usage-overflow-heavy):/.test(safeEntry.task) || safeEntry.task.includes('CHAIN_BUDGET_DATA'))) {
+    (/^(retention-heavy|retention-registry-heavy|usage-overflow-heavy):/.test(safeEntry.task) || safeEntry.task.includes('CHAIN_BUDGET_DATA'))) {
     safeEntry.task = safeEntry.task.slice(0, 512) + '…';
   }
   appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({ ...safeEntry, pid: process.pid }) + '\n');
@@ -91,6 +91,7 @@ if (task === 'malformed-cost-component' || task === 'malformed-nested-usage') {
   } }));
 }
 const usageOverflowHeavy = task === 'usage-overflow-heavy' || task.startsWith('usage-overflow-heavy:');
+const compactRetentionWorkload = task.startsWith('retention-registry-heavy:') || usageOverflowHeavy;
 if (task === 'usage-overflow' || task === 'large-usage' || usageOverflowHeavy) for (let i = 0; i < (task === 'large-usage' || usageOverflowHeavy ? 1 : 2); i++) console.log(JSON.stringify({
   type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', usage: { input: 1, cost: { total: 1e308 } } }
 }));
@@ -202,13 +203,17 @@ if (task === 'malformed-fractional-usage') console.log(JSON.stringify({ type: 'm
 if (task === 'stdout-flood' || task.startsWith('stdout-flood-hang')) await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
 if (task === 'stderr-flood') await write(process.stderr, 'é'.repeat(100 * 1024));
 if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`);
-if (task.startsWith('retention-heavy') || usageOverflowHeavy) for (let i = 0; i < 3; i++) emit('r'.repeat(3 * 1024 * 1024));
-emit(`progress: ${task.startsWith('retention-heavy') || usageOverflowHeavy ? 'retention fixture' : task}`);
+// The compact workload keeps finished-registry tests cheap; the larger fixture exercises per-task history eviction.
+const retentionRecordBytes = compactRetentionWorkload ? 1024 * 1024 : 3 * 1024 * 1024;
+if (task.startsWith('retention-heavy') || task.startsWith('retention-registry-heavy:') || usageOverflowHeavy) {
+  for (let i = 0; i < 3; i++) emit('r'.repeat(retentionRecordBytes));
+}
+emit(`progress: ${task.startsWith('retention-heavy') || task.startsWith('retention-registry-heavy:') || usageOverflowHeavy ? 'retention fixture' : task}`);
 setTimeout(async () => {
   if (task === 'terminal-control-crash') await write(process.stderr, terminalControlText);
   if (task.includes('crash')) { console.error(task === 'terminal-control-crash' ? '' : 'fixture crashed before final output'); process.exitCode = 1; }
   else {
-    const output = task.startsWith('retention-heavy') || task.startsWith('usage-overflow-heavy:') ? 'retention fixture complete'
+    const output = task.startsWith('retention-heavy') || task.startsWith('retention-registry-heavy:') || task.startsWith('usage-overflow-heavy:') ? 'retention fixture complete'
       : task === 'chain-capture-overflow' ? 'é'.repeat(600 * 1024)
       : task === 'chain-aggregate-output' ? 'CHAIN_BUDGET_DATA' + 'x'.repeat(900 * 1024)
       : task === 'terminal-control-text' ? terminalControlText
