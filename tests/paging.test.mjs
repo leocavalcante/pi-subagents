@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { createOutputPager, sliceOutput } = await jiti.import('../paging.ts');
+const { createOutputPager, sliceOutput, WeakOutputPagerCache } = await jiti.import('../paging.ts');
 
 test('UTF-8 output pages reconstruct multibyte text without replacement characters', () => {
   const original = 'abc😀é漢字\n'.repeat(50);
@@ -47,6 +47,39 @@ test('reusable pager encodes once and serves late sequential pages without prefi
     assert.deepEqual(encoded, [size], 'the source is encoded once even when reading at the end');
   } finally {
     Buffer.from = originalFrom;
+  }
+});
+
+test('output pager cache weakly tracks both results and encoded pagers', () => {
+  const originalWeakRef = globalThis.WeakRef;
+  const refs = [];
+  globalThis.WeakRef = class {
+    constructor(value) { this.value = value; refs.push(this); }
+    deref() { return this.value; }
+  };
+  try {
+    const cache = new WeakOutputPagerCache();
+    const result = {};
+    const firstPager = () => 'first';
+    let creations = 0;
+    assert.equal(cache.get(result, () => { creations++; return firstPager; }), firstPager);
+    assert.equal(refs.length, 2);
+    assert.equal(refs[0].value, result);
+    assert.equal(refs[1].value, firstPager);
+    assert.equal(cache.get(result, () => { creations++; return () => 'unused'; }), firstPager);
+    assert.equal(creations, 1);
+
+    refs[1].value = undefined; // Simulate the pager being collected without GC timing.
+    const secondPager = () => 'second';
+    assert.equal(cache.get(result, () => { creations++; return secondPager; }), secondPager);
+    assert.equal(creations, 2);
+
+    refs[2].value = undefined; // A collected result invalidates its pager too.
+    const thirdPager = () => 'third';
+    assert.equal(cache.get(result, () => { creations++; return thirdPager; }), thirdPager);
+    assert.equal(creations, 3);
+  } finally {
+    globalThis.WeakRef = originalWeakRef;
   }
 });
 

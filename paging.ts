@@ -9,6 +9,23 @@ export interface OutputSlice {
 
 export type OutputPager = (offset: number, limit: number) => OutputSlice;
 
+/** Keep one best-effort pager without pinning its result or encoded buffer. */
+export class WeakOutputPagerCache<Key extends object> {
+	private key?: WeakRef<Key>;
+	private pager?: WeakRef<OutputPager>;
+
+	get(key: Key, create: () => OutputPager): OutputPager {
+		if (this.key?.deref() === key) {
+			const cached = this.pager?.deref();
+			if (cached) return cached;
+		}
+		const pager = create();
+		this.key = new WeakRef(key);
+		this.pager = new WeakRef(pager);
+		return pager;
+	}
+}
+
 function validateRange(offset: number, limit: number): void {
 	if (!Number.isSafeInteger(offset) || offset < 0) throw new RangeError("offset must be a non-negative safe integer.");
 	if (!Number.isInteger(limit) || limit < 4 || limit > MAX_PAGE_BYTES) {
