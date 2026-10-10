@@ -3,6 +3,7 @@
  */
 
 import * as fs from "node:fs";
+import { isUtf8 } from "node:buffer";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
@@ -271,7 +272,9 @@ function loadAgentsFromDir(
 					break;
 				}
 				totalBytes += length;
-				content = bytes.subarray(0, length).toString("utf-8");
+				const fileContents = bytes.subarray(0, length);
+				if (!isUtf8(fileContents)) throw new Error("Agent definition is not valid UTF-8.");
+				content = fileContents.toString("utf-8");
 			} finally {
 				fs.closeSync(fd);
 			}
