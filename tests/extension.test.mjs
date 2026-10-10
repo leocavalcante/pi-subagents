@@ -2286,7 +2286,11 @@ test('agent thinking overrides inheritance and empty tools disable the selection
     const listed = listing.structuredContent.agents.find(agent => agent.name === 'limited');
     assert.equal(listed.thinking, 'off');
     assert.match(listing.content[0].text, /thinking=off/);
-    assert.equal(Value.Check(tools.get('subagent_agents').definition.outputSchema, listing.structuredContent), true);
+    const listingSchema = tools.get('subagent_agents').definition.outputSchema;
+    assert.equal(Value.Check(listingSchema, listing.structuredContent), true);
+    const invalidListing = structuredClone(listing.structuredContent);
+    invalidListing.agents.find(agent => agent.name === 'limited').thinking = 'unsupported';
+    assert.equal(Value.Check(listingSchema, invalidListing), false, 'the output schema must constrain thinking to supported levels');
     writeFileSync(file, '---\nname: limited\ndescription: Pinned thinking\nmodel: fake/pinned:high\nthinking: low\n---\nPinned instructions.\n');
     await invoke('subagent', { agent: 'limited', task: 'pinned thinking' });
     const pinned = traces().filter(t => t.event === 'start').at(-1);
