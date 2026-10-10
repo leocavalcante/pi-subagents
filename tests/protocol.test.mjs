@@ -43,10 +43,16 @@ test('JSON structural breadth is bounded before parsing and punctuation inside s
 
 test('rejects JSON strings and keys containing escaped unpaired surrogates', () => {
   const unpaired = String.fromCharCode(0xd800);
+  const escapedPair = `${String.fromCharCode(92)}uD800${String.fromCharCode(92)}uDC00`;
   assert.deepEqual(parseChildEvent(JSON.stringify({ text: '😀' })), { text: '😀' });
+  assert.deepEqual(parseChildEvent(`{"text":"${escapedPair}"}`), { text: '𐀀' });
+  assert.deepEqual(parseChildEvent('{"text":"first","text":"safe"}'), { text: 'safe' });
   assert.throws(() => parseChildEvent(JSON.stringify({ text: unpaired })), /ill-formed Unicode/);
   assert.throws(() => parseChildEvent(JSON.stringify({ nested: [unpaired] })), /ill-formed Unicode/);
   assert.throws(() => parseChildEvent(JSON.stringify({ [unpaired]: 'value' })), /ill-formed Unicode/);
+  assert.throws(() => parseChildEvent(`{"text":"${unpaired}"}`), /ill-formed Unicode/);
+  assert.throws(() => parseChildEvent(`{"text":${JSON.stringify(unpaired)},"text":"safe"}`),
+    /ill-formed Unicode/, 'validate malformed values before JSON.parse overwrites duplicate keys');
 });
 
 test('rejects parsed numbers outside the finite JavaScript range at any depth', () => {
