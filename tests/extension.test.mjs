@@ -87,6 +87,36 @@ test('background returns before completion, retains progress, and sends a follow
   assert.equal(child.thinking, 'high');
 });
 
+test('progress callback failures do not interrupt child capture or cleanup', async () => {
+  const cases = [
+    { name: 'single', params: { agent: 'worker', task: 'progress callback single' }, results: 1 },
+    { name: 'parallel', params: { concurrency: 1, tasks: [
+      { agent: 'worker', task: 'progress callback parallel one' },
+      { agent: 'worker', task: 'progress callback parallel two' },
+    ] }, results: 2 },
+    { name: 'chain', params: { chain: [
+      { agent: 'worker', task: 'progress callback chain one' },
+      { agent: 'worker', task: 'progress callback chain two {previous}' },
+    ] }, results: 2 },
+  ];
+
+  for (const scenario of cases) {
+    let updates = 0;
+    const result = await tools.get('subagent').definition.execute(
+      'throwing-progress-test', scenario.params, undefined,
+      () => { updates++; throw new Error('progress renderer failed'); }, ctx(),
+    );
+    assert.equal(updates, 1, `${scenario.name} progress should be disabled after its first callback failure`);
+    assert.notEqual(result.isError, true, `${scenario.name} task results should still be returned`);
+    assert.equal(result.details.results.length, scenario.results);
+    assert.ok(result.details.results.every(task => task.exitCode === 0), `${scenario.name} child processes should finish normally`);
+    const childTasks = traces().filter(entry => entry.event === 'start' && entry.task.includes(`progress callback ${scenario.name}`));
+    assert.equal(childTasks.length, scenario.results);
+    assert.ok(childTasks.every(child => traces().some(entry => entry.event === 'end' && entry.pid === child.pid)),
+      `${scenario.name} child cleanup should finish despite the failed callback`);
+  }
+});
+
 test('background completion rendering escapes terminal controls without changing follow-up content', async () => {
   const id = await launch({ task: 'terminal-control-text' });
   await finish(id);
