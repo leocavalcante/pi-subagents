@@ -35,6 +35,8 @@ import {
 	AGENT_NAME_PATTERN,
 	MAX_AGENT_DESCRIPTION_BYTES,
 	MAX_AGENT_NAME_BYTES,
+	MAX_AGENT_TOOL_COUNT,
+	MAX_AGENT_TOOL_LIST_BYTES,
 	MAX_MODEL_SELECTOR_BYTES,
 	MAX_TIMEOUT_MS,
 	type AgentConfig,
@@ -1400,23 +1402,27 @@ export default function (pi: ExtensionAPI) {
 		outputSchema: Type.Object({
 			agentScope: AgentScopeSchema,
 			agents: Type.Array(Type.Object({
-				name: Type.String(),
-				description: Type.String({ maxLength: MAX_AGENT_DESCRIPTION_BYTES,
+				name: AgentNameSchema,
+				description: Type.String({ minLength: 1, maxLength: MAX_AGENT_DESCRIPTION_BYTES,
 					description: `At most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.` }),
 				source: StringEnum(["user", "project"] as const),
 				filePath: Type.String(),
-				model: Type.Optional(Type.String()),
+				model: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
+					description: `At most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` })),
 				thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
-				tools: Type.Optional(Type.Array(Type.String())),
+				tools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: MAX_AGENT_TOOL_LIST_BYTES }), {
+					maxItems: MAX_AGENT_TOOL_COUNT,
+					uniqueItems: true,
+				})),
 				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
-			})),
+			}, { additionalProperties: false })),
 			projectAgentsDir: Type.Union([Type.String(), Type.Null()]),
 			diagnostics: Type.Array(Type.Object({
 				filePath: Type.String(),
 				source: StringEnum(["user", "project"] as const),
 				message: Type.String(),
-			})),
-		}),
+			}, { additionalProperties: false })),
+		}, { additionalProperties: false }),
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			if (!isToolParameterObject(params)) {

@@ -15,7 +15,7 @@ import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const { DEFAULT_PROGRESS_UPDATE_INTERVAL_MS } = await jiti.import('../progress.ts');
-const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS } = await jiti.import('../agents.ts');
+const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_NAME_BYTES, MAX_AGENT_TOOL_COUNT, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS } = await jiti.import('../agents.ts');
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
 const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -2128,6 +2128,43 @@ test('agent listings omit oversized descriptions from structured metadata', asyn
   } finally {
     rmSync(file, { force: true });
   }
+});
+
+test('agent listing output schema enforces metadata bounds and exact fields', async () => {
+  const listing = (await invoke('subagent_agents', {})).structuredContent;
+  const schema = tools.get('subagent_agents').definition.outputSchema;
+  assert.equal(Value.Check(schema, listing), true);
+
+  const assertRejected = (mutate, message) => {
+    const candidate = structuredClone(listing);
+    mutate(candidate);
+    assert.equal(Value.Check(schema, candidate), false, message);
+  };
+  const agent = candidate => candidate.agents[0];
+  assertRejected(candidate => { agent(candidate).name = ' '.repeat(MAX_AGENT_NAME_BYTES); }, 'blank names must be rejected');
+  assertRejected(candidate => { agent(candidate).name = 'x'.repeat(MAX_AGENT_NAME_BYTES + 1); }, 'oversized names must be rejected');
+  assertRejected(candidate => { agent(candidate).description = ''; }, 'empty descriptions must be rejected');
+  assertRejected(candidate => { agent(candidate).description = 'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES + 1); }, 'oversized descriptions must be rejected');
+  assertRejected(candidate => { agent(candidate).model = ''; }, 'empty model selectors must be rejected');
+  assertRejected(candidate => { agent(candidate).model = 'x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1); }, 'oversized model selectors must be rejected');
+  assertRejected(candidate => { agent(candidate).tools = Array.from({ length: MAX_AGENT_TOOL_COUNT + 1 }, (_, index) => `tool-${index}`); }, 'oversized tool arrays must be rejected');
+  assertRejected(candidate => { agent(candidate).tools = ['x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)]; }, 'oversized tool entries must be rejected');
+  assertRejected(candidate => { agent(candidate).tools = ['read', 'read']; }, 'duplicate tool entries must be rejected');
+  assertRejected(candidate => { agent(candidate).systemPrompt = 'private prompt'; }, 'agent entries must not permit undeclared prompt fields');
+  assertRejected(candidate => { candidate.unexpected = true; }, 'listing results must not permit undeclared fields');
+  assertRejected(candidate => { candidate.diagnostics.push({ filePath: 'agent.md', source: 'user', message: 'invalid', systemPrompt: 'private prompt' }); }, 'diagnostics must not permit undeclared fields');
+
+  const atLimits = structuredClone(listing);
+  Object.assign(agent(atLimits), {
+    name: 'n'.repeat(MAX_AGENT_NAME_BYTES),
+    description: 'd'.repeat(MAX_AGENT_DESCRIPTION_BYTES),
+    model: 'm'.repeat(MAX_MODEL_SELECTOR_BYTES),
+    tools: Array.from({ length: MAX_AGENT_TOOL_COUNT }, (_, index) => `tool-${index}`),
+  });
+  assert.equal(Value.Check(schema, atLimits), true, 'metadata at configured limits remains valid');
+  const maxToolEntry = structuredClone(listing);
+  agent(maxToolEntry).tools = ['t'.repeat(MAX_AGENT_TOOL_LIST_BYTES)];
+  assert.equal(Value.Check(schema, maxToolEntry), true, 'tool entries at the configured byte limit remain valid');
 });
 
 test('ambiguous and modifier agent tool entries are rejected before child processes launch', async () => {
