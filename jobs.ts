@@ -191,7 +191,7 @@ export class JobManager<T, Observation = never> {
 			};
 			const abort = () => {
 				cleanup();
-				reject(signal?.reason ?? new Error("Job wait aborted."));
+				reject(signal && signal.reason !== undefined ? signal.reason : new Error("Job wait aborted."));
 			};
 			const timer = setTimeout(() => {
 				cleanup();
@@ -305,7 +305,7 @@ export class ProcessPool {
 				};
 				const abort = () => {
 					this.waiters = this.waiters.filter((w) => w !== grant);
-					reject(signal?.reason ?? new Error("Process request canceled."));
+					reject(signal && signal.reason !== undefined ? signal.reason : new Error("Process request canceled."));
 				};
 				this.waiters.push(grant);
 				signal?.addEventListener("abort", abort, { once: true });

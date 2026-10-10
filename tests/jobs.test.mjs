@@ -301,6 +301,13 @@ test('wait timeouts and aborted waits remove observers without canceling the job
   const aborted = jobs.wait(job.id, 1000, controller.signal);
   controller.abort();
   await assert.rejects(aborted, { name: 'AbortError' });
+  const nullReasonController = new AbortController();
+  const nullReasonWait = jobs.wait(job.id, 1000, nullReasonController.signal).then(
+    () => ({ resolved: true }),
+    reason => ({ reason }),
+  );
+  nullReasonController.abort(null);
+  assert.deepEqual(await nullReasonWait, { reason: null });
   assert.equal(jobSignal.aborted, false);
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
   assert.equal(jobs.jobs.get(job.id).waiters.size, 0);
@@ -373,6 +380,20 @@ test('process pool releases a slot if cancellation races with grant', async () =
   release();
   controller.abort();
   await assert.rejects(queued, { name: 'AbortError' });
+  (await pool.acquire())();
+});
+
+test('queued process acquisitions preserve explicit null abort reasons', async () => {
+  const pool = new ProcessPool(1);
+  const release = await pool.acquire();
+  const controller = new AbortController();
+  const queued = pool.acquire(controller.signal).then(
+    () => ({ resolved: true }),
+    reason => ({ reason }),
+  );
+  controller.abort(null);
+  assert.deepEqual(await queued, { reason: null });
+  release();
   (await pool.acquire())();
 });
 
