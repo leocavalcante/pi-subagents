@@ -69,6 +69,8 @@ test('README documents bounded model selectors and tool allowlists', () => {
   assert.match(agents, /Entries cannot contain commas or control characters/);
   assert.match(agents, /cannot start with `\+` or `-`, which Pi interprets as modifiers/);
   assert.match(overrides, /Model selectors .* limited to 512 UTF-8 bytes without control characters/);
+  assert.match(overrides, /Set `model: null` on a call or entry to ignore the agent's configured model and inherit the parent's active model/);
+  assert.match(overrides, /entry-level `null` also overrides a top-level batch model/);
 });
 
 test('README documents bounded delegated working-directory paths', () => {

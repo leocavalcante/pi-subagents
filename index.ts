@@ -666,7 +666,7 @@ interface DispatchDefaults {
 }
 
 interface DispatchOverrides {
-	model?: string;
+	model?: string | null;
 	thinking?: ThinkingLevel;
 }
 
@@ -714,8 +714,9 @@ async function runSingleAgent(
 
 	const effectiveTimeoutMs = timeoutMs === null ? undefined : timeoutMs ?? agent.timeoutMs;
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	const inheritsDispatchConfig = !overrides.model && !agent.model;
-	const model = overrides.model?.trim() ?? agent.model ?? dispatchDefaults.model;
+	const inheritsDispatchConfig = overrides.model === null || (overrides.model === undefined && !agent.model);
+	const model = overrides.model === null ? dispatchDefaults.model
+		: overrides.model !== undefined ? overrides.model.trim() : agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
 	const thinking = overrides.thinking ?? agent.thinking ?? (inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined);
 	if (thinking) args.push("--thinking", thinking);
@@ -1150,8 +1151,11 @@ const DispatchTimeoutSchema = Type.Union([TimeoutSchema, Type.Null()], {
 });
 
 const DispatchOptions = {
-	model: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
-		description: `Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes; maximum ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` })),
+	model: Type.Optional(Type.Union([
+		Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
+			description: `Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes; maximum ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` }),
+		Type.Null({ description: "Ignore the agent's configured model and inherit the parent session model." }),
+	], { description: "Override the model, or set null to ignore the agent's configured model and inherit the parent session model." })),
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." })),
 };
 
@@ -1776,7 +1780,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const configurations: DispatchOverrides[] = [params, ...(params.tasks ?? []), ...(params.chain ?? [])];
 			if (configurations.some((item) =>
-				(item.model !== undefined && !isSafeModelSelector(item.model)) ||
+				(item.model !== undefined && item.model !== null && !isSafeModelSelector(item.model)) ||
 				(item.thinking !== undefined && !THINKING_LEVELS.includes(item.thinking)))) {
 				return {
 					content: [{ type: "text", text: `model must be a non-empty selector of at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes without control characters and contain well-formed Unicode; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
@@ -1936,7 +1940,7 @@ export default function (pi: ExtensionAPI) {
 							step.agent,
 							taskWithContext,
 							step.cwd ?? params.cwd,
-							{ model: step.model ?? params.model, thinking: step.thinking ?? params.thinking },
+							{ model: step.model !== undefined ? step.model : params.model, thinking: step.thinking ?? params.thinking },
 							step.timeoutMs !== undefined ? step.timeoutMs : params.timeoutMs,
 							i + 1,
 							signal,
@@ -2032,7 +2036,7 @@ export default function (pi: ExtensionAPI) {
 							t.agent,
 							t.task,
 							t.cwd ?? params.cwd,
-							{ model: t.model ?? params.model, thinking: t.thinking ?? params.thinking },
+							{ model: t.model !== undefined ? t.model : params.model, thinking: t.thinking ?? params.thinking },
 							t.timeoutMs !== undefined ? t.timeoutMs : params.timeoutMs,
 							undefined,
 							signal,

@@ -2305,6 +2305,34 @@ test('per-call model and thinking overrides take precedence without broadening t
   assert.equal(last.thinking, 'off');
 });
 
+test('model null ignores agent and batch model defaults while inheriting the parent model', async () => {
+  const definition = tools.get('subagent').definition;
+  assert.equal(Value.Check(definition.parameters, { agent: 'pinned', task: 'inherit parent model', model: null }), true);
+
+  await invoke('subagent', { agent: 'pinned', task: 'ignore pinned model', model: null });
+  const single = traces().filter(entry => entry.event === 'start').at(-1);
+  assert.equal(single.model, 'fake/parent');
+  assert.equal(single.thinking, 'high', 'the parent thinking level follows the inherited parent model');
+
+  await invoke('subagent', { model: 'fake/batch', thinking: 'medium', tasks: [
+    { agent: 'pinned', task: 'entry null model', model: null },
+    { agent: 'pinned', task: 'top-level model fallback' },
+  ] });
+  const parallel = traces().filter(entry => entry.event === 'start');
+  assert.equal(parallel.find(entry => entry.task === 'entry null model').model, 'fake/parent');
+  assert.equal(parallel.find(entry => entry.task === 'entry null model').thinking, 'medium',
+    'model and thinking overrides resolve independently');
+  assert.equal(parallel.find(entry => entry.task === 'top-level model fallback').model, 'fake/batch');
+
+  await invoke('subagent', { model: 'fake/chain', chain: [
+    { agent: 'pinned', task: 'chain null model', model: null },
+    { agent: 'pinned', task: 'chain top-level model' },
+  ] });
+  const chain = traces().filter(entry => entry.event === 'start');
+  assert.equal(chain.find(entry => entry.task === 'chain null model').model, 'fake/parent');
+  assert.equal(chain.find(entry => entry.task === 'chain top-level model').model, 'fake/chain');
+});
+
 test('parallel and background chain entries override batch model and thinking defaults', async () => {
   const entries = [{ agent: 'pinned', task: 'batch default' }, { agent: 'worker', task: 'entry override', model: 'fake/entry', thinking: 'off' }];
   await invoke('subagent', { tasks: entries, model: 'fake/batch', thinking: 'medium' });
