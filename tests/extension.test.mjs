@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 import { promises as fsPromises } from 'node:fs';
 import { after, afterEach, beforeEach, test } from 'node:test';
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,8 @@ const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECT
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
 const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
+// Use the canonical path because macOS exposes many temp directories through symlink aliases.
+const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pi-subagents-test-')));
 const traceFile = join(sandbox, 'trace.jsonl');
 const oldArgv = process.argv[1];
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
