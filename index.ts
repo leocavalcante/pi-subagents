@@ -908,7 +908,24 @@ async function runSingleAgent(
 				finish(code);
 			});
 
-			proc.once("spawn", () => { processSpawned = true; });
+			proc.once("spawn", () => {
+				processSpawned = true;
+				// Cancellation can arrive before Node assigns a PID. Retry now that
+				// the child exists, rather than letting it run after an abort.
+				if (wasAborted) {
+					terminateGroup();
+					return;
+				}
+				// Runtime deadlines exclude process creation and start only once the
+				// child is actually running.
+				if (timeoutMs !== undefined) {
+					deadlineTimer = setTimeout(() => {
+						if (wasAborted || leaderExited || closed) return;
+						timedOut = true;
+						terminateGroup();
+					}, timeoutMs);
+				}
+			});
 			proc.on("error", (error) => {
 				if (processSpawned) {
 					currentResult.errorMessage = "Subagent child process reported an error.";
@@ -920,14 +937,6 @@ async function runSingleAgent(
 				}
 				// Node emits close after error; let close own cleanup and slot release.
 			});
-
-			if (timeoutMs !== undefined) {
-				deadlineTimer = setTimeout(() => {
-					if (wasAborted || leaderExited || closed) return;
-					timedOut = true;
-					terminateGroup();
-				}, timeoutMs);
-			}
 
 			// Pi prepends piped stdin to the prompt. This avoids OS argv size limits.
 			// Early startup failures can close stdin; close/error above own the result.
