@@ -56,6 +56,7 @@ export const MAX_AGENT_TOOL_COUNT = 256;
 export const MAX_MODEL_SELECTOR_BYTES = 512;
 export const AGENT_NAME_PATTERN = "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u206f\\ufeff]+(?![\\s\\S])";
 const INVALID_AGENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/;
+const INVALID_AGENT_TOOL_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 const INVALID_MODEL_SELECTOR_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 export function isSafeAgentName(name: string): boolean {
@@ -129,7 +130,11 @@ function parseToolList(value: unknown): string[] | undefined {
 			throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
 		}
 		const tool = item.trim();
-		if (!tool || seen.has(tool)) continue;
+		if (!tool) continue;
+		if (tool.includes(",") || INVALID_AGENT_TOOL_CONTROL.test(tool)) {
+			throw new Error("tools entries must not contain commas or control characters.");
+		}
+		if (seen.has(tool)) continue;
 		const bytes = Buffer.byteLength(tool, "utf8") + (tools.length > 0 ? 1 : 0);
 		if (bytes > MAX_AGENT_TOOL_LIST_BYTES - totalBytes || tools.length >= MAX_AGENT_TOOL_COUNT) {
 			throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);

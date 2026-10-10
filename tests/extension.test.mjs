@@ -1553,6 +1553,35 @@ test('agent listings omit oversized descriptions from structured metadata', asyn
   }
 });
 
+test('ambiguous agent tool entries are rejected and never reach child processes', async () => {
+  const invalid = [
+    { name: 'comma-tool', value: 'private-tool-probe,private-extra-probe' },
+    { name: 'nul-tool', value: `read${String.fromCharCode(0)}bash` },
+    { name: 'escape-tool', value: `read${String.fromCharCode(27)}bash` },
+  ];
+  const files = invalid.map(({ name, value }) => {
+    const file = join(sandbox, 'agent/agents', `${name}.md`);
+    writeFileSync(file, `---\nname: ${name}\ndescription: Invalid tool entry\ntools: ${JSON.stringify([value])}\n---\nPrompt.\n`);
+    return file;
+  });
+  try {
+    const listed = await invoke('subagent_agents', {});
+    for (const { name, value } of invalid) {
+      assert.equal(listed.details.agents.some(agent => agent.name === name), false);
+      assert.ok(listed.details.diagnostics.some(diagnostic => diagnostic.message ===
+        'tools entries must not contain commas or control characters.'));
+      assert.equal(JSON.stringify(listed).includes(value), false);
+      const result = await invoke('subagent', { agent: name, task: 'must not spawn' });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /Unknown agent/);
+      assert.equal(JSON.stringify(result).includes(value), false);
+    }
+    assert.equal(traces().length, 0);
+  } finally {
+    for (const file of files) rmSync(file, { force: true });
+  }
+});
+
 test('oversized agent tool lists are diagnosed and never reach child processes', async () => {
   const file = join(sandbox, 'agent/agents/oversized-tools.md');
   const toolName = 'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1);
@@ -1584,7 +1613,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     `name: ${JSON.stringify(name)}`,
     `description: ${JSON.stringify(description)}`,
     'model: fake/safe',
-    `tools: ${JSON.stringify(['read', `custom${String.fromCharCode(10)}${escape}`])}`,
+    `tools: ${JSON.stringify(['read', 'custom-safe'])}`,
     suffix,
     '---',
     'Untrusted test prompt.',
@@ -1604,6 +1633,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.ok(text.includes('u001b'));
     assert.ok(text.includes('u000a'));
     assert.equal(listed.details.agents.find(agent => agent.name === hostileName).description, hostileDescription);
+    assert.deepEqual(listed.details.agents.find(agent => agent.name === hostileName).tools, ['read', 'custom-safe']);
     if (canUseControlFilename) {
       assert.ok(listed.details.agents.some(agent => agent.filePath === hostilePathFile));
       assert.equal(text.includes(hostilePathFile), false);
