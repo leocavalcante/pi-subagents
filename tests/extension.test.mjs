@@ -9,9 +9,10 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { loadExtensions } from './pi-runtime.mjs';
+import { jiti, loadExtensions } from './pi-runtime.mjs';
 import { Value } from 'typebox/value';
 
+const { MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
 const traceFile = join(sandbox, 'trace.jsonl');
@@ -693,6 +694,58 @@ test('stdout records and stderr are bounded while both streams continue draining
   assert.match(result.stderr, /stderr capture truncated/);
   assert.equal(result.stderr.includes('\uFFFD'), false);
   assert.match(stderrJob.latest.content[0].text, /Capture notice/);
+});
+
+test('cumulative stdout overflow terminates the child, reports truncation, and releases its process slot', async t => {
+  const originalSpawn = childProcess.spawn;
+  let killRequests = 0;
+  const spawn = t.mock.method(childProcess, 'spawn', (...args) => {
+    if (!args[1].includes('fake/pinned:high')) return originalSpawn(...args);
+    const child = new EventEmitter();
+    let childKillRequests = 0;
+    // Force the POSIX group-kill attempt to throw before touching any real PID; child.kill is stubbed below.
+    child.pid = Symbol('synthetic child PID');
+    child.kill = () => {
+      killRequests++;
+      if (++childKillRequests === 1) queueMicrotask(() => { child.emit('exit', null); child.emit('close', null); });
+      return false;
+    };
+    child.stdin = new EventEmitter();
+    child.stdin.end = () => {};
+    child.stdout = new EventEmitter();
+    child.stdout.destroy = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stderr.destroy = () => {};
+    queueMicrotask(() => {
+      child.emit('spawn');
+      // Model a pipe chunk over the budget without allocating 128 MiB in every CI job.
+      const oversized = Buffer.alloc(1);
+      Object.defineProperty(oversized, 'length', { value: MAX_CHILD_STDOUT_BYTES + 1 });
+      child.stdout.emit('data', oversized);
+    });
+    return child;
+  });
+  syncBuiltinESMExports();
+  let result;
+  try {
+    result = await invoke('subagent', { agent: 'pinned', task: 'cumulative stdout overflow' });
+    assert.equal(result.isError, true);
+    assert.equal(result.details.results[0].failureContext.eventType, 'stdout_limit');
+    assert.equal(result.details.results[0].capture.stdoutTruncated, true);
+    assert.match(result.details.results[0].errorMessage, /stdout exceeded 128 MiB/);
+    assert.match(result.content[0].text, /stdout capture stopped at 128 MiB/);
+    assert.ok(killRequests > 0, 'The byte limit must initiate existing child termination');
+
+    const launched = await invoke('subagent', { background: true, agent: 'pinned', task: 'background stdout limit' });
+    const job = await finish(launched.details.background.id);
+    assert.equal(job.state, 'failed');
+    const output = await invoke('subagent_jobs', { action: 'output', jobId: launched.details.background.id });
+    assert.equal(output.structuredContent.output.failureContext.eventType, 'stdout_limit');
+    assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, output.structuredContent), true);
+  } finally { spawn.mock.restore(); syncBuiltinESMExports(); }
+  assert.notEqual((await invoke('subagent', { agent: 'worker', task: 'after stdout limit' })).isError, true,
+    'The process slot must be available after child cleanup');
 });
 
 test('bounded history keeps the final answer and usage from evicted messages', async () => {

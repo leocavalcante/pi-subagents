@@ -47,7 +47,15 @@ import {
 	type JobSnapshot,
 	type JobState,
 } from "./jobs.ts";
-import { JsonLineCapture, MessageCapture, TextCapture, MAX_HISTORY_BYTES, MAX_JSON_RECORD_BYTES } from "./capture.ts";
+import {
+	BoundedByteStream,
+	JsonLineCapture,
+	MessageCapture,
+	TextCapture,
+	MAX_CHILD_STDOUT_BYTES,
+	MAX_HISTORY_BYTES,
+	MAX_JSON_RECORD_BYTES,
+} from "./capture.ts";
 import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
 import { MAX_PAGE_BYTES, createOutputPager, WeakOutputPagerCache } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
@@ -210,7 +218,7 @@ interface UsageStats {
 	turns: number;
 }
 
-type FailureEventType = "invalid_json" | "invalid_utf8" | "invalid_event" | "message_end" | "tool_result_end" | "oversized_record" | "process_exit";
+type FailureEventType = "invalid_json" | "invalid_utf8" | "invalid_event" | "message_end" | "tool_result_end" | "oversized_record" | "stdout_limit" | "process_exit";
 type FailureRole = "assistant" | "user" | "toolResult" | "system" | "custom" | "bashExecution" | "branchSummary" | "compactionSummary" | "other";
 type FailureStopReason = "stop" | "length" | "toolUse" | "error" | "aborted" | "deferred";
 
@@ -243,6 +251,7 @@ interface SingleResult {
 		messagesDropped?: number;
 		retainedMessageBytes?: number;
 		stderrTruncated?: boolean;
+		stdoutTruncated?: boolean;
 		inheritedPipesClosed?: boolean;
 		finalAssistantMessageDropped?: boolean;
 	};
@@ -355,6 +364,7 @@ function getCaptureNotice(result: SingleResult): string {
 	if (result.capture?.messagesDropped) notices.push(`${result.capture.messagesDropped} messages omitted from captured history.`);
 	if (result.capture?.finalAssistantMessageDropped) notices.push("Final assistant message omitted because it exceeded the history capture budget.");
 	if (result.capture?.stderrTruncated) notices.push("stderr capture truncated at 64 KiB.");
+	if (result.capture?.stdoutTruncated) notices.push(`stdout capture stopped at ${MAX_CHILD_STDOUT_BYTES / (1024 * 1024)} MiB.`);
 	if (result.capture?.inheritedPipesClosed) notices.push("Inherited output pipes were closed after the child exited.");
 	return notices.length ? `[Capture notice: ${notices.join(" ")}]` : "";
 }
@@ -807,6 +817,12 @@ async function runSingleAgent(
 				const record = ++recordPosition;
 				setProtocolError("Invalid subagent JSON event: malformed UTF-8.", "invalid_utf8", record);
 			});
+			const stdout = new BoundedByteStream(MAX_CHILD_STDOUT_BYTES, (chunk) => reader.append(chunk), () => {
+				currentResult.capture!.stdoutTruncated = true;
+				setProtocolError(`Subagent stdout exceeded ${MAX_CHILD_STDOUT_BYTES / (1024 * 1024)} MiB; remaining output discarded.`,
+					"stdout_limit");
+				terminateGroup();
+			});
 			const finish = (code: number | null) => {
 				if (settling || settled) return;
 				settling = true;
@@ -825,7 +841,7 @@ async function runSingleAgent(
 
 			// Keep stdout as bytes so malformed UTF-8 cannot be silently replaced.
 			proc.stderr.setEncoding("utf8");
-			proc.stdout.on("data", (data: Buffer) => reader.append(data));
+			proc.stdout.on("data", (data: Buffer) => stdout.append(data));
 			proc.stderr.on("data", (data: string) => {
 				stderr.append(data);
 				currentResult.stderr = stderr.text;
@@ -1049,7 +1065,7 @@ const UsageSummarySchema = Type.Object({
 	reasoning: Type.Optional(TokenCountSchema),
 });
 const FailureContextSchema = Type.Object({
-	eventType: StringEnum(["invalid_json", "invalid_utf8", "invalid_event", "message_end", "tool_result_end", "oversized_record", "process_exit"] as const),
+	eventType: StringEnum(["invalid_json", "invalid_utf8", "invalid_event", "message_end", "tool_result_end", "oversized_record", "stdout_limit", "process_exit"] as const),
 	role: Type.Optional(StringEnum(["assistant", "user", "toolResult", "system", "custom", "bashExecution", "branchSummary", "compactionSummary", "other"] as const)),
 	record: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 	lastStopReason: Type.Optional(StringEnum(["stop", "length", "toolUse", "error", "aborted", "deferred"] as const)),
