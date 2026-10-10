@@ -1,8 +1,11 @@
 import { protocolUsageError } from "./usage.ts";
 
-/** Bound structural nesting before parsing, so captured values remain safe to serialize. */
+/** Bound JSON structure breadth and nesting before parsing untrusted child records. */
+export const MAX_JSON_STRUCTURE_TOKENS = 65_536;
+
 export function parseChildEvent(line: string): unknown {
 	let depth = 0;
+	let structuralTokens = 0;
 	let inString = false;
 	let escaped = false;
 	for (let i = 0; i < line.length; i++) {
@@ -16,7 +19,15 @@ export function parseChildEvent(line: string): unknown {
 		if (code === 34) inString = true;
 		else if (code === 91 || code === 123) { // Array or object opening.
 			if (++depth > 128) throw new RangeError("Subagent JSON nesting exceeded 128 levels.");
+			if (++structuralTokens > MAX_JSON_STRUCTURE_TOKENS) {
+				throw new RangeError(`Subagent JSON structure exceeded ${MAX_JSON_STRUCTURE_TOKENS} tokens.`);
+			}
 		} else if (code === 93 || code === 125) depth--;
+		else if (code === 44 || code === 58) { // Comma or colon outside strings.
+			if (++structuralTokens > MAX_JSON_STRUCTURE_TOKENS) {
+				throw new RangeError(`Subagent JSON structure exceeded ${MAX_JSON_STRUCTURE_TOKENS} tokens.`);
+			}
+		}
 	}
 	const value: unknown = JSON.parse(line);
 	if (hasNonFiniteJsonNumber(value)) {
