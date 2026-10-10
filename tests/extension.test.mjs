@@ -810,6 +810,55 @@ test('Windows cancellation and deadlines skip the POSIX SIGKILL grace timer', { 
     'A deadline should schedule only the bounded inherited-pipe drain timer');
 });
 
+test('Windows Job Object supervision cleans descendants after cancellation and leader exit', { skip: process.platform !== 'win32' }, async () => {
+  const descendantPids = new Set();
+  const startedDescendant = task => traces().find(entry => entry.event === 'grandchild' && entry.task === task);
+  try {
+    const model = 'fake/model with spaces "quoted" \\';
+    const workingDirectory = join(sandbox, 'working directory with spaces');
+    mkdirSync(workingDirectory, { recursive: true });
+    const argumentResult = await invoke('subagent', { agent: 'worker', task: 'Windows supervisor quotes arguments', model, cwd: workingDirectory, timeoutMs: 15000 });
+    assert.equal(argumentResult.details.results[0].exitCode, 0);
+    const argumentTrace = traces().find(entry => entry.event === 'start' && entry.task === 'Windows supervisor quotes arguments');
+    assert.equal(argumentTrace.model, model, 'quoted model arguments must arrive unchanged');
+    assert.equal(argumentTrace.cwd, workingDirectory, 'the working directory must survive paths with spaces');
+
+    const canceledTask = 'delay=10000 orphan grandchild-ignored grandchild-marker canceled Windows containment';
+    const canceledId = await launch({ task: canceledTask });
+    await waitFor(() => startedDescendant(canceledTask));
+    descendantPids.add(startedDescendant(canceledTask).pid);
+    await invoke('subagent_jobs', { action: 'cancel', jobId: canceledId });
+    assert.equal((await finish(canceledId)).state, 'canceled');
+    await sleep(2200);
+    assert.equal(traces().some(entry => entry.event === 'grandchild-marker'), false,
+      'cancellation must terminate descendants that ignore stdio before they can perform delayed work');
+
+    const timeoutTask = 'delay=10000 orphan grandchild-ignored grandchild-marker timed-out Windows containment';
+    const timeoutId = await launch({ task: timeoutTask, timeoutMs: 1000 });
+    await waitFor(() => startedDescendant(timeoutTask));
+    descendantPids.add(startedDescendant(timeoutTask).pid);
+    const timeoutResult = await finish(timeoutId);
+    assert.equal(timeoutResult.state, 'failed');
+    assert.equal(timeoutResult.latest.details.results[0].timedOut, true);
+    await sleep(2200);
+    assert.equal(traces().some(entry => entry.event === 'grandchild-marker'), false,
+      'a deadline must terminate descendants that ignore stdio before they can perform delayed work');
+
+    const completedTask = 'delay=100 orphan grandchild-ignored grandchild-marker normal Windows containment';
+    const completedId = await launch({ task: completedTask });
+    await waitFor(() => startedDescendant(completedTask));
+    descendantPids.add(startedDescendant(completedTask).pid);
+    assert.equal((await finish(completedId)).state, 'completed');
+    await sleep(2200);
+    assert.equal(traces().some(entry => entry.event === 'grandchild-marker'), false,
+      'normal leader exit must also terminate descendants that have closed their stdio');
+  } finally {
+    for (const pid of descendantPids) {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already exited */ }
+    }
+  }
+});
+
 test('POSIX cancellation kills descendants in the child process group', { skip: process.platform === 'win32' }, async () => {
   const id = await launch({ task: 'delay=10000 stubborn grandchild' });
   await waitFor(() => traces().some(t => t.event === 'grandchild'));
