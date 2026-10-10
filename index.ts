@@ -310,6 +310,8 @@ function estimateJobBytes(result: JobResult): number {
 	let bytes = result.content.reduce((sum, part) => sum + Buffer.byteLength(part.type === "text" ? part.text : part.data), 0);
 	for (const task of result.details?.results ?? []) {
 		bytes += (task.capture?.retainedMessageBytes ?? 0) + Buffer.byteLength(task.task) + Buffer.byteLength(task.stderr);
+		// The result model can outlive its source message when history evicts that message.
+		if (task.model) bytes += Buffer.byteLength(task.model);
 		if (task.errorMessage) bytes += Buffer.byteLength(task.errorMessage);
 	}
 	return bytes;

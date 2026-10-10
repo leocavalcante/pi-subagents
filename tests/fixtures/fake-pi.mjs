@@ -31,6 +31,16 @@ const toolUseEvent = { type: 'message_end', message: {
   role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'echo done' } }],
   stopReason: 'toolUse', usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
 } };
+if (task === 'unretained-model') {
+  const model = 'm'.repeat(7 * 1024 * 1024);
+  const largeModelEvent = { type: 'message_end', message: { role: 'assistant', content: [], model, stopReason: 'toolUse' } };
+  const finalEvent = { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'model metadata retained' }], stopReason: 'stop' } };
+  await write(process.stdout, JSON.stringify(largeModelEvent) + '\n');
+  await new Promise(resolve => setTimeout(resolve, 250));
+  await write(process.stdout, JSON.stringify(finalEvent) + '\n');
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'terminal-control-tool-call') console.log(JSON.stringify({ type: 'message_end', message: {
   role: 'assistant', content: [{ type: 'toolCall', id: 'hostile', name: 'bash', arguments: { command: terminalControlText } }],
   stopReason: 'toolUse',
