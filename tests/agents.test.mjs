@@ -186,11 +186,13 @@ test('model selectors are byte-bounded before becoming child arguments', () => {
   assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1)), false);
 });
 
-test('agent tool allowlists reject ambiguous names and are bounded before becoming a child argument', () => {
+test('agent tool allowlists reject ambiguous names and modifiers and are bounded before becoming a child argument', () => {
   const atLimit = 'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES);
   const commaTool = 'read,bash';
   const nulTool = `read${String.fromCharCode(0)}bash`;
   const escapeTool = `read${String.fromCharCode(27)}bash`;
+  const addModifier = '+private-tool';
+  const removeModifier = '-bash';
   agent(userDir, 'valid-array-tools', `name: valid-array-tools\ndescription: Separate array entries\ntools: ${JSON.stringify(['read', 'bash'])}`);
   agent(userDir, 'valid-tools', `name: valid-tools\ndescription: At-limit tool argument\ntools: ["${atLimit}"]`);
   agent(userDir, 'oversized-tools', `name: oversized-tools\ndescription: Oversized tool argument\ntools: ["${'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)}"]`);
@@ -201,17 +203,23 @@ test('agent tool allowlists reject ambiguous names and are bounded before becomi
   agent(userDir, 'comma-array', `name: comma-array\ndescription: Ambiguous comma tool\ntools: ${JSON.stringify([commaTool])}`);
   agent(userDir, 'nul-array', `name: nul-array\ndescription: NUL tool\ntools: ${JSON.stringify([nulTool])}`);
   agent(userDir, 'escape-array', `name: escape-array\ndescription: Control tool\ntools: ${JSON.stringify([escapeTool])}`);
+  agent(userDir, 'add-modifier', `name: add-modifier\ndescription: Modifier entry\ntools: ${JSON.stringify([addModifier])}`);
+  agent(userDir, 'remove-modifier', `name: remove-modifier\ndescription: Modifier entry\ntools: ${JSON.stringify([removeModifier])}`);
 
   const result = discoverAgents(cwd, 'user');
   assert.deepEqual(result.agents.map(a => a.name), ['valid-array-tools', 'valid-tools']);
   assert.deepEqual(result.agents[0].tools, ['read', 'bash']);
   assert.deepEqual(result.agents[1].tools, [atLimit]);
-  assert.equal(result.diagnostics.length, 8);
+  assert.equal(result.diagnostics.length, 10);
   assert.ok(result.diagnostics.every(d => /tools/.test(d.message)));
   assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)), false);
   assert.equal(JSON.stringify(result).includes(commaTool), false);
   assert.equal(JSON.stringify(result).includes(nulTool), false);
   assert.equal(JSON.stringify(result).includes(escapeTool), false);
+  assert.equal(JSON.stringify(result).includes(addModifier), false);
+  assert.equal(JSON.stringify(result).includes(removeModifier), false);
+  assert.equal(result.diagnostics.filter(d => d.message ===
+    "tools entries must not contain commas, control characters, or start with '+' or '-'.").length, 5);
 });
 
 test('normalizes config, preserves explicit empty tools, and supports thinking', () => {
