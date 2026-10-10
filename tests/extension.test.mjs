@@ -1250,6 +1250,45 @@ test('subagent renderers escape untrusted terminal controls without changing cap
   assert.equal(fallback.includes(esc), false);
 });
 
+test('subagent_jobs renderers escape terminal controls without changing job output', async () => {
+  initTheme('dark', false);
+  const definition = tools.get('subagent_jobs').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const esc = String.fromCharCode(27);
+  const c1Csi = String.fromCharCode(0x9b);
+  const hostile = `terminal ${esc}]52;c;pi-subagents-test${String.fromCharCode(7)} ${esc}[2J${c1Csi}2J\nnext line`;
+  const id = await launch({ task: 'terminal-control-text', notify: false });
+  await finish(id);
+
+  const statusResult = await invoke('subagent_jobs', { action: 'status', jobId: id });
+  const outputResult = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.ok(statusResult.content[0].text.includes(hostile));
+  assert.equal(statusResult.details.latest.details.results[0].messages.at(-1).content[0].text, hostile,
+    'captured child output remains unchanged in job details');
+  assert.equal(outputResult.structuredContent.output.text, hostile,
+    'paged model-facing output remains unchanged');
+
+  for (const result of [statusResult, outputResult]) {
+    for (const expanded of [false, true]) {
+      const rendered = definition.renderResult(result, { expanded }, theme, { isError: false }).render(100).join('\n');
+      assert.equal(rendered.includes(`${esc}]52;`), false, `child OSC sequences must not reach the terminal (expanded=${expanded})`);
+      assert.equal(rendered.includes(`${esc}[2J`), false, `child cursor-control sequences must not reach the terminal (expanded=${expanded})`);
+      assert.equal(rendered.includes(c1Csi), false, `C1 controls must not reach the terminal (expanded=${expanded})`);
+      assert.equal(rendered.includes(String.fromCharCode(7)), false, `BEL must not reach the terminal (expanded=${expanded})`);
+      assert.ok(rendered.includes('\\u001b]52;c;pi-subagents-test\\u0007'));
+      assert.ok(rendered.includes('\\u009b2J'));
+    }
+  }
+
+  const hostileId = `job${esc}[2J${c1Csi}2J`;
+  const call = definition.renderCall({ action: 'output', jobId: hostileId }, theme, {});
+  const renderedCall = call.render(100).join('\n');
+  assert.equal(renderedCall.includes(esc), false);
+  assert.equal(renderedCall.includes(c1Csi), false);
+  assert.ok(renderedCall.includes('\\u001b[2J'));
+  assert.ok(renderedCall.includes('\\u009b2J'));
+});
+
 test('all modes and agent names are validated before foreground children start', async () => {
   for (const params of [
     { agent: 'worker', tasks: [{ agent: 'worker', task: 'x' }] },
