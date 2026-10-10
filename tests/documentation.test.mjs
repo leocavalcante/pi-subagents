@@ -71,6 +71,8 @@ test('README documents bounded model selectors and tool allowlists', () => {
   assert.match(overrides, /Model selectors .* limited to 512 UTF-8 bytes without control characters/);
   assert.match(overrides, /Set `model: null` on a call or entry to ignore the agent's configured model and inherit the parent's active model/);
   assert.match(overrides, /entry-level `null` also overrides a top-level batch model/);
+  assert.match(overrides, /Set `thinking: null` to ignore the agent's configured thinking level/);
+  assert.match(overrides, /Entry-level `null` overrides top-level batch thinking/);
 });
 
 test('README documents bounded delegated working-directory paths', () => {
