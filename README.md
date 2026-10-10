@@ -8,13 +8,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 
 Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4 and 1.1.0. Pi provides the runtime dependencies, so no build step is needed.
 
-Install from npm:
-
-```sh
-pi install npm:@leocavalcante/pi-subagents
-```
-
-Or install from GitHub:
+The npm package is not yet published; install from GitHub:
 
 ```sh
 pi install git:github.com/leocavalcante/pi-subagents
