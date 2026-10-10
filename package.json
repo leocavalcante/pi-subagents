@@ -28,6 +28,7 @@
 		"chain.ts",
 		"unicode.ts",
 		"progress.ts",
+		"temporary-files.ts",
 		"windows-supervisor.cs",
 		"CONTRIBUTING.md",
 		"SECURITY.md",
