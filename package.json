@@ -27,6 +27,7 @@
 		"usage.ts",
 		"chain.ts",
 		"unicode.ts",
+		"progress.ts",
 		"CONTRIBUTING.md",
 		"SECURITY.md",
 		"LICENSE",
