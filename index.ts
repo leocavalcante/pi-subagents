@@ -27,7 +27,7 @@ import {
 	getMarkdownTheme,
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
 	AGENT_NAME_PATTERN,
@@ -1143,6 +1143,19 @@ function jobMetadata(job: JobSnapshot<JobResult>, observation?: Usage): Static<t
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.registerMessageRenderer("subagent-background", (message, options, theme) => {
+		const content = typeof message.content === "string"
+			? message.content
+			: message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+		const box = new Box(options.outputPad, 1, (t) => theme.bg("customMessageBg", t));
+		box.addChild(new Text(theme.fg("customMessageLabel", `[${message.customType}]`), 0, 0));
+		box.addChild(new Spacer(1));
+		box.addChild(new Markdown(escapeTerminalText(content), 0, 0, getMarkdownTheme(), {
+			color: (text) => theme.fg("customMessageText", text),
+		}));
+		return box;
+	});
+
 	const pool = new ProcessPool(MAX_CONCURRENCY, MAX_PROCESS_QUEUE);
 	const jobs = new JobManager<JobResult, Usage>(
 		(job) => {
