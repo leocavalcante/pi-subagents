@@ -676,6 +676,36 @@ test('canceling a serialized parallel job never starts its remaining tasks', asy
   assert.equal(traces().filter(t => t.event === 'start').length, 1);
 });
 
+test('temporary prompt files and directories are private on POSIX', { skip: process.platform === 'win32' }, async t => {
+  let promptPath;
+  let releaseWrite, enteredWrite;
+  const gate = new Promise(resolve => { releaseWrite = resolve; });
+  const entered = new Promise(resolve => { enteredWrite = resolve; });
+  const originalWrite = fsPromises.writeFile;
+  const write = t.mock.method(fsPromises, 'writeFile', async (...args) => {
+    const result = await originalWrite(...args);
+    promptPath = args[0];
+    enteredWrite();
+    await gate;
+    return result;
+  });
+  syncBuiltinESMExports();
+  try {
+    const id = await launch({ task: 'private prompt permissions' });
+    await entered;
+    const directory = await fsPromises.stat(dirname(promptPath));
+    const file = await fsPromises.stat(promptPath);
+    assert.equal(directory.mode & 0o077, 0, 'Temporary prompt directory must not grant group or other access');
+    assert.equal(file.mode & 0o077, 0, 'Temporary prompt file must not grant group or other access');
+    releaseWrite();
+    assert.equal((await finish(id)).state, 'completed');
+  } finally {
+    releaseWrite();
+    write.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test('cancellation during prompt creation prevents spawning and cleans up the prompt', async t => {
   let releaseWrite, enteredWrite;
   const gate = new Promise(resolve => { releaseWrite = resolve; });
