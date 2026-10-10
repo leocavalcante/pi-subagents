@@ -60,7 +60,7 @@ description: General-purpose worker
 Complete the delegated task. Report the changes made and checks run.
 ```
 
-An agent can set `model`, `thinking`, and `tools` in its frontmatter:
+An agent can set `model`, `thinking`, and `tools` in its frontmatter. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
 
 ```yaml
 model: anthropic/claude-sonnet-4-5
@@ -153,7 +153,7 @@ Set `model` or `thinking` on a call without editing the agent definition:
 
 Parallel and chain entries accept the same fields. Each field resolves independently, with precedence: entry, top-level call, agent frontmatter, then parent session. Parent thinking is inherited only when the model is also inherited from the parent. If neither the call nor the agent sets `thinking`, an explicit model uses Pi's configured default or model suffix instead.
 
-Model selectors support Pi's `provider/id` and `:thinking` syntax. A resolved `thinking` setting overrides a model suffix. These options work in foreground and background modes and leave the agent's tools and project approval unchanged.
+Model selectors support Pi's `provider/id` and `:thinking` syntax and are limited to 512 UTF-8 bytes without control characters. A resolved `thinking` setting overrides a model suffix. These options work in foreground and background modes and leave the agent's tools and project approval unchanged.
 
 ## Batch concurrency
 

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
 
-const { discoverAgents } = await jiti.import('../agents.ts');
+const { discoverAgents, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
@@ -144,6 +144,22 @@ test('agent filename precedence and name ordering are locale-independent', () =>
   const result = discoverAgents(cwd, 'user');
   assert.deepEqual(result.agents.map(a => a.name), ['a', 'aa', 'worker', 'z', 'á']);
   assert.equal(result.agents.find(a => a.name === 'worker').description, 'Underscore filename');
+});
+
+test('model selectors are byte-bounded before becoming child arguments', () => {
+  const atLimit = 'x'.repeat(MAX_MODEL_SELECTOR_BYTES);
+  agent(userDir, 'valid-model', `name: valid\ndescription: Valid model\nmodel: "${atLimit}"`);
+  agent(userDir, 'oversized-model', `name: oversized\ndescription: Oversized model\nmodel: "${'x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1)}"`);
+  agent(userDir, 'multibyte-model', `name: multibyte\ndescription: Oversized UTF-8 model\nmodel: "${'€'.repeat(Math.ceil(MAX_MODEL_SELECTOR_BYTES / 3))}"`);
+  agent(userDir, 'control-model', 'name: control\ndescription: Control character model\nmodel: "fake\\u001b/model"');
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(a => a.name), ['valid']);
+  assert.equal(result.agents[0].model, atLimit);
+  assert.equal(result.diagnostics.length, 3);
+  assert.ok(result.diagnostics.every(d => d.message ===
+    `model must be at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`));
+  assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1)), false);
 });
 
 test('normalizes config, preserves explicit empty tools, and supports thinking', () => {

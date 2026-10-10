@@ -50,13 +50,22 @@ type AgentFrontmatter = {
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 export const MAX_AGENT_NAME_BYTES = 256;
+export const MAX_MODEL_SELECTOR_BYTES = 512;
 export const AGENT_NAME_PATTERN = "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u206f\\ufeff]+(?![\\s\\S])";
 const INVALID_AGENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/;
+const INVALID_MODEL_SELECTOR_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 export function isSafeAgentName(name: string): boolean {
 	// UTF-8 is never shorter than UTF-16 code units; reject large names before scanning them.
 	return name.length > 0 && name.length <= MAX_AGENT_NAME_BYTES &&
 		Buffer.byteLength(name, "utf8") <= MAX_AGENT_NAME_BYTES && name.trim().length > 0 && !INVALID_AGENT_NAME.test(name);
+}
+
+/** Keep the value passed as a child argv element well below platform command-line limits. */
+export function isSafeModelSelector(value: unknown, allowBlank = false): value is string {
+	return typeof value === "string" && value.length <= MAX_MODEL_SELECTOR_BYTES &&
+		Buffer.byteLength(value, "utf8") <= MAX_MODEL_SELECTOR_BYTES &&
+		(allowBlank || value.trim().length > 0) && !INVALID_MODEL_SELECTOR_CONTROL.test(value);
 }
 
 const MAX_AGENT_DIRECTORY_ENTRIES = 4096;
@@ -260,8 +269,8 @@ function loadAgentsFromDir(
 			if (!isSafeAgentName(frontmatter.name.trim())) {
 				throw new Error(`name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and contain no control or bidirectional formatting characters.`);
 			}
-			if (frontmatter.model !== undefined && typeof frontmatter.model !== "string") {
-				throw new Error("model must be a string.");
+			if (frontmatter.model !== undefined && !isSafeModelSelector(frontmatter.model, true)) {
+				throw new Error(`model must be at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`);
 			}
 			const thinking = frontmatter.thinking;
 			if (thinking !== undefined && !THINKING_LEVELS.includes(thinking as ThinkingLevel)) {

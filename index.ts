@@ -32,10 +32,12 @@ import { Type, type Static } from "typebox";
 import {
 	AGENT_NAME_PATTERN,
 	MAX_AGENT_NAME_BYTES,
+	MAX_MODEL_SELECTOR_BYTES,
 	type AgentConfig,
 	type AgentScope,
 	discoverAgents,
 	isSafeAgentName,
+	isSafeModelSelector,
 	THINKING_LEVELS,
 } from "./agents.ts";
 import {
@@ -618,6 +620,11 @@ async function runSingleAgent(
 	};
 
 	signal?.throwIfAborted();
+	if (model !== undefined && !isSafeModelSelector(model)) {
+		currentResult.exitCode = 1;
+		currentResult.errorMessage = `Resolved model selector must be no longer than ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes and contain no control characters.`;
+		return currentResult;
+	}
 	if (expandedTaskTooLarge || taskByteLength(task) > MAX_TASK_BYTES) {
 		currentResult.exitCode = 1;
 		currentResult.errorMessage = expandedTaskError ?? taskSizeError();
@@ -977,7 +984,8 @@ const TimeoutSchema = Type.Integer({
 });
 
 const DispatchOptions = {
-	model: Type.Optional(Type.String({ minLength: 1, description: "Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes." })),
+	model: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
+		description: `Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes; maximum ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` })),
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." })),
 };
 
@@ -1544,10 +1552,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			const configurations: DispatchOverrides[] = [params, ...(params.tasks ?? []), ...(params.chain ?? [])];
 			if (configurations.some((item) =>
-				(item.model !== undefined && (typeof item.model !== "string" || !item.model.trim())) ||
+				(item.model !== undefined && !isSafeModelSelector(item.model)) ||
 				(item.thinking !== undefined && !THINKING_LEVELS.includes(item.thinking)))) {
 				return {
-					content: [{ type: "text", text: `model must be a non-empty string; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
+					content: [{ type: "text", text: `model must be a non-empty selector of at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes without control characters; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
