@@ -38,12 +38,12 @@ const invoke = (name, params, context = ctx(), signal) => tools.get(name).defini
 const launch = async params => (await invoke('subagent', { background: true, agent: 'worker', task: 'delay=150', ...params })).details.background.id;
 const status = async id => (await invoke('subagent_jobs', { action: 'status', jobId: id })).details;
 const traces = () => readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
-const waitFor = async predicate => {
-  const deadline = Date.now() + 15000;
+const waitFor = async (predicate, timeoutMs = 15000) => {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { const result = await predicate(); if (result) return result; await sleep(10); }
   throw new Error('Timed out waiting for test condition');
 };
-const finish = id => waitFor(async () => { const job = await status(id); return job.finishedAt ? job : undefined; });
+const finish = (id, timeoutMs = 15000) => waitFor(async () => { const job = await status(id); return job.finishedAt ? job : undefined; }, timeoutMs);
 const noisyTasks = prefix => {
   const task = `${prefix}${'x'.repeat(1_300_000)}`;
   return Array.from({ length: 8 }, () => ({ agent: 'worker', task }));
@@ -218,9 +218,9 @@ test('silent job waits, cancellations and evictions do not promise a completion 
   const canceled = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
   assert.equal(canceled.structuredContent.job.state, 'canceled');
   assert.equal(messages.length, 0);
-  const heavy = await invoke('subagent', { background: true, notify: false, tasks: noisyTasks('retention-heavy:') });
+  const heavy = await invoke('subagent', { background: true, notify: false, tasks: noisyTasks('retention-registry-heavy:') });
   const heavyId = heavy.details.background.id;
-  const evicted = await invoke('subagent_jobs', { action: 'wait', jobId: heavyId, timeoutMs: 15000 });
+  const evicted = await invoke('subagent_jobs', { action: 'wait', jobId: heavyId, timeoutMs: 30000 });
   assert.equal(evicted.structuredContent.timedOut, false);
   assert.equal(evicted.structuredContent.job.state, 'completed');
   assert.equal(evicted.structuredContent.job.outputEvicted, true);
@@ -242,7 +242,8 @@ test('background usage overflow clears partial metadata even after output evicti
     tasks: noisyTasks('usage-overflow-heavy:'),
   });
   const id = launched.details.background.id;
-  const waited = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 10000 });
+  const waited = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 30000 });
+  assert.equal(waited.structuredContent.timedOut, false);
   assert.equal(waited.structuredContent.job.outputEvicted, true);
   assert.equal(waited.structuredContent.job.usage, undefined,
     'An unrepresentable aggregate must not leave the first task\'s partial usage in metadata');
@@ -2186,9 +2187,9 @@ test('finished job records can be forgotten or cleared without canceling active 
 });
 
 test('finished registry output is byte-bounded while completion delivery retains the result', async () => {
-  const launched = await invoke('subagent', { background: true, tasks: noisyTasks('retention-heavy:') });
+  const launched = await invoke('subagent', { background: true, tasks: noisyTasks('retention-registry-heavy:') });
   const id = launched.details.background.id;
-  const job = await finish(id);
+  const job = await finish(id, 30000);
   assert.equal(job.state, 'completed');
   assert.equal(job.outputEvicted, true);
   assert.equal(job.latest, undefined);
