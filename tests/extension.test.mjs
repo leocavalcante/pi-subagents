@@ -15,7 +15,7 @@ import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const { DEFAULT_PROGRESS_UPDATE_INTERVAL_MS } = await jiti.import('../progress.ts');
-const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS } = await jiti.import('../agents.ts');
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
 const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -1814,6 +1814,24 @@ test('agent timeout defaults apply in every dispatch mode and yield to call over
     assert.equal(finished.state, 'failed');
     assert.equal(finished.latest.details.results[0].timedOut, true);
     assert.equal(finished.latest.details.results[0].timeoutMs, 250);
+    const timeoutOutput = await invoke('subagent_jobs', { action: 'output', jobId: background.details.background.id });
+    assert.equal(timeoutOutput.structuredContent.output.timedOut, true);
+    assert.equal(timeoutOutput.structuredContent.output.timeoutMs, 250);
+    const jobOutputSchema = tools.get('subagent_jobs').definition.outputSchema;
+    assert.equal(Value.Check(jobOutputSchema, timeoutOutput.structuredContent), true);
+    assert.equal(Value.Check(jobOutputSchema, {
+      ...timeoutOutput.structuredContent,
+      output: { ...timeoutOutput.structuredContent.output, timeoutMs: MAX_TIMEOUT_MS + 1 },
+    }), false);
+
+    const completedBackground = await invoke('subagent', {
+      background: true, agent: 'timeout-default', task: 'delay=50 configured successful deadline', timeoutMs: 5000,
+    });
+    assert.equal((await finish(completedBackground.details.background.id)).state, 'completed');
+    const completedOutput = await invoke('subagent_jobs', { action: 'output', jobId: completedBackground.details.background.id });
+    assert.equal(completedOutput.structuredContent.output.timedOut, false);
+    assert.equal(completedOutput.structuredContent.output.timeoutMs, 5000);
+    assert.equal(Value.Check(jobOutputSchema, completedOutput.structuredContent), true);
   } finally { rmSync(file); }
 });
 
@@ -2497,6 +2515,8 @@ test('output pages reject active jobs and expose failed-job diagnoses after comp
   assert.equal(output.structuredContent.output.partial, true);
   assert.equal(output.structuredContent.output.exitCode, 0);
   assert.equal(output.structuredContent.output.processExitCode, 0);
+  assert.equal(output.structuredContent.output.timedOut, false);
+  assert.equal('timeoutMs' in output.structuredContent.output, false);
 });
 
 test('invalid UTF-8 child records fail safely and preserve later valid messages', async () => {
