@@ -49,6 +49,12 @@ test('README documents bounded agent descriptions', () => {
   assert.match(agents, /metadata escapes that produce unpaired UTF-16 surrogates are rejected/);
 });
 
+test('README documents the agent configuration exposed by discovery', () => {
+  const usage = section('Usage');
+  assert.match(usage, /model, thinking, and tool settings/);
+  assert.match(usage, /configured timeout defaults/);
+});
+
 test('README documents agent timeout defaults and precedence', () => {
   const agents = section('Agent definitions');
   const usage = section('Usage');
