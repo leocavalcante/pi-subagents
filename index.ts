@@ -1406,7 +1406,7 @@ export default function (pi: ExtensionAPI) {
 				source: StringEnum(["user", "project"] as const),
 				filePath: Type.String(),
 				model: Type.Optional(Type.String()),
-				thinking: Type.Optional(Type.String()),
+				thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
 				tools: Type.Optional(Type.Array(Type.String())),
 				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
 			})),
