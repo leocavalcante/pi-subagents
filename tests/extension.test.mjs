@@ -1874,6 +1874,20 @@ test('agent timeout defaults apply in every dispatch mode and yield to call over
     assert.equal(completedOutput.structuredContent.output.timedOut, false);
     assert.equal(completedOutput.structuredContent.output.timeoutMs, 5000);
     assert.equal(Value.Check(jobOutputSchema, completedOutput.structuredContent), true);
+
+    const backgroundOptOut = await invoke('subagent', {
+      background: true,
+      timeoutMs: 100,
+      tasks: [{ agent: 'timeout-default', task: 'delay=500 background entry deadline opt-out', timeoutMs: null }],
+    });
+    const optOutJob = await finish(backgroundOptOut.details.background.id);
+    assert.equal(optOutJob.state, 'completed');
+    assert.equal(optOutJob.latest.details.results[0].exitCode, 0);
+    assert.equal(optOutJob.latest.details.results[0].timeoutMs, undefined);
+    const optOutOutput = await invoke('subagent_jobs', { action: 'output', jobId: backgroundOptOut.details.background.id });
+    assert.equal(optOutOutput.structuredContent.output.timedOut, false);
+    assert.equal(Object.hasOwn(optOutOutput.structuredContent.output, 'timeoutMs'), false);
+    assert.equal(Value.Check(jobOutputSchema, optOutOutput.structuredContent), true);
   } finally { rmSync(file); rmSync(invalidFile); }
 });
 
