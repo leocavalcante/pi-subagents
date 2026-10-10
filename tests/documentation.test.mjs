@@ -62,6 +62,7 @@ test('README documents bounded model selectors and tool allowlists', () => {
 
 test('README documents bounded delegated working-directory paths', () => {
   const usage = section('Usage');
+  assert.match(usage, /In parallel and chain modes, the top-level `cwd` is the default for every child; an entry's own `cwd` overrides it/);
   assert.match(usage, /Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined/);
 });
 

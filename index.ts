@@ -1170,7 +1170,7 @@ function taskTextSchema(description: string) {
 const WorkingDirectory = Type.String({
 	pattern: "^[^\\u0000]*$",
 	maxLength: MAX_WORKING_DIRECTORY_LENGTH,
-	description: `Working directory for the agent process; maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units and no NUL characters.`,
+	description: `Working directory for the child process; in batch modes the top-level cwd is the default and each task or step may override it. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
 });
 
 const TASK_ITEM_KEYS = ["model", "thinking", "agent", "task", "timeoutMs", "cwd"] as const;
@@ -1935,7 +1935,7 @@ export default function (pi: ExtensionAPI) {
 							agents,
 							step.agent,
 							taskWithContext,
-							step.cwd,
+							step.cwd ?? params.cwd,
 							{ model: step.model ?? params.model, thinking: step.thinking ?? params.thinking },
 							step.timeoutMs !== undefined ? step.timeoutMs : params.timeoutMs,
 							i + 1,
@@ -2031,7 +2031,7 @@ export default function (pi: ExtensionAPI) {
 							agents,
 							t.agent,
 							t.task,
-							t.cwd,
+							t.cwd ?? params.cwd,
 							{ model: t.model ?? params.model, thinking: t.thinking ?? params.thinking },
 							t.timeoutMs !== undefined ? t.timeoutMs : params.timeoutMs,
 							undefined,
