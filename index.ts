@@ -1189,7 +1189,8 @@ const JobResponseSchema = Type.Object({
 	output: Type.Optional(Type.Object({
 		taskIndex: Type.Integer(), agent: Type.String(), exitCode: Type.Integer(),
 		processExitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
-		partial: Type.Boolean(), failureContext: Type.Optional(FailureContextSchema), stepId: Type.Optional(Type.String()),
+		partial: Type.Boolean(), timedOut: Type.Boolean(), timeoutMs: Type.Optional(TimeoutSchema),
+		failureContext: Type.Optional(FailureContextSchema), stepId: Type.Optional(Type.String()),
 		text: Type.String(), offset: Type.Integer(), totalBytes: Type.Integer(),
 		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
 	})),
@@ -1451,7 +1452,8 @@ export default function (pi: ExtensionAPI) {
 					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384),
 						taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode,
 						...(task.processExitCode !== undefined ? { processExitCode: task.processExitCode } : {}),
-						partial: isPartialResult(task),
+						partial: isPartialResult(task), timedOut: task.timedOut === true,
+						...(task.timeoutMs !== undefined ? { timeoutMs: task.timeoutMs } : {}),
 						...(task.failureContext ? { failureContext: task.failureContext } : {}),
 						...(task.stepId !== undefined ? { stepId: task.stepId } : {}) };
 					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;

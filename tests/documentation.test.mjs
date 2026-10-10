@@ -76,6 +76,12 @@ test('README documents bounded UUID job identifiers', () => {
   assert.match(background, /Job IDs are generated UUIDs \(36 characters\); `jobId` inputs are bounded to that length/);
 });
 
+test('README documents timeout metadata on background output pages', () => {
+  const output = section('Read captured job output');
+  assert.match(output, /`output\.timedOut` indicates whether the runtime deadline fired/);
+  assert.match(output, /`output\.timeoutMs` reports the effective per-task deadline when configured/);
+});
+
 test('README documents the bounded shared process queue', () => {
   const background = section('Background execution');
   assert.match(background, /limit of four direct child processes per extension runtime/);
