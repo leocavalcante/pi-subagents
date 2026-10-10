@@ -119,6 +119,15 @@ test('README documents mandatory approval for untrusted project agents', () => {
   assert.match(security, /Approval cannot be disabled through a tool argument/);
 });
 
+test('README documents temporary system-prompt storage and platform permissions', () => {
+  const security = section('Security');
+  assert.match(security, /Agent system prompts are written briefly to a temporary UTF-8 file/);
+  assert.match(security, /removed during invocation cleanup/);
+  assert.match(security, /On POSIX, the temporary directory and file grant no group or other access/);
+  assert.match(security, /On Windows, access follows the ACLs inherited from the configured temporary directory/);
+  assert.match(security, /other processes running as the same user/);
+});
+
 test('README documents terminal-control escaping for foreground, background, and job output', () => {
   const security = section('Security');
   assert.match(security, /foreground subagent result renderer escapes terminal control characters in child output and tool-call previews/);

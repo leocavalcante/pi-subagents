@@ -310,6 +310,8 @@ On POSIX, when a child exits, the extension sends SIGTERM to remaining members o
 
 Context isolation is not a sandbox. Children run with the same OS permissions as Pi and can read or modify files. Include relevant context and task restrictions in each delegation.
 
+Agent system prompts are written briefly to a temporary UTF-8 file so the child CLI can append them, then removed during invocation cleanup. On POSIX, the temporary directory and file grant no group or other access. On Windows, access follows the ACLs inherited from the configured temporary directory; secure that directory if prompts must be private to your account. Temporary-file permissions do not protect against other processes running as the same user or against the delegated child.
+
 Only enable project-local agents in repositories you trust. Untrusted project agents require an interactive approval or an already-trusted Pi project; headless sessions fail closed for untrusted project agents. Approval cannot be disabled through a tool argument.
 
 The foreground subagent result renderer escapes terminal control characters in child output and tool-call previews before displaying them; captured messages and structured details remain unchanged. The background completion-message renderer also escapes child output and failure details for TUI display, while preserving the raw follow-up content and structured details. The `subagent_jobs` call and result renderers likewise escape untrusted job IDs, captured output, and failure text only for display; model-facing content and job details remain unchanged.
