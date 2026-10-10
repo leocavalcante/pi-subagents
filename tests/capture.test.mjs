@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { BoundedByteStream, JsonLineCapture, TextCapture, MessageCapture, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
+const { BoundedByteStream, JsonLineCapture, TextCapture, MessageCapture, MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 
 test('cumulative byte streams accept the exact limit, then notify once and drain without parsing', () => {
   const chunks = [];
@@ -17,6 +17,7 @@ test('cumulative byte streams accept the exact limit, then notify once and drain
   assert.equal(stream.totalBytes, 5);
   assert.equal(stream.limitExceeded, true);
   assert.equal(overflow, 1);
+  assert.equal(MAX_CHILD_JSON_RECORDS, 100_000);
   assert.equal(MAX_CHILD_STDOUT_BYTES, 128 * 1024 * 1024);
 });
 
@@ -29,6 +30,29 @@ test('JSON capture handles chunk boundaries, CRLF, Unicode separators, and final
   reader.finish();
   reader.finish();
   assert.deepEqual(lines, ['{"text":"é\u2028\u2029"}\r', 'tail']);
+});
+
+test('JSON record-count limit stops parsing excess blank lines in the same chunk', () => {
+  const lines = [];
+  let exceeded = 0;
+  const reader = new JsonLineCapture(line => lines.push(line), () => assert.fail('record count is not a byte overflow'),
+    100, () => {}, 3, () => exceeded++);
+  reader.append(Buffer.alloc(100_000, 0x0a));
+  reader.append(Buffer.from('ignored\n'));
+  reader.finish();
+  assert.deepEqual(lines, ['', '', '']);
+  assert.equal(exceeded, 1);
+});
+
+test('JSON record-count limit includes final unterminated records', () => {
+  const lines = [];
+  let exceeded = 0;
+  const reader = new JsonLineCapture(line => lines.push(line), () => assert.fail('record count is not a byte overflow'),
+    100, () => {}, 2, () => exceeded++);
+  reader.append('first\nsecond\nthird');
+  reader.finish();
+  assert.deepEqual(lines, ['first', 'second']);
+  assert.equal(exceeded, 1);
 });
 
 test('byte JSON capture rejects malformed and truncated UTF-8 records, then recovers', () => {
@@ -174,6 +198,7 @@ test('tiny diagnostic budgets remain bounded and invalid limits are rejected', (
   for (const limit of [0, -1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => new TextCapture(limit), /positive integers within the safe range/);
     assert.throws(() => new JsonLineCapture(() => {}, () => {}, limit), /positive integers within the safe range/);
+    assert.throws(() => new JsonLineCapture(() => {}, () => {}, 8, undefined, limit), /positive integers within the safe range/);
     assert.throws(() => new MessageCapture(limit, 1), /positive integers within the safe range/);
     assert.throws(() => new MessageCapture(10, limit), /positive integers within the safe range/);
   }

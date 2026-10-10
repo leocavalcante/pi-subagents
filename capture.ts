@@ -1,7 +1,9 @@
 import { TextDecoder } from "node:util";
 
-/** Bounded capture for untrusted child-process output. Limits are UTF-8 bytes. */
+/** Bounded capture for untrusted child-process output. Byte limits are UTF-8 bytes. */
 export const MAX_JSON_RECORD_BYTES = 8 * 1024 * 1024;
+/** Prevent tiny or blank-line floods from spending unbounded parent CPU. */
+export const MAX_CHILD_JSON_RECORDS = 100_000;
 export const MAX_STDERR_BYTES = 64 * 1024;
 export const MAX_CHILD_STDOUT_BYTES = 128 * 1024 * 1024;
 export const MAX_HISTORY_BYTES = 16 * 1024 * 1024;
@@ -102,6 +104,8 @@ export class JsonLineCapture {
 	private bytes = 0;
 	private discarding = false;
 	private mode?: "text" | "bytes";
+	private recordCount = 0;
+	private stopped = false;
 	private decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 	constructor(
@@ -109,9 +113,15 @@ export class JsonLineCapture {
 		private onOverflow: () => void,
 		private limit = MAX_JSON_RECORD_BYTES,
 		private onInvalidUtf8: () => void = () => {},
-	) { positiveLimit(limit); }
+		private maxRecords = MAX_CHILD_JSON_RECORDS,
+		private onRecordLimit: () => void = () => {},
+	) {
+		positiveLimit(limit);
+		positiveLimit(maxRecords);
+	}
 
 	append(chunk: string | Buffer): void {
+		if (this.stopped) return;
 		const isText = typeof chunk === "string" || chunk instanceof String;
 		const mode = isText ? "text" : "bytes";
 		if (this.mode && this.mode !== mode) throw new Error("JSON capture chunks must keep a consistent encoding.");
@@ -126,6 +136,18 @@ export class JsonLineCapture {
 		this.byteTail = undefined;
 		this.byteTailBytes = 0;
 		this.bytes = 0;
+	}
+
+	/** Stop accepting lines once this child exhausts its cumulative record budget. */
+	private countRecord(): boolean {
+		if (this.recordCount >= this.maxRecords) {
+			this.stopped = true;
+			this.clearRecord();
+			this.onRecordLimit();
+			return false;
+		}
+		this.recordCount++;
+		return true;
 	}
 
 	private appendText(chunk: string): void {
@@ -151,7 +173,9 @@ export class JsonLineCapture {
 				}
 			}
 			if (end < 0) return;
-			if (!this.discarding) this.onLine(this.buffer);
+			const deliver = !this.discarding;
+			if (!this.countRecord()) return;
+			if (deliver) this.onLine(this.buffer);
 			this.clearRecord();
 			this.discarding = false;
 			start = end + 1;
@@ -190,7 +214,9 @@ export class JsonLineCapture {
 				}
 			}
 			if (end < 0) return;
-			if (!this.discarding) this.emitByteRecord();
+			const deliver = !this.discarding;
+			if (!this.countRecord()) return;
+			if (deliver) this.emitByteRecord();
 			this.clearRecord();
 			this.discarding = false;
 			start = end + 1;
@@ -212,9 +238,13 @@ export class JsonLineCapture {
 	}
 
 	finish(): void {
+		if (this.stopped) return;
 		if (!this.discarding) {
-			if (this.mode === "bytes" && this.bytes > 0) this.emitByteRecord();
-			else if (this.mode !== "bytes" && this.buffer) this.onLine(this.buffer);
+			if (this.mode === "bytes" && this.bytes > 0) {
+				if (this.countRecord()) this.emitByteRecord();
+			} else if (this.mode !== "bytes" && this.buffer) {
+				if (this.countRecord()) this.onLine(this.buffer);
+			}
 		}
 		this.clearRecord();
 		this.discarding = false;
