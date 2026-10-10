@@ -75,7 +75,7 @@ Agent discovery is bounded for both personal and project directories: it scans a
 
 ## Usage
 
-Use `subagent_agents` to list agent descriptions, source paths, model and tool settings, configured timeout defaults, and invalid definitions without running an agent:
+Use `subagent_agents` to list agent descriptions, source paths, model, thinking, and tool settings, configured timeout defaults, and invalid definitions without running an agent:
 
 ```json
 {}
