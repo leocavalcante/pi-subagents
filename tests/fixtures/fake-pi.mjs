@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 const args = process.argv.slice(2);
 const task = readFileSync(0, 'utf8').replace(/^Task: /, '');
 const flag = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
+const terminalControlText = `terminal ${String.fromCharCode(27)}]52;c;pi-subagents-test${String.fromCharCode(7)} ${String.fromCharCode(27)}[2J${String.fromCharCode(0x9b)}2J\nnext line`;
 const trace = entry => {
   const safeEntry = { ...entry };
   if (typeof safeEntry.task === 'string' && safeEntry.task.length > 512 &&
@@ -30,6 +31,10 @@ const toolUseEvent = { type: 'message_end', message: {
   role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'echo done' } }],
   stopReason: 'toolUse', usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
 } };
+if (task === 'terminal-control-tool-call') console.log(JSON.stringify({ type: 'message_end', message: {
+  role: 'assistant', content: [{ type: 'toolCall', id: 'hostile', name: 'bash', arguments: { command: terminalControlText } }],
+  stopReason: 'toolUse',
+} }));
 if (task === 'tool-use-only') {
   await write(process.stdout, JSON.stringify(toolUseEvent) + '\n');
   trace({ event: 'end', task });
@@ -159,11 +164,13 @@ if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`)
 if (task.startsWith('retention-heavy') || usageOverflowHeavy) for (let i = 0; i < 3; i++) emit('r'.repeat(3 * 1024 * 1024));
 emit(`progress: ${task.startsWith('retention-heavy') || usageOverflowHeavy ? 'retention fixture' : task}`);
 setTimeout(async () => {
-  if (task.includes('crash')) { console.error('fixture crashed before final output'); process.exitCode = 1; }
+  if (task === 'terminal-control-crash') await write(process.stderr, terminalControlText);
+  if (task.includes('crash')) { console.error(task === 'terminal-control-crash' ? '' : 'fixture crashed before final output'); process.exitCode = 1; }
   else {
     const output = task.startsWith('retention-heavy') || task.startsWith('usage-overflow-heavy:') ? 'retention fixture complete'
       : task === 'chain-capture-overflow' ? 'é'.repeat(600 * 1024)
       : task === 'chain-aggregate-output' ? 'CHAIN_BUDGET_DATA' + 'x'.repeat(900 * 1024)
+      : task === 'terminal-control-text' ? terminalControlText
       : task === 'empty-final' ? [] : task === 'blocks' ? ['first block', 'second block']
       : task === 'dollars' ? '$& $$ $` $\' {previous}'
       : task === 'huge-final' ? 'é'.repeat(2 * 1024 * 1024 + 1)
