@@ -1111,14 +1111,8 @@ const SubagentParams = Type.Object({
 		description: "Parallel mode only: maximum simultaneous tasks in this batch, from 1 to 4. Shared process budget still applies.",
 	})),
 	timeoutMs: Type.Optional(TimeoutSchema),
-	confirmProjectAgents: Type.Optional(
-		Type.Boolean({
-			description: "Prompt before running project-local agents. Default: true.",
-			default: true,
-		}),
-	),
 	cwd: Type.Optional(WorkingDirectory),
-});
+}, { additionalProperties: false });
 
 type SubagentExecute = ToolDefinition<typeof SubagentParams, SubagentDetails>["execute"];
 
@@ -1474,7 +1468,7 @@ export default function (pi: ExtensionAPI) {
 			"Set model or thinking to override agent configuration. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
-			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
+			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project"). Untrusted projects require UI approval or Pi project trust; tool arguments cannot bypass this.`,
 		].join(" "),
 		parameters: SubagentParams,
 
@@ -1529,13 +1523,12 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
-			if (params.confirmProjectAgents !== undefined && typeof params.confirmProjectAgents !== "boolean") {
+			if (Object.hasOwn(params, "confirmProjectAgents")) {
 				return {
-					content: [{ type: "text", text: "confirmProjectAgents must be a boolean." }],
+					content: [{ type: "text", text: "confirmProjectAgents is no longer supported. Trust the project in Pi before using project-local agents." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
-			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 			if (params.background !== undefined && typeof params.background !== "boolean") {
 				return {
 					content: [{ type: "text", text: "background must be a boolean." }],
@@ -1685,12 +1678,7 @@ export default function (pi: ExtensionAPI) {
 					};
 			}
 
-			if (
-				(agentScope === "project" || agentScope === "both") &&
-				confirmProjectAgents &&
-				ctx.hasUI &&
-				!ctx.isProjectTrusted()
-			) {
+			if (agentScope === "project" || agentScope === "both") {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
@@ -1700,7 +1688,14 @@ export default function (pi: ExtensionAPI) {
 					.map((name) => agents.find((a) => a.name === name))
 					.filter((a): a is AgentConfig => a?.source === "project");
 
-				if (projectAgentsRequested.length > 0) {
+				if (projectAgentsRequested.length > 0 && !ctx.isProjectTrusted()) {
+					if (!ctx.hasUI || typeof ctx.ui?.confirm !== "function") {
+						return {
+							content: [{ type: "text", text: "Cannot run project-local agents in an untrusted project without UI approval. Trust the project in Pi or use a personal agent." }],
+							details: makeDetails(mode)([]), isError: true,
+						};
+					}
+
 					const names = projectAgentsRequested.map((a) => displayUntrustedText(a.name)).join(", ");
 					const dir = displayUntrustedText(discovery.projectAgentsDir ?? "(unknown)");
 					const ok = await ctx.ui.confirm(
@@ -1715,7 +1710,7 @@ export default function (pi: ExtensionAPI) {
 									text: "Canceled: project-local agents not approved.",
 								},
 							],
-							details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+							details: makeDetails(mode)([]),
 						};
 				}
 			}
