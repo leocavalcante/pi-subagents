@@ -3,6 +3,7 @@ import { TextDecoder } from "node:util";
 /** Bounded capture for untrusted child-process output. Limits are UTF-8 bytes. */
 export const MAX_JSON_RECORD_BYTES = 8 * 1024 * 1024;
 export const MAX_STDERR_BYTES = 64 * 1024;
+export const MAX_CHILD_STDOUT_BYTES = 128 * 1024 * 1024;
 export const MAX_HISTORY_BYTES = 16 * 1024 * 1024;
 export const MAX_HISTORY_MESSAGES = 128;
 
@@ -19,6 +20,37 @@ function utf8Prefix(text: string, maxBytes: number): string {
 	let end = Math.max(0, maxBytes);
 	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
 	return bytes.subarray(0, end).toString("utf8");
+}
+
+/** Stop parsing a child stream after its cumulative byte budget, while draining later chunks. */
+export class BoundedByteStream {
+	private bytes = 0;
+	private exceeded = false;
+
+	constructor(
+		private limit: number,
+		private onChunk: (chunk: Buffer) => void,
+		private onLimit: () => void,
+	) { positiveLimit(limit); }
+
+	append(chunk: Buffer): void {
+		if (this.exceeded) return;
+		if (chunk.length > this.limit - this.bytes) {
+			this.exceeded = true;
+			this.onLimit();
+			return;
+		}
+		this.bytes += chunk.length;
+		this.onChunk(chunk);
+	}
+
+	get totalBytes(): number {
+		return this.bytes;
+	}
+
+	get limitExceeded(): boolean {
+		return this.exceeded;
+	}
 }
 
 /** Keep a diagnostic prefix while continuing to drain the rest of the stream. */

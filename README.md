@@ -288,6 +288,7 @@ Malformed usage and arithmetic overflow fail the task without exposing provider 
 Each child has bounded output capture:
 
 - JSONL records can be up to 8 MiB in UTF-8, with at most 65,536 structural tokens (container starts, commas, and colons outside strings) and 128 nesting levels. Breadth and nesting are checked before parsing; over-limit records fail the task, are discarded through the next newline, and do not stop stream draining.
+- Child stdout is capped at 128 MiB per task across all records. If a chunk would exceed the limit, the task fails and that chunk and later output are drained and discarded while existing process cleanup terminates the child.
 - Stderr retains its first 64 KiB, including a truncation notice. Further stderr is drained and discarded.
 - Message history retains at most 128 recent messages and 16 MiB of source JSON records per task. Parallel batches and chains share an additional 32 MiB aggregate history budget, distributed across their tasks/steps; a single-task dispatch keeps the 16 MiB per-task limit.
 

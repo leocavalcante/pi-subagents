@@ -33,6 +33,7 @@ test('README documents aggregate capture limits for parallel and chained results
   assert.match(capture, /final assistant message cannot fit its task's allocated history budget, that task fails/);
   assert.match(capture, /at most 65,536 structural tokens/);
   assert.match(capture, /structure beyond 65,536 tokens/);
+  assert.match(capture, /Child stdout is capped at 128 MiB per task/);
 });
 
 test('README documents the bounded shared process queue', () => {

@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { JsonLineCapture, TextCapture, MessageCapture } = await jiti.import('../capture.ts');
+const { BoundedByteStream, JsonLineCapture, TextCapture, MessageCapture, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
+
+test('cumulative byte streams accept the exact limit, then notify once and drain without parsing', () => {
+  const chunks = [];
+  let overflow = 0;
+  const stream = new BoundedByteStream(5, chunk => chunks.push(chunk.toString()), () => overflow++);
+  stream.append(Buffer.from('123'));
+  stream.append(Buffer.from('45'));
+  assert.equal(stream.totalBytes, 5);
+  assert.equal(stream.limitExceeded, false);
+  stream.append(Buffer.from('6'));
+  stream.append(Buffer.from('later chunks are drained but not parsed'));
+  assert.deepEqual(chunks, ['123', '45']);
+  assert.equal(stream.totalBytes, 5);
+  assert.equal(stream.limitExceeded, true);
+  assert.equal(overflow, 1);
+  assert.equal(MAX_CHILD_STDOUT_BYTES, 128 * 1024 * 1024);
+});
 
 test('JSON capture handles chunk boundaries, CRLF, Unicode separators, and final records', () => {
   const lines = [];
