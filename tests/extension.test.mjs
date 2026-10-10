@@ -810,9 +810,10 @@ test('cumulative stdout overflow terminates the child, reports truncation, and r
     child.stderr.destroy = () => {};
     queueMicrotask(() => {
       child.emit('spawn');
-      // Model a pipe chunk over the budget without allocating 128 MiB in every CI job.
+      // Model an oversized chunk and its bounded prefix without allocating 128 MiB in every CI job.
       const oversized = Buffer.alloc(1);
       Object.defineProperty(oversized, 'length', { value: MAX_CHILD_STDOUT_BYTES + 1 });
+      Object.defineProperty(oversized, 'subarray', { value: () => Buffer.from('x') });
       child.stdout.emit('data', oversized);
     });
     return child;

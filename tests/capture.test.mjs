@@ -21,6 +21,19 @@ test('cumulative byte streams accept the exact limit, then notify once and drain
   assert.equal(MAX_CHILD_STDOUT_BYTES, 128 * 1024 * 1024);
 });
 
+test('a chunk crossing the byte budget preserves exactly the remaining prefix', () => {
+  const chunks = [];
+  let overflow = 0;
+  const stream = new BoundedByteStream(5, chunk => chunks.push(chunk.toString()), () => overflow++);
+  stream.append(Buffer.from('12'));
+  stream.append(Buffer.from('3456789'));
+  stream.append(Buffer.from('ignored'));
+  assert.deepEqual(chunks, ['12', '345']);
+  assert.equal(stream.totalBytes, 5);
+  assert.equal(stream.limitExceeded, true);
+  assert.equal(overflow, 1);
+});
+
 test('JSON capture handles chunk boundaries, CRLF, Unicode separators, and final records', () => {
   const lines = [];
   const reader = new JsonLineCapture(line => lines.push(line), () => assert.fail('overflow'), 100);

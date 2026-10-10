@@ -24,7 +24,7 @@ function utf8Prefix(text: string, maxBytes: number): string {
 	return bytes.subarray(0, end).toString("utf8");
 }
 
-/** Stop parsing a child stream after its cumulative byte budget, while draining later chunks. */
+/** Keep a bounded stream prefix, then stop parsing while draining later chunks. */
 export class BoundedByteStream {
 	private bytes = 0;
 	private exceeded = false;
@@ -37,13 +37,16 @@ export class BoundedByteStream {
 
 	append(chunk: Buffer): void {
 		if (this.exceeded) return;
-		if (chunk.length > this.limit - this.bytes) {
+		const remaining = this.limit - this.bytes;
+		if (chunk.length > remaining) {
+			if (remaining > 0) this.onChunk(chunk.subarray(0, remaining));
+			this.bytes += remaining;
 			this.exceeded = true;
 			this.onLimit();
 			return;
 		}
-		this.bytes += chunk.length;
 		this.onChunk(chunk);
+		this.bytes += chunk.length;
 	}
 
 	get totalBytes(): number {
