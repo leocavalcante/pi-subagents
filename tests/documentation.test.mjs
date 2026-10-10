@@ -83,6 +83,13 @@ test('README relative file links are included in the npm package', () => {
   }
 });
 
+test('README documents mandatory approval for untrusted project agents', () => {
+  const security = section('Security');
+  assert.match(security, /require an interactive approval or an already-trusted Pi project/);
+  assert.match(security, /headless sessions fail closed for untrusted project agents/);
+  assert.match(security, /Approval cannot be disabled through a tool argument/);
+});
+
 test('README documents terminal-control escaping for foreground, background, and job output', () => {
   const security = section('Security');
   assert.match(security, /foreground subagent result renderer escapes terminal control characters in child output and tool-call previews/);

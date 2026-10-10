@@ -33,7 +33,7 @@ mkdirSync(join(sandbox, 'project/.pi/agents'), { recursive: true });
 writeFileSync(join(sandbox, 'project/.pi/agents/project.md'), '---\nname: project\ndescription: Project worker\n---\nProject instructions.\n');
 
 let extension, tools, messages;
-const ctx = () => ({ cwd: sandbox, mode: 'rpc', hasUI: false, model: { provider: 'fake', id: 'parent' }, thinkingLevel: 'high' });
+const ctx = () => ({ cwd: sandbox, mode: 'rpc', hasUI: false, isProjectTrusted: () => false, model: { provider: 'fake', id: 'parent' }, thinkingLevel: 'high' });
 const invoke = (name, params, context = ctx(), signal) => tools.get(name).definition.execute('test-call', params, signal, undefined, context);
 const launch = async params => (await invoke('subagent', { background: true, agent: 'worker', task: 'delay=150', ...params })).details.background.id;
 const status = async id => (await invoke('subagent_jobs', { action: 'status', jobId: id })).details;
@@ -1858,6 +1858,20 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   }
 });
 
+test('untrusted project agents fail closed without UI approval and run only for trusted projects', async () => {
+  const untrusted = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: false, isProjectTrusted: () => false };
+  const denied = await invoke('subagent', { agent: 'project', task: 'must not run', agentScope: 'project' }, untrusted);
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /without UI approval/);
+  assert.equal(traces().length, 0);
+
+  const trusted = { ...untrusted, isProjectTrusted: () => true };
+  const allowed = await invoke('subagent', { agent: 'project', task: 'trusted headless', agentScope: 'project' }, trusted);
+  assert.notEqual(allowed.isError, true);
+  assert.equal(allowed.details.results[0].exitCode, 0);
+  assert.equal(traces().filter(entry => entry.event === 'start').length, 1);
+});
+
 test('project agent path escape diagnostics satisfy the listing output schema', async () => {
   const target = join(sandbox, 'external-project-agent.md');
   const link = join(sandbox, 'project/.pi/agents/escaped.md');
@@ -1969,21 +1983,24 @@ test('invalid background overrides are rejected before project approval or job c
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
-test('invalid project-agent confirmation overrides cannot disable trust prompts', async () => {
+test('project-agent approval cannot be bypassed by a model-controlled parameter', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
     ui: { confirm: async () => { approvals++; return true; } } };
   const schema = tools.get('subagent').definition.parameters;
-  for (const confirmProjectAgents of [0, '', null, 'false']) {
-    const params = { agent: 'project', task: 'must not run', agentScope: 'project', confirmProjectAgents };
-    assert.equal(Value.Check(schema, params), false);
-    const result = await invoke('subagent', params, context);
-    assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /confirmProjectAgents/);
-  }
-  assert.equal(Value.Check(schema, { agent: 'project', task: 'opt out', agentScope: 'project', confirmProjectAgents: false }), true);
+  const bypass = { agent: 'project', task: 'must not run', agentScope: 'project', confirmProjectAgents: false };
+  assert.equal(Value.Check(schema, bypass), false, 'the tool schema must not expose a per-call approval bypass');
+  const rejected = await invoke('subagent', bypass, context);
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, /confirmProjectAgents is no longer supported/);
   assert.equal(approvals, 0);
   assert.equal(traces().length, 0);
+
+  const approved = await invoke('subagent', { agent: 'project', task: 'approved', agentScope: 'project' }, context);
+  assert.notEqual(approved.isError, true);
+  assert.equal(approved.details.results[0].exitCode, 0);
+  assert.equal(approvals, 1, 'an untrusted project agent requires an actual UI approval');
+  assert.equal(traces().filter(entry => entry.event === 'start').length, 1);
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
