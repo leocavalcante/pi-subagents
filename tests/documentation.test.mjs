@@ -19,8 +19,10 @@ test('README documents the minimum Node.js version required by the package', () 
   assert.ok(readme.includes(`Node.js ${engine.slice(2)} or newer`), `README must document Node.js ${engine}`);
 });
 
-test('npm package includes the Windows process supervisor source', () => {
-  assert.ok(packageJson.files.includes('windows-supervisor.cs'));
+test('npm package includes required runtime support files', () => {
+  for (const file of ['windows-supervisor.cs', 'temporary-files.ts']) {
+    assert.ok(packageJson.files.includes(file), `Package files must include ${file}`);
+  }
 });
 
 test('CONTRIBUTING explains how Windows process containment is validated', () => {
