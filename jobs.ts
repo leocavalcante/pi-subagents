@@ -4,6 +4,14 @@ const MAX_DIAGNOSTIC_BYTES = 2048;
 const DEFAULT_PROCESS_POOL_WAITERS = 32;
 export const MAX_JOB_WAIT_MS = 60_000;
 export const DEFAULT_JOB_WAIT_MS = 30_000;
+export const MAX_PENDING_JOB_WAITS = 32;
+
+export class JobWaiterCapacityError extends Error {
+	constructor() {
+		super(`Too many concurrent job waits; at most ${MAX_PENDING_JOB_WAITS} may be pending. Retry when a wait completes. The job is unaffected.`);
+		this.name = "JobWaiterCapacityError";
+	}
+}
 
 function boundedDiagnostic(text: string, limit = MAX_DIAGNOSTIC_BYTES): string {
 	// A short UTF-16 prefix is sufficient for the byte cap. Avoid encoding an
@@ -61,6 +69,7 @@ interface Job<T, Observation> {
 export class JobManager<T, Observation = never> {
 	private jobs = new Map<string, Job<T, Observation>>();
 	private closed = false;
+	private pendingWaiters = 0;
 
 	constructor(
 		private onComplete: (job: JobSnapshot<T>) => void,
@@ -184,11 +193,17 @@ export class JobManager<T, Observation = never> {
 			await job.done;
 			return { job: { ...job.snapshot }, timedOut: false };
 		}
+		if (this.pendingWaiters >= MAX_PENDING_JOB_WAITS) throw new JobWaiterCapacityError();
+		this.pendingWaiters++;
 		return new Promise<JobWaitResult<T>>((resolve, reject) => {
+			let cleaned = false;
 			const cleanup = () => {
+				if (cleaned) return;
+				cleaned = true;
 				clearTimeout(timer);
 				job.waiters.delete(complete);
 				signal?.removeEventListener("abort", abort);
+				this.pendingWaiters--;
 			};
 			const complete = () => {
 				cleanup();

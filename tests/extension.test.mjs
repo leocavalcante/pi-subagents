@@ -16,6 +16,7 @@ import { initTheme } from '@earendil-works/pi-coding-agent';
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const { DEFAULT_PROGRESS_UPDATE_INTERVAL_MS } = await jiti.import('../progress.ts');
 const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES } = await jiti.import('../agents.ts');
+const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
 const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-subagents-test-'));
@@ -303,6 +304,35 @@ test('wait timeout and turn abortion leave the background job running', async ()
   const canceled = invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
   await invoke('subagent_jobs', { action: 'cancel', jobId: id });
   assert.equal((await canceled).structuredContent.job.state, 'canceled');
+});
+
+test('job-wait saturation returns a valid retry error without mutating the job', async () => {
+  const id = await launch({ task: 'delay=10000 waiter capacity', notify: false });
+  const outputSchema = tools.get('subagent_jobs').definition.outputSchema;
+  const controllers = Array.from({ length: MAX_PENDING_JOB_WAITS }, () => new AbortController());
+  const pending = controllers.map(controller => invoke('subagent_jobs',
+    { action: 'wait', jobId: id, timeoutMs: 5000 }, ctx(), controller.signal));
+
+  const saturated = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
+  assert.equal(saturated.isError, true);
+  assert.match(saturated.structuredContent.error, /Too many concurrent job waits/);
+  assert.equal(Value.Check(outputSchema, saturated.structuredContent), true);
+  assert.equal((await status(id)).state, 'running', 'saturated waits must not cancel the background job');
+
+  controllers[0].abort();
+  await assert.rejects(pending[0], { name: 'AbortError' });
+  const replacementController = new AbortController();
+  const replacement = invoke('subagent_jobs',
+    { action: 'wait', jobId: id, timeoutMs: 5000 }, ctx(), replacementController.signal);
+  const saturatedAgain = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 1 });
+  assert.equal(saturatedAgain.isError, true, 'aborting one waiter lets another take its place');
+
+  controllers.slice(1).forEach(controller => controller.abort());
+  replacementController.abort();
+  await Promise.allSettled([...pending.slice(1), replacement]);
+  assert.equal((await status(id)).state, 'running');
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  await finish(id);
 });
 
 test('invalid job actions are rejected without mutating jobs and retain schema-valid errors', async () => {

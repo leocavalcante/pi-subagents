@@ -244,6 +244,8 @@ Use `action: "wait"` when the next operation needs a particular job's result. It
 
 The response includes the same snapshot as status, plus `timedOut`. A completed, failed, or canceled job returns `timedOut: false`. If the wait expires first, it returns the current state with `timedOut: true`; the background job stays active. Unknown or forgotten IDs return an error immediately.
 
+At most 32 pending waits are allowed across all jobs in one session. When that limit is reached, additional wait calls return a retryable error without affecting the job. Reads of already-finished jobs do not use a pending-wait slot.
+
 Canceling the waiting tool call only stops the wait. To cancel the job, use `action: "cancel"`. Waiters also finish when session shutdown completes job cleanup. Waiting does not consume a child-process slot, add usage charges, or send an extra completion message. Automatic follow-ups still arrive as usual unless the job is silent.
 
 In a codemode script:

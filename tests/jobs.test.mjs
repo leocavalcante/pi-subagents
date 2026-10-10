@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getEventListeners } from 'node:events';
 import { jiti } from './pi-runtime.mjs';
-const { JobManager, ProcessPool } = await jiti.import('../jobs.ts');
+const { JobManager, ProcessPool, MAX_PENDING_JOB_WAITS, JobWaiterCapacityError } = await jiti.import('../jobs.ts');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
@@ -301,6 +301,44 @@ test('wait resolves every observer after completion and retention, including fai
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
   assert.equal((await jobs.wait(job.id, 1000)).timedOut, false);
   assert.equal(await jobs.wait('unknown', 1000), undefined);
+  await jobs.shutdown();
+});
+
+test('pending job waits are globally bounded and capacity recovers after abort and completion', async () => {
+  const gate = deferred();
+  const jobs = new JobManager(() => {}, () => false);
+  const active = jobs.start('waiter capacity', async () => gate.promise);
+  await tick();
+  const controllers = Array.from({ length: MAX_PENDING_JOB_WAITS }, () => new AbortController());
+  const pending = controllers.map(controller => jobs.wait(active.id, 1000, controller.signal));
+  assert.equal(jobs.pendingWaiters, MAX_PENDING_JOB_WAITS);
+  await assert.rejects(jobs.wait(active.id, 1000), JobWaiterCapacityError);
+
+  const completed = jobs.start('finished while saturated', async () => 'done');
+  await tick();
+  assert.equal((await jobs.wait(completed.id, 1000)).job.state, 'completed',
+    'finished snapshots do not consume pending-wait capacity');
+
+  controllers[0].abort();
+  await assert.rejects(pending[0], { name: 'AbortError' });
+  const replacementController = new AbortController();
+  const replacement = jobs.wait(active.id, 1000, replacementController.signal);
+  assert.equal(jobs.pendingWaiters, MAX_PENDING_JOB_WAITS,
+    'caller abort releases capacity for the next wait');
+
+  controllers.slice(1).forEach(controller => controller.abort());
+  replacementController.abort();
+  const aborted = await Promise.allSettled([...pending.slice(1), replacement]);
+  assert.ok(aborted.every(result => result.status === 'rejected'));
+  assert.equal(jobs.pendingWaiters, 0);
+
+  const timedOut = await jobs.wait(active.id, 1);
+  assert.equal(timedOut.timedOut, true);
+  assert.equal(jobs.pendingWaiters, 0, 'timeout releases waiter capacity');
+  const last = jobs.wait(active.id, 1000);
+  gate.resolve('done');
+  assert.equal((await last).job.state, 'completed');
+  assert.equal(jobs.pendingWaiters, 0, 'completion releases waiter capacity');
   await jobs.shutdown();
 });
 
