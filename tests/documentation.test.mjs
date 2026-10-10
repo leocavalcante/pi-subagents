@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+const contributing = readFileSync(new URL('../CONTRIBUTING.md', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function section(title) {
@@ -20,6 +21,11 @@ test('README documents the minimum Node.js version required by the package', () 
 
 test('npm package includes the Windows process supervisor source', () => {
   assert.ok(packageJson.files.includes('windows-supervisor.cs'));
+});
+
+test('CONTRIBUTING explains how Windows process containment is validated', () => {
+  assert.match(contributing, /Windows-only integration tests also verify Job Object containment on cancellation, deadlines, and normal leader exit/);
+  assert.match(contributing, /source compilation alone does not validate this behavior—rely on Windows CI/);
 });
 
 test('README documents bounded agent descriptions', () => {
