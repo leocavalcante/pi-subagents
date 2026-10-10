@@ -13,6 +13,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -774,9 +775,12 @@ async function runSingleAgent(
 				terminateGroup();
 			};
 
+			let previousToolResultRecord: { type: "message_end" | "tool_result_end"; message: Message } | undefined;
 			const processLine = (line: string) => {
 				const record = ++recordPosition;
 				if (!line.trim()) return;
+				const adjacentToolResultRecord = previousToolResultRecord;
+				previousToolResultRecord = undefined;
 				let event: any;
 				try {
 					event = parseChildEvent(line);
@@ -830,11 +834,16 @@ async function runSingleAgent(
 							return;
 						}
 					}
-					const retained = history.push(msg, Buffer.byteLength(line, "utf8"));
-					if (msg.role === "assistant") currentResult.capture!.finalAssistantMessageDropped = !retained;
-					currentResult.messages = history.messages;
-					currentResult.capture!.messagesDropped = history.dropped;
-					currentResult.capture!.retainedMessageBytes = history.retainedBytes;
+					const duplicateLegacyCopy = msg.role === "toolResult" && adjacentToolResultRecord?.type === "tool_result_end" &&
+						isDeepStrictEqual(adjacentToolResultRecord.message, msg);
+					if (!duplicateLegacyCopy) {
+						const retained = history.push(msg, Buffer.byteLength(line, "utf8"));
+						if (msg.role === "assistant") currentResult.capture!.finalAssistantMessageDropped = !retained;
+						currentResult.messages = history.messages;
+						currentResult.capture!.messagesDropped = history.dropped;
+						currentResult.capture!.retainedMessageBytes = history.retainedBytes;
+					}
+					if (msg.role === "toolResult") previousToolResultRecord = { type: "message_end", message: msg };
 
 					if (msg.role === "assistant") {
 						currentResult.usage.turns++;
@@ -848,11 +857,17 @@ async function runSingleAgent(
 				}
 
 				if (event.type === "tool_result_end" && event.message) {
-					history.push(event.message as Message, Buffer.byteLength(line, "utf8"));
-					currentResult.messages = history.messages;
-					currentResult.capture!.messagesDropped = history.dropped;
-					currentResult.capture!.retainedMessageBytes = history.retainedBytes;
-					emitUpdate();
+					const msg = event.message as Message;
+					const duplicateCanonicalCopy = adjacentToolResultRecord?.type === "message_end" &&
+						isDeepStrictEqual(adjacentToolResultRecord.message, msg);
+					if (!duplicateCanonicalCopy) {
+						history.push(msg, Buffer.byteLength(line, "utf8"));
+						currentResult.messages = history.messages;
+						currentResult.capture!.messagesDropped = history.dropped;
+						currentResult.capture!.retainedMessageBytes = history.retainedBytes;
+						emitUpdate();
+					}
+					previousToolResultRecord = { type: "tool_result_end", message: msg };
 				}
 			};
 

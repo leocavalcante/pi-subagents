@@ -279,7 +279,7 @@ Read additional pages only when needed. Non-silent jobs send completion messages
 
 ## Usage accounting
 
-Foreground results report cumulative child token and cost totals through Pi's standard tool-result `usage` field. This includes completed assistant attempts and nested model usage in canonical `message_end` tool results, even when a task fails or earlier message history is evicted. Legacy `tool_result_end` copies do not add usage again. Reasoning tokens and one-hour cache writes are subsets, not additional tokens.
+Foreground results report cumulative child token and cost totals through Pi's standard tool-result `usage` field. This includes completed assistant attempts and nested model usage in canonical `message_end` tool results, even when a task fails or earlier message history is evicted. Legacy `tool_result_end` copies do not add usage again and are deduplicated from retained history only when an adjacent canonical copy is identical. Reasoning tokens and one-hour cache writes are subsets, not additional tokens.
 
 Background totals are retained with job results and are also available as observational `usage` in `subagent_jobs` metadata when available. Compact usage totals remain inspectable after captured output is evicted, as long as the job record is retained; they are not added to Pi's session statistics. Launch acknowledgements, progress updates, and job inspection never report billable usage again. Parent-aborted foreground calls do not return a billable tool result.
 
