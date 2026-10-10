@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 import { promises as fsPromises } from 'node:fs';
 import { after, afterEach, beforeEach, test } from 'node:test';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -857,6 +857,51 @@ test('Windows Job Object supervision cleans descendants after cancellation and l
     for (const pid of descendantPids) {
       try { process.kill(pid, 'SIGKILL'); } catch { /* already exited */ }
     }
+  }
+});
+
+test('Windows supervisor resolves bare Pi commands through PATH, not the working directory', { skip: process.platform !== 'win32' }, async () => {
+  const pathDirectory = join(sandbox, 'pi-on-path');
+  const workingDirectory = join(sandbox, 'cwd-with-decoy-pi');
+  mkdirSync(pathDirectory, { recursive: true });
+  mkdirSync(workingDirectory, { recursive: true });
+
+  const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const probeSource = join(root, 'tests', 'fixtures', 'pi-probe.cs');
+  const probeExecutable = join(pathDirectory, 'pi.exe');
+  const compile = childProcess.spawnSync(powershell, [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+    "$ErrorActionPreference = 'Stop'; Add-Type -Path $env:PI_SUBAGENTS_TEST_SOURCE -OutputAssembly $env:PI_SUBAGENTS_TEST_OUTPUT -OutputType ConsoleApplication; exit 0",
+  ], {
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { ...process.env, PI_SUBAGENTS_TEST_SOURCE: probeSource, PI_SUBAGENTS_TEST_OUTPUT: probeExecutable },
+  });
+  assert.equal(compile.status, 0, compile.error?.message ?? compile.stderr);
+  copyFileSync(probeExecutable, join(workingDirectory, 'pi.exe'));
+
+  const previousArgv = process.argv[1];
+  const previousPath = process.env.PATH;
+  const previousCwd = process.cwd();
+  try {
+    // Exercise getPiInvocation's bare-name fallback, as used by Bun virtual scripts.
+    process.argv[1] = join(sandbox, 'missing-virtual-pi-extension.js');
+    process.env.PATH = `${pathDirectory};${previousPath ?? ''}`;
+    process.chdir(workingDirectory);
+
+    const result = await invoke('subagent', {
+      agent: 'worker', task: 'resolve the Pi executable', cwd: workingDirectory,
+    });
+    assert.equal(result.details.results[0].exitCode, 0, result.content[0]?.text);
+    assert.equal(existsSync(join(pathDirectory, 'pi-probe-launched')), true,
+      'the executable found on PATH should run');
+    assert.equal(existsSync(join(workingDirectory, 'pi-probe-launched')), false,
+      'a same-named executable in the child working directory must not shadow PATH');
+  } finally {
+    process.argv[1] = previousArgv;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    process.chdir(previousCwd);
   }
 });
 
