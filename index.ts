@@ -65,6 +65,7 @@ import { MAX_PAGE_BYTES, createOutputPager, WeakOutputPagerCache } from "./pagin
 import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
 import { isWellFormedUnicode } from "./unicode.ts";
+import { ProgressUpdateLimiter } from "./progress.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
@@ -652,18 +653,24 @@ async function runSingleAgent(
 		return currentResult;
 	}
 
-	const emitUpdate = () => {
-		if (onUpdate) {
-			onUpdate({
-				content: [
-					{
-						type: "text",
-						text: getFinalOutput(currentResult.messages) || "(running...)",
-					},
-				],
-				details: makeDetails([currentResult]),
-			});
+	const progressLimiter = new ProgressUpdateLimiter();
+	let progressPending = false;
+	const emitUpdate = (force = false) => {
+		if (!onUpdate) return;
+		if (!progressLimiter.shouldUpdate(performance.now(), force)) {
+			progressPending = true;
+			return;
 		}
+		progressPending = false;
+		onUpdate({
+			content: [
+				{
+					type: "text",
+					text: getFinalOutput(currentResult.messages) || "(running...)",
+				},
+			],
+			details: makeDetails([currentResult]),
+		});
 	};
 
 	let release: (() => void) | undefined;
@@ -878,6 +885,7 @@ async function runSingleAgent(
 					settled = true;
 					signal?.removeEventListener("abort", killProc);
 					reader.finish();
+					if (progressPending) emitUpdate(true);
 					resolve(code ?? 1);
 				};
 				if (escalation) void escalation.then(complete);

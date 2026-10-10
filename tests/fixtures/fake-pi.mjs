@@ -50,6 +50,15 @@ if (task === 'tool-use-only') {
   trace({ event: 'end', task });
   process.exit(0);
 }
+if (task.startsWith('progress-burst:')) {
+  const count = Number(task.slice('progress-burst:'.length));
+  const records = Array.from({ length: count }, (_, index) => JSON.stringify({
+    type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'burst ' + index }], stopReason: 'stop' },
+  })).join('\n') + '\n';
+  await write(process.stdout, records);
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'tool-use-then-final') await write(process.stdout, JSON.stringify(toolUseEvent) + '\n');
 if (['silent-exit', 'junk-exit', 'session-only-exit'].includes(task)) {
   if (task === 'junk-exit') await write(process.stdout, 'not JSON\n');
