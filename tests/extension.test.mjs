@@ -280,6 +280,26 @@ test('invalid job actions are rejected without mutating jobs and retain schema-v
   await finish(id);
 });
 
+test('job ID inputs are bounded to UUID length before registry lookups', async () => {
+  const definition = tools.get('subagent_jobs').definition;
+  const id = await launch({ task: 'delay=10000 bounded job ID', notify: false });
+  assert.equal(id.length, 36);
+  assert.equal(Value.Check(definition.parameters, { action: 'status', jobId: id }), true);
+  assert.equal(Value.Check(definition.parameters, { action: 'status', jobId: 'x'.repeat(37) }), false);
+
+  for (const jobId of ['x'.repeat(37), 42]) {
+    const result = await invoke('subagent_jobs', { action: 'status', jobId });
+    assert.equal(result.isError, true);
+    assert.match(result.structuredContent.error, /jobId must be a string no longer than 36 characters/);
+    assert.equal(Value.Check(definition.outputSchema, result.structuredContent), true);
+  }
+  const unknown = await invoke('subagent_jobs', { action: 'status', jobId: 'unknown' });
+  assert.match(unknown.content[0].text, /Unknown or missing job ID/);
+  assert.equal((await status(id)).state, 'running');
+  await invoke('subagent_jobs', { action: 'cancel', jobId: id });
+  await finish(id);
+});
+
 test('invalid wait queries do not mutate jobs and unavailable IDs fail promptly', async () => {
   const id = await launch({ task: 'delay=10000 wait query safety' });
   for (const timeoutMs of [0, -1, 1.5, Infinity, 60001]) {
