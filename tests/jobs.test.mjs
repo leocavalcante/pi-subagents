@@ -375,3 +375,21 @@ test('process pool releases a slot if cancellation races with grant', async () =
   await assert.rejects(queued, { name: 'AbortError' });
   (await pool.acquire())();
 });
+
+test('process pool bounds queued acquisitions without disturbing fair waiters', async () => {
+  const pool = new ProcessPool(1, 2);
+  const release = await pool.acquire();
+  const canceled = new AbortController();
+  const first = pool.acquire(canceled.signal);
+  const second = pool.acquire();
+  await assert.rejects(pool.acquire(), /queue is full \(maximum 2 waiting tasks\)/);
+  canceled.abort();
+  await assert.rejects(first, { name: 'AbortError' });
+  release();
+  const releaseSecond = await second;
+  releaseSecond();
+  (await pool.acquire())();
+  assert.throws(() => new ProcessPool(1, -1), /queue limit/);
+  assert.throws(() => new ProcessPool(1, 1.5), /queue limit/);
+  assert.throws(() => new ProcessPool(1, Infinity), /queue limit/);
+});

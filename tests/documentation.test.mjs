@@ -33,6 +33,13 @@ test('README documents aggregate capture limits for parallel and chained results
   assert.match(capture, /final assistant message cannot fit its task's allocated history budget, that task fails/);
 });
 
+test('README documents the bounded shared process queue', () => {
+  const background = section('Background execution');
+  assert.match(background, /limit of four direct child processes per extension runtime/);
+  assert.match(background, /At most 32 additional task requests can wait/);
+  assert.match(background, /excess requests fail with a retryable queue-full result/);
+});
+
 test('README relative file links are included in the npm package', () => {
   const relativeLinks = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
     .map(([, target]) => target.split(/[?#]/, 1)[0])

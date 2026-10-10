@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const MAX_DIAGNOSTIC_BYTES = 2048;
+const DEFAULT_PROCESS_POOL_WAITERS = 32;
 export const MAX_JOB_WAIT_MS = 60_000;
 export const DEFAULT_JOB_WAIT_MS = 30_000;
 
@@ -275,12 +276,20 @@ export class JobManager<T, Observation = never> {
 }
 
 /** One process budget shared by all foreground calls and background jobs. */
+export class ProcessPoolCapacityError extends Error {
+	constructor(maxWaiters: number) {
+		super(`Subagent process queue is full (maximum ${maxWaiters} waiting tasks); retry after current work completes.`);
+		this.name = "ProcessPoolCapacityError";
+	}
+}
+
 export class ProcessPool {
 	private active = 0;
 	private waiters: Array<() => void> = [];
 
-	constructor(private limit: number) {
+	constructor(private limit: number, private maxWaiters = DEFAULT_PROCESS_POOL_WAITERS) {
 		if (!Number.isInteger(limit) || limit < 1) throw new Error("Process limit must be a positive integer.");
+		if (!Number.isInteger(maxWaiters) || maxWaiters < 0) throw new Error("Process queue limit must be a non-negative integer.");
 	}
 
 	async acquire(signal?: AbortSignal): Promise<() => void> {
@@ -288,6 +297,7 @@ export class ProcessPool {
 		if (this.active < this.limit) {
 			this.active++;
 		} else {
+			if (this.waiters.length >= this.maxWaiters) throw new ProcessPoolCapacityError(this.maxWaiters);
 			await new Promise<void>((resolve, reject) => {
 				const grant = () => {
 					signal?.removeEventListener("abort", abort);

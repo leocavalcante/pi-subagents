@@ -452,6 +452,23 @@ test('all foreground and background invocations share a four-process budget', as
   assert.equal(traces().filter(t => t.event === 'start').length, 13);
 });
 
+test('process queue overflow fails safely without spawning and recovers after work drains', async () => {
+  const requests = Array.from({ length: 37 }, (_, i) => invoke('subagent', {
+    agent: 'worker', task: `delay=100 queue-limit-${i}`,
+  }));
+  const results = await Promise.all(requests);
+  const full = results.filter(result => result.details.results[0]?.errorMessage?.includes('process queue is full'));
+  assert.equal(full.length, 1);
+  assert.equal(full[0].isError, true);
+  assert.match(full[0].content[0].text, /maximum 32 waiting tasks\); retry after current work completes/);
+  assert.equal(traces().filter(entry => entry.event === 'start').length, 36);
+  assert.equal(traces().filter(entry => entry.event === 'end').length, 36);
+
+  const recovered = await invoke('subagent', { agent: 'worker', task: 'queue recovered' });
+  assert.notEqual(recovered.isError, true);
+  assert.equal(traces().filter(entry => entry.event === 'start').length, 37);
+});
+
 test('parallel concurrency can be lowered without changing result order', async () => {
   for (const concurrency of [1, 2]) {
     writeFileSync(traceFile, '');
