@@ -50,6 +50,8 @@ type AgentFrontmatter = {
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 export const MAX_AGENT_NAME_BYTES = 256;
+export const MAX_AGENT_TOOL_LIST_BYTES = 4 * 1024;
+export const MAX_AGENT_TOOL_COUNT = 256;
 export const MAX_MODEL_SELECTOR_BYTES = 512;
 export const AGENT_NAME_PATTERN = "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u206f\\ufeff]+(?![\\s\\S])";
 const INVALID_AGENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/;
@@ -102,15 +104,40 @@ function addDiagnostic(
  *     tools: [read, bash]      # array
  *
  * so accept either. An explicit empty list disables tools; an omitted field
- * inherits defaults. Reject malformed allowlists rather than broadening access.
+ * inherits defaults. Bound both forms before passing the normalized list through
+ * one child-process argument. Reject malformed allowlists rather than broadening access.
  */
 function parseToolList(value: unknown): string[] | undefined {
 	if (value === undefined) return undefined;
-	const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : null;
-	if (!raw || !raw.every((t): t is string => typeof t === "string")) {
-		throw new Error("tools must be a comma-separated string or an array of strings.");
+	if (typeof value === "string" && (value.length > MAX_AGENT_TOOL_LIST_BYTES ||
+		Buffer.byteLength(value, "utf8") > MAX_AGENT_TOOL_LIST_BYTES)) {
+		throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
 	}
-	return [...new Set(raw.map((t: string) => t.trim()).filter(Boolean))];
+	if (Array.isArray(value) && value.length > MAX_AGENT_TOOL_COUNT) {
+		throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
+	}
+	const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : null;
+	if (!raw || raw.length > MAX_AGENT_TOOL_COUNT || !raw.every((tool): tool is string => typeof tool === "string")) {
+		throw new Error(`tools must be a comma-separated string or an array of at most ${MAX_AGENT_TOOL_COUNT} strings.`);
+	}
+	const tools: string[] = [];
+	const seen = new Set<string>();
+	let totalBytes = 0;
+	for (const item of raw) {
+		if (item.length > MAX_AGENT_TOOL_LIST_BYTES) {
+			throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
+		}
+		const tool = item.trim();
+		if (!tool || seen.has(tool)) continue;
+		const bytes = Buffer.byteLength(tool, "utf8") + (tools.length > 0 ? 1 : 0);
+		if (bytes > MAX_AGENT_TOOL_LIST_BYTES - totalBytes || tools.length >= MAX_AGENT_TOOL_COUNT) {
+			throw new Error(`tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`);
+		}
+		tools.push(tool);
+		seen.add(tool);
+		totalBytes += bytes;
+	}
+	return tools;
 }
 
 function isPathInside(parent: string, child: string): boolean {
