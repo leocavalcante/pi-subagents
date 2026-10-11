@@ -1880,9 +1880,11 @@ test('unsetEnv filters inherited variables additively for agents, calls, entries
   const variableNames = [
     'PI_SUBAGENTS_TEST_AGENT_ENV', 'PI_SUBAGENTS_TEST_CALL_ENV',
     'PI_SUBAGENTS_TEST_ENTRY_ENV', 'PI_SUBAGENTS_TEST_KEEP_ENV', 'pi_subagents_test_case_env',
+    'PI_SUBAGENTS_TEST_KEEP_UNICODE',
   ];
   const previous = new Map(variableNames.map(name => [name, process.env[name]]));
   for (const name of variableNames) process.env[name] = `test-only-${name}`;
+  process.env.PI_SUBAGENTS_TEST_KEEP_UNICODE = 'test-only-東京=🛰️';
   t.after(() => {
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];
@@ -1903,6 +1905,8 @@ test('unsetEnv filters inherited variables additively for agents, calls, entries
     PI_SUBAGENTS_TEST_KEEP_ENV: true,
   });
   assert.equal(child('unset-env single').nestingDepth, '1', 'the internal recursion guard must always reach the child');
+  assert.equal(child('unset-env single').retainedEnvironmentPreserved, true,
+    'filtering must preserve unrelated Unicode environment values and equals signs');
   assert.deepEqual(child('unset-env single').caseEnvPresence,
     process.platform === 'win32'
       ? { configuredName: false, differentCase: false }
