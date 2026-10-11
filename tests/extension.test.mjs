@@ -84,6 +84,12 @@ after(() => {
   rmSync(sandbox, { recursive: true, force: true });
 });
 
+test('subagent tool description warns that first-use Windows compilation is not timed', () => {
+  const description = tools.get('subagent').definition.description;
+  assert.match(description, /Windows, first-use supervisor compilation also happens before the deadline and has no independent timeout/);
+  assert.match(description, /canceling a caller detaches it but does not stop the shared compile/);
+});
+
 test('background returns before completion, retains progress, and sends a follow-up', async () => {
   const started = Date.now();
   const id = await launch({ task: 'delay=400 main' });
