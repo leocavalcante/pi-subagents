@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 import { promises as fsPromises } from 'node:fs';
 import { after, afterEach, beforeEach, test } from 'node:test';
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,9 +28,17 @@ const {
 } = await jiti.import('../agents.ts');
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
 const { MAX_PAGE_BYTES } = await jiti.import('../paging.ts');
+const { buildWindowsSupervisorInvocation } = await jiti.import('../windows-supervisor-invocation.ts');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Use the canonical path because macOS exposes many temp directories through symlink aliases.
 const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pi-subagents-test-')));
+const assertSameDirectory = (actualPath, expectedPath, message = 'paths should identify the same directory') => {
+  const actual = statSync(actualPath);
+  const expected = statSync(expectedPath);
+  assert.ok(actual.isDirectory() && expected.isDirectory(), message);
+  assert.equal(actual.dev, expected.dev, `${message} (device)`);
+  assert.equal(actual.ino, expected.ino, message);
+};
 const traceFile = join(sandbox, 'trace.jsonl');
 const oldArgv = process.argv[1];
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -733,7 +741,7 @@ test('background chains substitute previous output and capture working directory
   const children = traces().filter(t => t.event === 'start');
   assert.equal(children.length, 2);
   assert.equal(children[1].task, 'second result: first');
-  assert.equal(children[1].cwd, join(sandbox, 'project'));
+  assertSameDirectory(children[1].cwd, join(sandbox, 'project'));
 });
 
 test('parallel progress does not count running children as completed', async () => {
@@ -1011,6 +1019,28 @@ test('Windows cancellation and deadlines skip the POSIX SIGKILL grace timer', { 
     'A deadline should schedule only the bounded inherited-pipe drain timer');
 });
 
+test('Windows supervisor invocations keep a near-limit cwd out of argv', () => {
+  const targetLength = MAX_WORKING_DIRECTORY_LENGTH - 32;
+  const prefix = join(sandbox, 'long-working-directory');
+  const segments = [];
+  let addedLength = 0;
+  while (addedLength < targetLength - prefix.length) {
+    const length = Math.min(200, targetLength - prefix.length - addedLength - 1);
+    segments.push('x'.repeat(length));
+    addedLength += length + 1;
+  }
+  const cwd = join(prefix, ...segments);
+  assert.equal(cwd.length, targetLength);
+  assert.ok(segments.every(segment => segment.length <= 200));
+
+  const invocation = buildWindowsSupervisorInvocation('supervisor.exe', {
+    command: 'pi', args: ['--mode', 'json', '--task', 'long cwd'],
+  }, cwd, []);
+  assert.equal(invocation.cwd, cwd);
+  assert.equal(invocation.args.includes(cwd), false,
+    'the working directory must be passed separately from the Windows command line');
+});
+
 test('Windows Job Object supervision cleans descendants after cancellation and leader exit', { skip: process.platform !== 'win32' }, async () => {
   const descendantPids = new Set();
   const startedDescendant = task => traces().find(entry => entry.event === 'grandchild' && entry.task === task);
@@ -1022,7 +1052,7 @@ test('Windows Job Object supervision cleans descendants after cancellation and l
     assert.equal(argumentResult.details.results[0].exitCode, 0);
     const argumentTrace = traces().find(entry => entry.event === 'start' && entry.task === 'Windows supervisor quotes arguments');
     assert.equal(argumentTrace.model, model, 'quoted model arguments must arrive unchanged');
-    assert.equal(argumentTrace.cwd, workingDirectory, 'the working directory must survive paths with spaces');
+    assertSameDirectory(argumentTrace.cwd, workingDirectory, 'the working directory must survive paths with spaces');
 
     const canceledTask = 'delay=10000 orphan grandchild-ignored grandchild-marker canceled Windows containment';
     const canceledId = await launch({ task: canceledTask });
@@ -2202,8 +2232,8 @@ test('top-level cwd defaults parallel and chain children while entry directories
   });
   assert.notEqual(parallel.isError, true);
   const parallelChildren = new Map(traces().filter(t => t.event === 'start').map(t => [t.task, t.cwd]));
-  assert.equal(parallelChildren.get('parallel-default-cwd'), join(sandbox, 'project'));
-  assert.equal(parallelChildren.get('parallel-entry-cwd'), alternate);
+  assertSameDirectory(parallelChildren.get('parallel-default-cwd'), join(sandbox, 'project'));
+  assertSameDirectory(parallelChildren.get('parallel-entry-cwd'), alternate);
 
   const chain = await invoke('subagent', {
     cwd: 'project',
@@ -2214,8 +2244,8 @@ test('top-level cwd defaults parallel and chain children while entry directories
   });
   assert.equal(chain.isError, undefined);
   const chainChildren = new Map(traces().filter(t => t.event === 'start').map(t => [t.task, t.cwd]));
-  assert.equal(chainChildren.get('chain-default-cwd'), join(sandbox, 'project'));
-  assert.equal(chainChildren.get('chain-entry-cwd'), alternate);
+  assertSameDirectory(chainChildren.get('chain-default-cwd'), join(sandbox, 'project'));
+  assertSameDirectory(chainChildren.get('chain-entry-cwd'), alternate);
 });
 
 test('agent working-directory defaults resolve from the parent and yield to dispatch overrides in every mode', async () => {
@@ -2241,7 +2271,7 @@ test('agent working-directory defaults resolve from the parent and yield to disp
 
     const single = await invoke('subagent', { agent: 'cwd-default', task: 'cwd default single' });
     assert.equal(single.isError, undefined);
-    assert.equal(traces().find(entry => entry.task === 'cwd default single').cwd, agentDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'cwd default single').cwd, agentDirectory);
 
     const parallel = await invoke('subagent', {
       cwd: 'call-work',
@@ -2251,8 +2281,8 @@ test('agent working-directory defaults resolve from the parent and yield to disp
       ],
     });
     assert.notEqual(parallel.isError, true);
-    assert.equal(traces().find(entry => entry.task === 'cwd call default parallel').cwd, callDirectory);
-    assert.equal(traces().find(entry => entry.task === 'cwd entry override parallel').cwd, entryDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'cwd call default parallel').cwd, callDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'cwd entry override parallel').cwd, entryDirectory);
 
     const chain = await invoke('subagent', {
       chain: [
@@ -2261,14 +2291,14 @@ test('agent working-directory defaults resolve from the parent and yield to disp
       ],
     });
     assert.equal(chain.isError, undefined);
-    assert.equal(traces().find(entry => entry.task.startsWith('cwd default chain')).cwd, agentDirectory);
-    assert.equal(traces().find(entry => entry.task.startsWith('cwd entry override chain')).cwd, entryDirectory);
+    assertSameDirectory(traces().find(entry => entry.task.startsWith('cwd default chain')).cwd, agentDirectory);
+    assertSameDirectory(traces().find(entry => entry.task.startsWith('cwd entry override chain')).cwd, entryDirectory);
 
     const background = await invoke('subagent', {
       background: true, agent: 'cwd-default', task: 'cwd default background',
     });
     assert.equal((await finish(background.details.background.id)).state, 'completed');
-    assert.equal(traces().find(entry => entry.task === 'cwd default background').cwd, agentDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'cwd default background').cwd, agentDirectory);
   } finally { rmSync(file); }
 });
 
@@ -2278,7 +2308,7 @@ test('large tasks use stdin and relative cwd resolves from the parent session', 
   assert.equal(result.isError, undefined);
   const child = traces().find(t => t.event === 'start');
   assert.equal(child.task, task);
-  assert.equal(child.cwd, join(sandbox, 'project'));
+  assertSameDirectory(child.cwd, join(sandbox, 'project'));
 });
 
 test('agent working-directory defaults are bounded after resolution before project approval', async () => {
@@ -3024,7 +3054,7 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
     assert.ok(confirmation.includes('PI_SUBAGENTS_PROJECT_TEST_ENV'));
     assert.ok(confirmation.includes('PI_SUBAGENTS_TEST_CALL_ENV'));
     assert.equal(traces().filter(entry => entry.event === 'start').length, 2);
-    assert.equal(traces().find(entry => entry.task === 'project cwd still requires approval').cwd, configuredDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'project cwd still requires approval').cwd, configuredDirectory);
 
     const callDirectory = join(sandbox, 'project/call-override');
     const parallelDirectory = join(sandbox, 'project/parallel-override');
@@ -3040,7 +3070,7 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
     assert.ok(confirmation.includes(callDirectory));
     assert.equal(confirmation.includes(configuredDirectory), false,
       'approval should show the effective call override, not an unused agent default');
-    assert.equal(traces().find(entry => entry.task === 'project call cwd override').cwd, callDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'project call cwd override').cwd, callDirectory);
 
     const parallelOverrides = await invoke('subagent', {
       tasks: [
@@ -3053,8 +3083,8 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
     assert.ok(confirmation.includes(parallelDirectory));
     assert.ok(confirmation.includes(callDirectory));
     assert.equal(confirmation.includes(configuredDirectory), false);
-    assert.equal(traces().find(entry => entry.task === 'project parallel entry cwd').cwd, parallelDirectory);
-    assert.equal(traces().find(entry => entry.task === 'project parallel call cwd').cwd, callDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'project parallel entry cwd').cwd, parallelDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'project parallel call cwd').cwd, callDirectory);
 
     const chainOverrides = await invoke('subagent', {
       chain: [
@@ -3067,8 +3097,8 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
     assert.ok(confirmation.includes(chainDirectory));
     assert.ok(confirmation.includes(callDirectory));
     assert.equal(confirmation.includes(configuredDirectory), false);
-    assert.equal(traces().find(entry => entry.task === 'project chain entry cwd').cwd, chainDirectory);
-    assert.equal(traces().find(entry => entry.task === 'project chain call cwd').cwd, callDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'project chain entry cwd').cwd, chainDirectory);
+    assertSameDirectory(traces().find(entry => entry.task === 'project chain call cwd').cwd, callDirectory);
   } finally { rmSync(configuredAgentFile, { force: true }); }
 });
 

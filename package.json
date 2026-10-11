@@ -30,6 +30,7 @@
 		"progress.ts",
 		"abort.ts",
 		"temporary-files.ts",
+		"windows-supervisor-invocation.ts",
 		"windows-supervisor.cs",
 		"CONTRIBUTING.md",
 		"SECURITY.md",

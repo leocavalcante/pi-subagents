@@ -88,6 +88,7 @@ import {
 import { isWellFormedUnicode } from "./unicode.ts";
 import { ProgressUpdateLimiter } from "./progress.ts";
 import { waitForSharedOperation, type SharedAbortableOperationState } from "./abort.ts";
+import { buildWindowsSupervisorInvocation } from "./windows-supervisor-invocation.ts";
 import { removeTemporaryDirectory, trackTemporaryDirectory } from "./temporary-files.ts";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -662,11 +663,16 @@ function getWindowsSupervisor(signal?: AbortSignal): Promise<string> {
 	return waitForSharedOperation(windowsSupervisorState, buildWindowsSupervisor, signal);
 }
 
-async function getChildInvocation(args: string[], cwd: string, unsetEnv: string[], signal?: AbortSignal): Promise<{ command: string; args: string[] }> {
+async function getChildInvocation(
+	args: string[],
+	cwd: string,
+	unsetEnv: string[],
+	signal?: AbortSignal,
+): Promise<{ command: string; args: string[]; cwd: string }> {
 	const invocation = getPiInvocation(args);
-	if (process.platform !== "win32") return invocation;
+	if (process.platform !== "win32") return { ...invocation, cwd };
 	const supervisor = await getWindowsSupervisor(signal);
-	return { command: supervisor, args: [invocation.command, cwd, unsetEnv.join(";"), ...invocation.args] };
+	return buildWindowsSupervisorInvocation(supervisor, invocation, cwd, unsetEnv);
 }
 
 function createChildEnvironment(unsetEnv: string[]): NodeJS.ProcessEnv {
@@ -897,7 +903,7 @@ async function runSingleAgent(
 		setupPhase = "launching child process";
 		const exitCode = await new Promise<number>((resolve) => {
 			const proc = spawn(invocation.command, invocation.args, {
-				cwd: resolvedCwd,
+				cwd: invocation.cwd,
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
 				windowsHide: process.platform === "win32",
