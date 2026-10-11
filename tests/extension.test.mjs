@@ -2503,7 +2503,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(confirmation.includes(String.fromCodePoint(0x202e)), false);
     assert.equal(confirmation.includes(escape), false);
     assert.equal(confirmation.includes(hostileName), false);
-    assert.equal(confirmation.includes('Configured child working directories:'), true);
+    assert.equal(confirmation.includes('Effective child working directories:'), true);
     assert.equal(confirmation.includes('u000a'), true);
     assert.equal(confirmation.includes('Project agents are repo-controlled.'), true);
     assert.equal(traces().length, 0);
@@ -2826,13 +2826,57 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
     assert.notEqual(cwdApproved.isError, true);
     assert.equal(cwdApproved.details.projectAgentsDir, join(sandbox, 'project/.pi/agents'));
     assert.equal(approvals, 2, 'a configured child cwd must not bypass project-agent approval');
-    assert.match(confirmation, /Configured child working directories:/);
-    assert.ok(confirmation.includes('configured-cwd'), 'the approval prompt should disclose the configured child directory');
+    assert.match(confirmation, /Effective child working directories:/);
+    assert.ok(confirmation.includes(configuredDirectory), 'the approval prompt should disclose the resolved configured child directory');
     assert.match(confirmation, /Inherited environment variables removed:/);
     assert.ok(confirmation.includes('PI_SUBAGENTS_PROJECT_TEST_ENV'));
     assert.ok(confirmation.includes('PI_SUBAGENTS_TEST_CALL_ENV'));
     assert.equal(traces().filter(entry => entry.event === 'start').length, 2);
     assert.equal(traces().find(entry => entry.task === 'project cwd still requires approval').cwd, configuredDirectory);
+
+    const callDirectory = join(sandbox, 'project/call-override');
+    const parallelDirectory = join(sandbox, 'project/parallel-override');
+    const chainDirectory = join(sandbox, 'project/chain-override');
+    mkdirSync(callDirectory, { recursive: true });
+    mkdirSync(parallelDirectory, { recursive: true });
+    mkdirSync(chainDirectory, { recursive: true });
+
+    const singleOverride = await invoke('subagent', {
+      agent: 'project-cwd', task: 'project call cwd override', agentScope: 'project', cwd: 'call-override',
+    }, context);
+    assert.notEqual(singleOverride.isError, true);
+    assert.ok(confirmation.includes(callDirectory));
+    assert.equal(confirmation.includes(configuredDirectory), false,
+      'approval should show the effective call override, not an unused agent default');
+    assert.equal(traces().find(entry => entry.task === 'project call cwd override').cwd, callDirectory);
+
+    const parallelOverrides = await invoke('subagent', {
+      tasks: [
+        { agent: 'project-cwd', task: 'project parallel entry cwd', cwd: 'parallel-override' },
+        { agent: 'project-cwd', task: 'project parallel call cwd' },
+      ],
+      cwd: 'call-override', agentScope: 'project',
+    }, context);
+    assert.notEqual(parallelOverrides.isError, true);
+    assert.ok(confirmation.includes(parallelDirectory));
+    assert.ok(confirmation.includes(callDirectory));
+    assert.equal(confirmation.includes(configuredDirectory), false);
+    assert.equal(traces().find(entry => entry.task === 'project parallel entry cwd').cwd, parallelDirectory);
+    assert.equal(traces().find(entry => entry.task === 'project parallel call cwd').cwd, callDirectory);
+
+    const chainOverrides = await invoke('subagent', {
+      chain: [
+        { agent: 'project-cwd', task: 'project chain entry cwd', cwd: 'chain-override' },
+        { agent: 'project-cwd', task: 'project chain call cwd' },
+      ],
+      cwd: 'call-override', agentScope: 'project',
+    }, context);
+    assert.notEqual(chainOverrides.isError, true);
+    assert.ok(confirmation.includes(chainDirectory));
+    assert.ok(confirmation.includes(callDirectory));
+    assert.equal(confirmation.includes(configuredDirectory), false);
+    assert.equal(traces().find(entry => entry.task === 'project chain entry cwd').cwd, chainDirectory);
+    assert.equal(traces().find(entry => entry.task === 'project chain call cwd').cwd, callDirectory);
   } finally { rmSync(configuredAgentFile, { force: true }); }
 });
 

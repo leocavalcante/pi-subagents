@@ -121,7 +121,7 @@ test('README documents bounded delegated working-directory paths and precedence'
   const agents = section('Agent definitions');
   assert.match(agents, /Agent `cwd` paths resolve relative to the parent session's working directory, not the definition file/);
   assert.match(usage, /Precedence is entry `cwd`, top-level call `cwd`, agent frontmatter `cwd`, then the parent session directory/);
-  assert.match(usage, /Project-agent approval lists configured child working directories/);
+  assert.match(usage, /Project-agent approval lists the effective resolved child working directories, including dispatch overrides and the parent session fallback/);
   assert.match(usage, /discovery and approval still use the parent session/);
   assert.match(usage, /Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined/);
 });

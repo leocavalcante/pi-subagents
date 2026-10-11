@@ -1912,6 +1912,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const resolvedWorkingDirectories = workingDirectories.map((cwd) =>
 				typeof cwd === "string" && cwd ? path.resolve(ctx.cwd, cwd) : ctx.cwd);
+			const effectiveResolvedWorkingDirectories = resolvedWorkingDirectories.slice(explicitWorkingDirectories.length);
 			if (resolvedWorkingDirectories.some((cwd) => cwd.length > MAX_WORKING_DIRECTORY_LENGTH)) {
 				return {
 					content: [{ type: "text", text: `Resolved cwd must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` }],
@@ -1991,11 +1992,18 @@ export default function (pi: ExtensionAPI) {
 
 					const names = projectAgentsRequested.map((a) => displayUntrustedText(a.name)).join(", ");
 					const dir = displayUntrustedText(discovery.projectAgentsDir ?? "(unknown)");
-					const workingDirectories = projectAgentsRequested
-						.filter((agent) => agent.cwd !== undefined)
-						.map((agent) => `${displayUntrustedText(agent.name)}: ${displayUntrustedText(truncateOutput(agent.cwd!, 256, "..."))}`);
+					const workingDirectoriesByAgent = new Map<string, Set<string>>();
+					for (let index = 0; index < requested.length; index++) {
+						const agent = agents.find((candidate) => candidate.name === requested[index].agent);
+						if (agent?.source !== "project") continue;
+						const directories = workingDirectoriesByAgent.get(agent.name) ?? new Set<string>();
+						directories.add(effectiveResolvedWorkingDirectories[index]);
+						workingDirectoriesByAgent.set(agent.name, directories);
+					}
+					const workingDirectories = Array.from(workingDirectoriesByAgent, ([agent, directories]) =>
+						`${displayUntrustedText(agent)}: ${Array.from(directories, (cwd) => displayUntrustedText(truncateOutput(cwd, 256, "..."))).join(", ")}`);
 					const workingDirectoryDetails = workingDirectories.length
-						? `\nConfigured child working directories:\n${truncateOutput(workingDirectories.join("\n"), 4096, "...")}` : "";
+						? `\nEffective child working directories:\n${truncateOutput(workingDirectories.join("\n"), 4096, "...")}` : "";
 					const environmentByAgent = new Map<string, Set<string>>();
 					for (let index = 0; index < requested.length; index++) {
 						const agent = agents.find((candidate) => candidate.name === requested[index].agent);
