@@ -1687,7 +1687,7 @@ export default function (pi: ExtensionAPI) {
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} or {steps.ID} output references).",
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
-			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded.",
+			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded. On Windows, first-use supervisor compilation also happens before the deadline and has no independent timeout; canceling a caller detaches it but does not stop the shared compile.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			`Extension-mediated nested subagent calls are limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive delegation.`,
 			"Set model, thinking, or tools to override agent configuration. Use null to ignore an agent's configured model, thinking, or tool allowlist. unsetEnv removes additional inherited environment variables from child processes; agent, batch, and entry lists combine additively. Parallel/chain entries override batch defaults for model, thinking, and tools.",
