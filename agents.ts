@@ -78,10 +78,10 @@ export function isSafeModelSelector(value: unknown, allowBlank = false): value i
 }
 
 const MAX_AGENT_DIRECTORY_ENTRIES = 4096;
-const MAX_AGENT_FILES = 256;
+export const MAX_AGENT_FILES = 256;
 const MAX_AGENT_FILE_BYTES = 512 * 1024;
 const MAX_AGENT_DIRECTORY_BYTES = 4 * 1024 * 1024;
-const MAX_AGENT_DIAGNOSTICS = 64;
+export const MAX_AGENT_DIAGNOSTICS = 64;
 
 /** Stable across host locales and ICU versions. */
 function compareLexically(left: string, right: string): number {
