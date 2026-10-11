@@ -72,16 +72,18 @@ test('README documents bounded agent descriptions', () => {
 
 test('README documents the agent configuration exposed by discovery', () => {
   const usage = section('Usage');
-  assert.match(usage, /model, thinking, and tool settings/);
-  assert.match(usage, /configured timeout defaults/);
+  assert.match(usage, /model, thinking, tool settings, configured timeout and working-directory defaults/);
+  assert.match(usage, /configured timeout and working-directory defaults/);
 });
 
 test('README documents agent timeout defaults and precedence', () => {
   const agents = section('Agent definitions');
   const usage = section('Usage');
   const deadlines = section('Task deadlines');
-  assert.match(agents, /default `timeoutMs` in its frontmatter/);
-  assert.match(usage, /configured timeout defaults/);
+  assert.match(agents, /default `timeoutMs`, and a default working directory with `cwd` in its frontmatter/);
+  assert.match(agents, /Agent `cwd` defaults must be non-empty, well-formed Unicode paths with no NUL characters/);
+  assert.match(agents, /convenience, not a filesystem sandbox, and does not restrict access to other paths/);
+  assert.match(usage, /configured timeout and working-directory defaults/);
   assert.match(agents, /whole milliseconds from 1 to 86400000 \(24 hours\)/);
   assert.match(deadlines, /a per-entry or top-level call value overrides it/);
   assert.match(deadlines, /Set `timeoutMs` to `null` on a call or entry to explicitly disable that deadline/);
@@ -113,9 +115,13 @@ test('README documents bounded per-call tool overrides and precedence', () => {
   assert.match(overrides, /do not bypass project-agent approval/);
 });
 
-test('README documents bounded delegated working-directory paths', () => {
+test('README documents bounded delegated working-directory paths and precedence', () => {
   const usage = section('Usage');
-  assert.match(usage, /In parallel and chain modes, the top-level `cwd` is the default for every child; an entry's own `cwd` overrides it/);
+  const agents = section('Agent definitions');
+  assert.match(agents, /Agent `cwd` paths resolve relative to the parent session's working directory, not the definition file/);
+  assert.match(usage, /Precedence is entry `cwd`, top-level call `cwd`, agent frontmatter `cwd`, then the parent session directory/);
+  assert.match(usage, /Project-agent approval lists configured child working directories/);
+  assert.match(usage, /discovery and approval still use the parent session/);
   assert.match(usage, /Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined/);
 });
 
