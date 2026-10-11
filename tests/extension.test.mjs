@@ -122,10 +122,11 @@ test('foreground cancellation preserves an explicit null abort reason and releas
 test('progress bursts are throttled without dropping captured or final results', async () => {
   const count = 2000;
   let updates = 0;
+  let latestUpdate;
   const started = performance.now();
   const foreground = await tools.get('subagent').definition.execute(
     'progress-burst-test', { agent: 'worker', task: 'progress-burst:' + count }, undefined,
-    () => { updates++; }, ctx(),
+    partial => { updates++; latestUpdate = partial; }, ctx(),
   );
   const elapsed = performance.now() - started;
   assert.equal(foreground.isError, undefined);
@@ -135,6 +136,8 @@ test('progress bursts are throttled without dropping captured or final results',
   const captured = foreground.details.results[0];
   assert.equal(captured.usage.turns, count, 'all child events are still accounted for');
   assert.equal(captured.messages.at(-1).content[0].text, 'burst ' + (count - 1));
+  assert.equal(latestUpdate.details.results[0].messages.at(-1).content[0].text, 'burst ' + (count - 1),
+    'the final throttled progress update must include the latest captured history');
   assert.equal(captured.capture.messagesDropped, count - 128, 'history capture remains independent of progress notifications');
 
   const id = await launch({ task: 'progress-burst:300' });
