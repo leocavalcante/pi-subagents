@@ -19,9 +19,9 @@ On Windows, the project-agent file-symlink boundary test runs when the process c
 
 ## Releasing
 
-GitHub Actions tests pushes and pull requests. Publishing a stable GitHub release tagged `v<package.json version>`, such as `v0.1.0`, runs the same test matrix before publishing `@leocavalcante/pi-subagents` to npm with provenance. Prereleases are not published. Bump `package.json` and `package-lock.json` together before each new release. npm versions cannot be overwritten.
+GitHub Actions tests pushes and pull requests. Publishing a stable GitHub release tagged `v<package.json version>`, such as `v0.1.0`, first verifies release and npm registry prerequisites, then runs the same test matrix before publishing `@leocavalcante/pi-subagents` to npm with provenance. Prereleases still run the test matrix but are not published. Bump `package.json` and `package-lock.json` together before each new release. npm versions cannot be overwritten.
 
-The publishing workflow uses npm Trusted Publishing with GitHub OIDC. It does not use an npm token or an Actions publishing secret.
+Before running the stable-release test matrix, the publishing workflow verifies that the release commit is reachable from `main`, the tag matches `package.json`, the package has been bootstrapped on npm, and the release version is still unpublished. The publishing workflow uses npm Trusted Publishing with GitHub OIDC. It does not use an npm token or an Actions publishing secret.
 
 npm requires the package to exist before configuring a trusted publisher. Bootstrap version `0.1.0` once from this checkout using interactive npm login and 2FA, without creating a CI token:
 
