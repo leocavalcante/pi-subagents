@@ -81,7 +81,7 @@ import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
 import { isWellFormedUnicode } from "./unicode.ts";
 import { ProgressUpdateLimiter } from "./progress.ts";
-import { createAbortableDeferred, type AbortableDeferred } from "./abort.ts";
+import { waitForSharedOperation, type SharedAbortableOperationState } from "./abort.ts";
 import { removeTemporaryDirectory, trackTemporaryDirectory } from "./temporary-files.ts";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -603,10 +603,7 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	return { command: "pi", args };
 }
 
-interface WindowsSupervisorState {
-	promise?: Promise<string>;
-	deferred?: AbortableDeferred<string>;
-}
+type WindowsSupervisorState = SharedAbortableOperationState<string>;
 
 const windowsSupervisorKey = Symbol.for("@leocavalcante/pi-subagents/windows-supervisor");
 const windowsSupervisorState = ((globalThis as any)[windowsSupervisorKey] ??= {}) as WindowsSupervisorState;
@@ -644,22 +641,7 @@ async function buildWindowsSupervisor(): Promise<string> {
 }
 
 function getWindowsSupervisor(signal?: AbortSignal): Promise<string> {
-	signal?.throwIfAborted();
-	if (!windowsSupervisorState.deferred) {
-		const deferred = createAbortableDeferred<string>();
-		windowsSupervisorState.deferred = deferred;
-		const compilation = windowsSupervisorState.promise ?? buildWindowsSupervisor();
-		windowsSupervisorState.promise = compilation;
-		// Observe compilation once; per-caller waits subscribe to the deferred and can detach on abort.
-		compilation.then(deferred.resolve, (error) => {
-			if (windowsSupervisorState.deferred === deferred) {
-				windowsSupervisorState.promise = undefined;
-				windowsSupervisorState.deferred = undefined;
-			}
-			deferred.reject(error);
-		});
-	}
-	return windowsSupervisorState.deferred.wait(signal);
+	return waitForSharedOperation(windowsSupervisorState, buildWindowsSupervisor, signal);
 }
 
 async function getChildInvocation(args: string[], cwd: string, unsetEnv: string[], signal?: AbortSignal): Promise<{ command: string; args: string[] }> {

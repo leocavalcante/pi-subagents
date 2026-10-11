@@ -4,6 +4,11 @@ export interface AbortableDeferred<T> {
 	reject(reason: unknown): void;
 }
 
+export interface SharedAbortableOperationState<T> {
+	promise?: Promise<T>;
+	deferred?: AbortableDeferred<T>;
+}
+
 interface DeferredWaiter<T> {
 	resolve(value: T): void;
 	reject(reason: unknown): void;
@@ -51,6 +56,36 @@ export function createAbortableDeferred<T>(): AbortableDeferred<T> {
 		resolve(value) { settle({ ok: true, value }); },
 		reject(reason) { settle({ ok: false, reason }); },
 	};
+}
+
+/** Share a cached operation across abortable callers, clearing it after failure so the next call can retry. */
+export function waitForSharedOperation<T>(
+	state: SharedAbortableOperationState<T>,
+	start: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	signal?.throwIfAborted();
+	if (!state.deferred) {
+		const deferred = createAbortableDeferred<T>();
+		state.deferred = deferred;
+		let compilation = state.promise;
+		if (!compilation) {
+			try { compilation = start(); }
+			catch (error) { compilation = Promise.reject(error); }
+		}
+		state.promise = compilation;
+		compilation.then(
+			(value) => deferred.resolve(value),
+			(error) => {
+				if (state.deferred === deferred) {
+					state.promise = undefined;
+					state.deferred = undefined;
+				}
+				deferred.reject(error);
+			},
+		);
+	}
+	return state.deferred.wait(signal);
 }
 
 /** Race an operation against cancellation while preserving any explicit abort reason. */

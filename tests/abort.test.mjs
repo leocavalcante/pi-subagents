@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { createAbortableDeferred, waitWithAbort } = await jiti.import('../abort.ts');
+const { createAbortableDeferred, waitForSharedOperation, waitWithAbort } = await jiti.import('../abort.ts');
 
 test('abortable deferred removes canceled waiters without canceling shared work', async () => {
   const deferred = createAbortableDeferred();
@@ -44,6 +44,86 @@ test('abortable deferred shares failures with current and later waiters', async 
   await assert.rejects(first, error => error === failure);
   await assert.rejects(second, error => error === failure);
   await assert.rejects(deferred.wait(), error => error === failure);
+});
+
+test('shared operation builds once, detaches canceled callers, and reuses its result', async () => {
+  const state = {};
+  let starts = 0;
+  let finishCompilation;
+  const start = () => {
+    starts++;
+    return new Promise(resolve => { finishCompilation = resolve; });
+  };
+  const canceled = new AbortController();
+  const remaining = new AbortController();
+  const canceledWait = waitForSharedOperation(state, start, canceled.signal).then(
+    () => ({ resolved: true }),
+    reason => ({ reason }),
+  );
+  const remainingWait = waitForSharedOperation(state, start, remaining.signal);
+
+  assert.equal(starts, 1);
+  canceled.abort(null);
+  assert.deepEqual(await canceledWait, { reason: null });
+  assert.equal(getEventListeners(canceled.signal, 'abort').length, 0);
+  assert.equal(getEventListeners(remaining.signal, 'abort').length, 1);
+
+  finishCompilation('compiled supervisor');
+  assert.equal(await remainingWait, 'compiled supervisor');
+  assert.equal(getEventListeners(remaining.signal, 'abort').length, 0);
+  assert.equal(await waitForSharedOperation(state, start), 'compiled supervisor');
+  assert.equal(starts, 1);
+});
+
+test('shared operation can attach to work cached before a module reload', async () => {
+  const state = { promise: Promise.resolve('existing compilation') };
+  let starts = 0;
+  assert.equal(await waitForSharedOperation(state, () => {
+    starts++;
+    return Promise.resolve('unexpected compilation');
+  }), 'existing compilation');
+  assert.equal(starts, 0);
+});
+
+test('shared operation failures reach current waiters and allow a retry', async () => {
+  const state = {};
+  let starts = 0;
+  let rejectCompilation;
+  const start = () => {
+    starts++;
+    if (starts === 1) return new Promise((_resolve, reject) => { rejectCompilation = reject; });
+    return Promise.resolve('retried supervisor');
+  };
+  const failure = new Error('compilation failed');
+  const firstController = new AbortController();
+  const secondController = new AbortController();
+  const first = waitForSharedOperation(state, start, firstController.signal);
+  const second = waitForSharedOperation(state, start, secondController.signal);
+  const firstRejected = assert.rejects(first, error => error === failure);
+  const secondRejected = assert.rejects(second, error => error === failure);
+
+  assert.equal(starts, 1);
+  assert.equal(getEventListeners(firstController.signal, 'abort').length, 1);
+  assert.equal(getEventListeners(secondController.signal, 'abort').length, 1);
+  rejectCompilation(failure);
+  await Promise.all([firstRejected, secondRejected]);
+  assert.equal(getEventListeners(firstController.signal, 'abort').length, 0);
+  assert.equal(getEventListeners(secondController.signal, 'abort').length, 0);
+  assert.equal(await waitForSharedOperation(state, start), 'retried supervisor');
+  assert.equal(starts, 2);
+  assert.equal(await waitForSharedOperation(state, start), 'retried supervisor');
+  assert.equal(starts, 2);
+});
+
+test('shared operation does not start for an already-aborted caller', () => {
+  const controller = new AbortController();
+  controller.abort(null);
+  let starts = 0;
+  assert.throws(() => waitForSharedOperation({}, () => {
+    starts++;
+    return Promise.resolve('unused');
+  }, controller.signal), reason => reason === null);
+  assert.equal(starts, 0);
 });
 
 test('waitWithAbort preserves null and other falsy cancellation reasons', async () => {
