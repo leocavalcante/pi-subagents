@@ -100,6 +100,8 @@ const MAX_JOB_RECORDS = MAX_ACTIVE_JOBS + MAX_RETAINED_JOBS;
 const MAX_JOB_LABEL_BYTES = 1024;
 const MAX_JOB_DIAGNOSTIC_BYTES = 2048;
 const MAX_JOB_AGENT_BYTES = 256;
+// Show every effective project-agent setting, or refuse approval rather than launch with a partial summary.
+const MAX_PROJECT_APPROVAL_BYTES = 32 * 1024;
 const SUBAGENT_NESTING_DEPTH_ENV = "PI_SUBAGENTS_NESTING_DEPTH";
 const MAX_SUBAGENT_NESTING_DEPTH = 2;
 // Allow every configured active background job to fill its process worker pool.
@@ -2085,9 +2087,9 @@ export default function (pi: ExtensionAPI) {
 						workingDirectoriesByAgent.set(agent.name, directories);
 					}
 					const workingDirectories = Array.from(workingDirectoriesByAgent, ([agent, directories]) =>
-						`${displayUntrustedText(agent)}: ${Array.from(directories, (cwd) => displayUntrustedText(truncateOutput(cwd, 256, "..."))).join(", ")}`);
+						`${displayUntrustedText(agent)}: ${Array.from(directories, (cwd) => displayUntrustedText(cwd)).join(", ")}`);
 					const workingDirectoryDetails = workingDirectories.length
-						? `\nEffective child working directories:\n${truncateOutput(workingDirectories.join("\n"), 4096, "...")}` : "";
+						? `\nEffective child working directories:\n${workingDirectories.join("\n")}` : "";
 					const environmentByAgent = new Map<string, Set<string>>();
 					for (let index = 0; index < requested.length; index++) {
 						const agent = agents.find((candidate) => candidate.name === requested[index].agent);
@@ -2099,7 +2101,7 @@ export default function (pi: ExtensionAPI) {
 					const filteredEnvironment = Array.from(environmentByAgent, ([agent, names]) =>
 						`${displayUntrustedText(agent)}: ${displayUntrustedText(Array.from(names).join(","))}`);
 					const filteredEnvironmentDetails = filteredEnvironment.length
-						? `\nInherited environment variables removed:\n${truncateOutput(filteredEnvironment.join("\n"), 4096, "...")}` : "";
+						? `\nInherited environment variables removed:\n${filteredEnvironment.join("\n")}` : "";
 					const configurationByAgent = new Map<string, Set<string>>();
 					for (let index = 0; index < requested.length; index++) {
 						const agent = agents.find((candidate) => candidate.name === requested[index].agent);
@@ -2108,14 +2110,20 @@ export default function (pi: ExtensionAPI) {
 						const timeoutOverride = requested[index].timeoutMs !== undefined
 							? requested[index].timeoutMs : params.timeoutMs;
 						const settings = resolveAgentSettings(agent, dispatchDefaults, overrides, timeoutOverride);
-						const model = settings.model
-							? displayUntrustedText(truncateOutput(settings.model, MAX_MODEL_SELECTOR_BYTES, "..."))
-							: "Pi default";
+						if (settings.model !== undefined && !isSafeModelSelector(settings.model)) {
+							return {
+								content: [{
+									type: "text",
+									text: `Effective model selector for ${displayUntrustedText(agent.name)} is invalid or exceeds ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes. No agents were launched.`,
+								}],
+								details: makeDetails(mode)([]),
+								isError: true,
+							};
+						}
+						const model = settings.model ? displayUntrustedText(settings.model) : "Pi default";
 						const thinking = settings.thinking ?? "model/Pi default";
 						const tools = settings.tools === undefined ? "Pi defaults"
-							: settings.tools.length
-								? displayUntrustedText(truncateOutput(settings.tools.join(", "), 256, "..."))
-								: "none";
+							: settings.tools.length ? displayUntrustedText(settings.tools.join(", ")) : "none";
 						const timeout = settings.timeoutMs === undefined ? "unbounded" : `${settings.timeoutMs} ms`;
 						const summary = `model=${model}; thinking=${thinking}; initial tools=${tools}; timeout=${timeout}`;
 						const summaries = configurationByAgent.get(agent.name) ?? new Set<string>();
@@ -2125,11 +2133,20 @@ export default function (pi: ExtensionAPI) {
 					const configurationLines = Array.from(configurationByAgent, ([agent, summaries]) =>
 						`${displayUntrustedText(agent)}: ${Array.from(summaries).join(" | ")}`);
 					const configurationDetails = configurationLines.length
-						? `\nEffective child configuration (initial tool selection is not a sandbox):\n${truncateOutput(configurationLines.join("\n"), 4096, "...")}` : "";
-					const ok = await ctx.ui.confirm(
-						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}${workingDirectoryDetails}${configurationDetails}${filteredEnvironmentDetails}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-					);
+						? `\nEffective child configuration (initial tool selection is not a sandbox):\n${configurationLines.join("\n")}` : "";
+					const approvalTitle = "Run project-local agents?";
+					const approvalBody = `Agents: ${names}\nSource: ${dir}${workingDirectoryDetails}${configurationDetails}${filteredEnvironmentDetails}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`;
+					if (Buffer.byteLength(approvalTitle, "utf8") + 1 + Buffer.byteLength(approvalBody, "utf8") > MAX_PROJECT_APPROVAL_BYTES) {
+						return {
+							content: [{
+								type: "text",
+								text: `Project-agent approval details exceed the ${MAX_PROJECT_APPROVAL_BYTES / 1024} KiB limit. No agents were launched; reduce the requested tasks or their configuration and retry.`,
+							}],
+							details: makeDetails(mode)([]),
+							isError: true,
+						};
+					}
+					const ok = await ctx.ui.confirm(approvalTitle, approvalBody);
 					if (!ok)
 						return {
 							content: [
