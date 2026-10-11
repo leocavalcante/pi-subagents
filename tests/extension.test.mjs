@@ -20,6 +20,7 @@ const {
   MAX_AGENT_DIAGNOSTICS,
   MAX_AGENT_FILES,
   MAX_AGENT_NAME_BYTES,
+  MAX_AGENT_SEARCH_QUERY_BYTES,
   MAX_AGENT_TOOL_COUNT,
   MAX_AGENT_TOOL_LIST_BYTES,
   MAX_MODEL_SELECTOR_BYTES,
@@ -2512,6 +2513,82 @@ test('agent listing supports exact-name lookup after scope precedence', async ()
     assert.match(pastMatch.content[0].text, /No agents at offset 1; 1 total/);
     assert.equal(traces().length, 0);
   } finally { rmSync(projectAgent, { force: true }); }
+});
+
+test('agent listing searches names and descriptions after scope precedence with filtered pagination', async () => {
+  const definitions = [
+    ['lookup-oauth.md', 'lookup-oauth', 'OAuth security reviewer'],
+    ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
+    ['lookup-db.md', 'lookup-db', 'Database migration helper'],
+    ['lookup-override.md', 'lookup-override', 'Secret token helper'],
+  ];
+  const userFiles = definitions.map(([filename, name, description]) => {
+    const file = join(sandbox, 'agent/agents', filename);
+    writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n---\nSearch test instructions.\n`);
+    return file;
+  });
+  const projectOverride = join(sandbox, 'project/.pi/agents/lookup-override.md');
+  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\n---\nProject override instructions.\n');
+  try {
+    const schema = tools.get('subagent_agents').definition.outputSchema;
+    const parameters = tools.get('subagent_agents').definition.parameters;
+    assert.equal(Value.Check(parameters, { query: '  oAuTh ' }), true);
+
+    const first = await invoke('subagent_agents', { query: '  oAuTh ', limit: 1 });
+    assert.equal(Value.Check(schema, first.structuredContent), true);
+    assert.equal(first.details.totalAgents, 2);
+    assert.equal(first.details.agents[0].name, 'lookup-docs');
+    assert.equal(first.details.nextOffset, 1);
+    assert.match(first.content[0].text, /Results for "`oAuTh`": Agents 1-1 of 2/);
+
+    const second = await invoke('subagent_agents', { query: 'oauth', offset: first.details.nextOffset, limit: 1 });
+    assert.equal(second.details.totalAgents, 2);
+    assert.equal(second.details.agents[0].name, 'lookup-oauth');
+    assert.equal(second.details.nextOffset, null);
+
+    const nameMatch = await invoke('subagent_agents', { query: 'LOOKUP-DB' });
+    assert.deepEqual(nameMatch.details.agents.map(agent => agent.name), ['lookup-db']);
+
+    const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
+    const scoped = await invoke('subagent_agents', { agentScope: 'both', query: 'database' }, projectContext);
+    assert.equal(scoped.details.totalAgents, 2);
+    assert.deepEqual(scoped.details.agents.map(agent => agent.name), ['lookup-db', 'lookup-override']);
+    assert.equal(scoped.details.agents[1].source, 'project', 'the project definition replaces the personal definition before matching');
+    assert.equal(scoped.details.agents[1].description, 'Database project reviewer');
+
+    const hiddenPersonal = await invoke('subagent_agents', { agentScope: 'both', query: 'secret' }, projectContext);
+    assert.equal(hiddenPersonal.details.totalAgents, 0, 'a shadowed personal definition is not searchable');
+    assert.match(hiddenPersonal.content[0].text, /No agents matching "`secret`" found/);
+    assert.equal(traces().length, 0);
+  } finally {
+    for (const file of userFiles) rmSync(file, { force: true });
+    rmSync(projectOverride, { force: true });
+  }
+});
+
+test('agent listing rejects invalid search queries before discovery output or child launch', async () => {
+  const parameters = tools.get('subagent_agents').definition.parameters;
+  const outputSchema = tools.get('subagent_agents').definition.outputSchema;
+  for (const query of ['', '  ', 'x'.repeat(MAX_AGENT_SEARCH_QUERY_BYTES + 1), '\u001bsearch']) {
+    assert.equal(Value.Check(parameters, { query }), false);
+  }
+  const multibyteOversizedQuery = '€'.repeat(Math.floor(MAX_AGENT_SEARCH_QUERY_BYTES / 3) + 1);
+  const unpairedSurrogateQuery = String.fromCharCode(0xd800);
+  for (const query of [multibyteOversizedQuery, unpairedSurrogateQuery]) {
+    assert.equal(Value.Check(parameters, { query }), true,
+      'the schema may be looser than runtime UTF-8 and Unicode-scalar validation');
+    const result = await invoke('subagent_agents', { query });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /query must be valid Unicode/);
+    assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+    assert.equal(result.details.totalAgents, 0);
+    assert.equal(JSON.stringify(result).includes('�'), false);
+  }
+  const combined = await invoke('subagent_agents', { name: 'worker', query: 'worker' });
+  assert.equal(combined.isError, true);
+  assert.match(combined.content[0].text, /name and query cannot be combined/);
+  assert.equal(Value.Check(outputSchema, combined.structuredContent), true);
+  assert.equal(traces().length, 0);
 });
 
 test('agent listing rejects invalid names before discovery output or child launch', async () => {

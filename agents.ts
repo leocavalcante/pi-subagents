@@ -58,6 +58,7 @@ type AgentFrontmatter = {
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 export const MAX_AGENT_NAME_BYTES = 256;
+export const MAX_AGENT_SEARCH_QUERY_BYTES = 256;
 export const MAX_AGENT_DESCRIPTION_BYTES = 1024;
 export const MAX_AGENT_TOOL_LIST_BYTES = 4 * 1024;
 export const MAX_AGENT_TOOL_COUNT = 256;
@@ -76,6 +77,13 @@ export function isSafeAgentName(name: string): boolean {
 	// UTF-8 is never shorter than UTF-16 code units; reject large names before scanning them.
 	return name.length > 0 && name.length <= MAX_AGENT_NAME_BYTES && isWellFormedUnicode(name) &&
 		Buffer.byteLength(name, "utf8") <= MAX_AGENT_NAME_BYTES && name.trim().length > 0 && !INVALID_AGENT_NAME.test(name);
+}
+
+export function isSafeAgentSearchQuery(query: string): boolean {
+	// Queries are displayed in no trusted context, but reject controls and bidi formatting just like names.
+	return query.length > 0 && query.length <= MAX_AGENT_SEARCH_QUERY_BYTES && isWellFormedUnicode(query) &&
+		Buffer.byteLength(query, "utf8") <= MAX_AGENT_SEARCH_QUERY_BYTES && query.trim().length > 0 &&
+		!INVALID_AGENT_NAME.test(query);
 }
 
 /** Keep the value passed as a child argv element well below platform command-line limits. */
