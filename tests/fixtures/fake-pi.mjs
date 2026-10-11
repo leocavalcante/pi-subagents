@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 const args = process.argv.slice(2);
 const task = readFileSync(0, 'utf8').replace(/^Task: /, '');
@@ -23,6 +23,11 @@ trace({ event: 'start', task, cwd: process.cwd(), model: flag('--model'), thinki
   retainedEmptyEnvironmentPreserved: Object.hasOwn(process.env, 'PI_SUBAGENTS_TEST_KEEP_EMPTY') &&
     process.env.PI_SUBAGENTS_TEST_KEEP_EMPTY === '',
   promptFile: args.includes('--append-system-prompt') ? flag('--append-system-prompt') : undefined });
+if (task.startsWith('process-budget-barrier:')) {
+  const separator = task.indexOf('|');
+  const releaseFile = task.slice('process-budget-barrier:'.length, separator);
+  while (separator >= 0 && !existsSync(releaseFile)) await new Promise(resolve => setTimeout(resolve, 10));
+}
 if (args.includes('--append-system-prompt')) readFileSync(flag('--append-system-prompt'), 'utf8');
 if (task.includes('stubborn')) process.on('SIGTERM', () => {});
 if (task.includes('grandchild')) {
