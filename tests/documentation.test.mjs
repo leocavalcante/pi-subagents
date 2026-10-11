@@ -172,6 +172,8 @@ test('README documents bounded delegated working-directory paths and precedence'
   assert.match(usage, /Precedence is entry `cwd`, top-level call `cwd`, agent frontmatter `cwd`, then the parent session directory/);
   assert.match(usage, /Project-agent approval lists the effective resolved child working directories, including dispatch overrides and the parent session fallback/);
   assert.match(usage, /summarizes each requested project's effective model, thinking level, initial tool selection, and runtime deadline/);
+  assert.match(usage, /When approval is required for an untrusted project, details are never silently truncated/);
+  assert.match(usage, /complete prompt exceeds 32 KiB, the call fails before approval or child launch/);
   assert.match(usage, /tool selection is not a sandbox/);
   assert.match(usage, /Discovery and approval still use the parent session/);
   assert.match(usage, /Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined/);

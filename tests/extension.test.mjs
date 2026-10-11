@@ -2800,6 +2800,109 @@ test('project-agent approvals show effective model, thinking, tools, and timeout
   }
 });
 
+test('project-agent approval shows complete settings and refuses oversized summaries', async () => {
+  const agentsDir = join(sandbox, 'project/.pi/agents');
+  const longToolName = '`'.repeat(1024);
+  const longChildCwd = 'x'.repeat(300);
+  const filteredVariables = Array.from({ length: 128 }, (_, index) =>
+    `P${String(index).padStart(3, '0')}${'X'.repeat(27)}`);
+  const longToolsFile = join(agentsDir, 'approval-long-tools.md');
+  const finalFile = join(agentsDir, 'approval-final.md');
+  writeFileSync(longToolsFile, [
+    '---',
+    'name: approval-long-tools',
+    'description: Long but bounded tool selection',
+    `tools: ${JSON.stringify(longToolName)}`,
+    `cwd: ${JSON.stringify(longChildCwd)}`,
+    `unsetEnv: ${JSON.stringify(filteredVariables)}`,
+    '---',
+    'Prompt.',
+    '',
+  ].join('\n'));
+  writeFileSync(finalFile, [
+    '---',
+    'name: approval-final',
+    'description: Final approval worker',
+    'model: fake/final-model',
+    'timeoutMs: 6789',
+    '---',
+    'Prompt.',
+    '',
+  ].join('\n'));
+  let confirmation = '';
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async (_title, body) => { approvals++; confirmation = body; return false; } } };
+  try {
+    const result = await invoke('subagent', {
+      agentScope: 'project',
+      chain: [
+        { agent: 'approval-long-tools', task: 'first summary' },
+        { agent: 'approval-final', task: 'last summary' },
+      ],
+    }, context);
+    assert.equal(result.content[0].text, 'Canceled: project-local agents not approved.');
+    assert.equal(approvals, 1);
+    assert.ok(Buffer.byteLength(confirmation, 'utf8') > 4 * 1024,
+      'exercise summaries that used to be clipped at the per-section 4 KiB limit');
+    assert.ok(Buffer.byteLength(confirmation, 'utf8') <= 32 * 1024);
+    assert.ok(confirmation.includes('\\u0060'.repeat(1024)), 'show the complete bounded initial tool selection');
+    assert.ok(confirmation.includes(longChildCwd), 'show the full effective working directory');
+    assert.ok(confirmation.includes(filteredVariables.at(-1)), 'show the complete bounded environment-removal list');
+    assert.ok(confirmation.includes('`approval-final`: model=`fake/final-model`; thinking=model/Pi default; initial tools=Pi defaults; timeout=6789 ms'),
+      'later requested agents must remain visible after long earlier settings');
+    assert.equal(traces().length, 0);
+
+    approvals = 0;
+    const invalidParentModelContext = {
+      ...context,
+      model: { provider: 'p'.repeat(MAX_MODEL_SELECTOR_BYTES), id: 'model' },
+    };
+    const invalidParentModel = await invoke('subagent', {
+      agentScope: 'project', agent: 'approval-final', task: 'invalid inherited model', model: null,
+    }, invalidParentModelContext);
+    assert.equal(invalidParentModel.isError, true);
+    assert.match(invalidParentModel.content[0].text, /Effective model selector.*invalid or exceeds/);
+    assert.equal(approvals, 0, 'invalid inherited models must be rejected before the approval prompt');
+    assert.equal(traces().length, 0);
+
+    const oversizedToolName = '`'.repeat(MAX_AGENT_TOOL_LIST_BYTES);
+    const oversizedFiles = ['approval-oversized-a', 'approval-oversized-b'].map(name => {
+      const file = join(agentsDir, `${name}.md`);
+      writeFileSync(file, [
+        '---',
+        `name: ${name}`,
+        'description: Oversized approval test',
+        `tools: ${JSON.stringify(oversizedToolName)}`,
+        '---',
+        'Prompt.',
+        '',
+      ].join('\n'));
+      return file;
+    });
+    try {
+      confirmation = '';
+      approvals = 0;
+      const oversized = await invoke('subagent', {
+        agentScope: 'project',
+        chain: [
+          { agent: 'approval-oversized-a', task: 'first oversized summary' },
+          { agent: 'approval-oversized-b', task: 'second oversized summary' },
+        ],
+      }, context);
+      assert.equal(oversized.isError, true);
+      assert.match(oversized.content[0].text, /approval details exceed the 32 KiB limit/);
+      assert.equal(approvals, 0, 'never ask to approve a prompt that would hide part of the effective configuration');
+      assert.equal(traces().length, 0, 'oversized approval details must fail before any child launch');
+    } finally {
+      for (const file of oversizedFiles) rmSync(file, { force: true });
+    }
+  } finally {
+    rmSync(longToolsFile, { force: true });
+    rmSync(finalFile, { force: true });
+  }
+});
+
 test('untrusted project agents fail closed without UI approval and run only for trusted projects', async () => {
   const untrusted = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: false, isProjectTrusted: () => false };
   const denied = await invoke('subagent', { agent: 'project', task: 'must not run', agentScope: 'project' }, untrusted);
