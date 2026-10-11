@@ -12,11 +12,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify release commit is reachable from main
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
+            echo "Release commit must be reachable from main."
+            exit 1
+          fi
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify stable release metadata and npm package availability
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: node .github/scripts/check-release-package.mjs
+
   test:
+    needs: preflight
+    if: always() && (needs.preflight.result == 'success' || needs.preflight.result == 'skipped')
     uses: ./.github/workflows/test.yml
 
   publish:
-    needs: test
+    needs: [preflight, test]
     if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -43,17 +74,6 @@ jobs:
           package-manager-cache: false
       - name: Install npm with trusted publishing support
         run: npm install --global --ignore-scripts npm@11.21.0
-      - name: Check release tag matches package version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          node --input-type=module <<'JS'
-          import { readFileSync } from 'node:fs';
-          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
-          if (!/^\d+\.\d+\.\d+$/.test(version) || process.env.RELEASE_TAG !== `v${version}`) {
-            throw new Error('Use a stable release tag matching package.json: v' + version);
-          }
-          JS
       - run: npm ci --ignore-scripts
       - run: npm pack --dry-run --ignore-scripts
       - name: Publish through npm Trusted Publishing
