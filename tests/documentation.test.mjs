@@ -183,10 +183,12 @@ test('README discloses that Windows supervisor compilation is outside task deadl
   assert.match(deadlines, /not safe to terminate PowerShell without verified process-tree containment/);
 });
 
-test('README documents timeout metadata on background output pages', () => {
+test('README documents timeout metadata and the opt-in stderr stream on background output pages', () => {
   const output = section('Read captured job output');
   assert.match(output, /`output\.timedOut` indicates whether the runtime deadline fired/);
   assert.match(output, /`output\.timeoutMs` reports the effective per-task deadline when configured/);
+  assert.match(output, /set `stream: "stderr"` to page the task's separately captured stderr/);
+  assert.match(output, /`output\.stderrTruncated` indicates whether stderr reached its 64 KiB capture limit/);
 });
 
 test('README documents the bounded shared process queue', () => {
