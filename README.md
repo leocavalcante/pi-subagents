@@ -302,7 +302,7 @@ On POSIX, when a child exits, the extension sends SIGTERM to remaining members o
 
 ## Security
 
-Context isolation is not a sandbox. Children run with the same OS permissions as Pi and can read or modify files. Include relevant context and task restrictions in each delegation. The child `pi` process also inherits the parent process's environment. Credentials or other secrets stored in environment variables are therefore available to the delegated agent and programs it starts; do not rely on environment variables to keep secrets from delegated work.
+Context isolation is not a sandbox. Children run with the same OS permissions as Pi and can read or modify files. Include relevant context and task restrictions in each delegation. The child `pi` process also inherits the parent process's environment. Credentials and other secrets stored there are available to code running in the delegated process and, unless a child tool removes them, its subprocesses; do not rely on environment variables to keep secrets from delegated work.
 
 Agent system prompts are written briefly to a temporary UTF-8 file so the child CLI can append them, then removed during invocation cleanup. Transient removal failures get bounded retries, and failed cleanup is retried at process exit. On POSIX, the temporary directory and file grant no group or other access. On Windows, access follows the ACLs inherited from the configured temporary directory; secure that directory if prompts must be private to your account. Temporary-file permissions do not protect against other processes running as the same user or against the delegated child.
 

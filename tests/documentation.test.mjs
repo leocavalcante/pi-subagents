@@ -167,7 +167,7 @@ test('README documents mandatory approval for untrusted project agents', () => {
 test('README warns that delegated children inherit environment variables', () => {
   const security = section('Security');
   assert.match(security, /child `pi` process also inherits the parent process's environment/);
-  assert.match(security, /Credentials or other secrets stored in environment variables are therefore available to the delegated agent and programs it starts/);
+  assert.match(security, /Credentials and other secrets stored there are available to code running in the delegated process and, unless a child tool removes them, its subprocesses/);
   assert.match(security, /do not rely on environment variables to keep secrets from delegated work/);
 });
 
