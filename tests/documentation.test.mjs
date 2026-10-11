@@ -150,6 +150,7 @@ test('README documents bounded model selectors and agent tool allowlists', () =>
   assert.match(overrides, /entry-level `null` also overrides a top-level batch model/);
   assert.match(overrides, /Set `thinking: null` to ignore the agent's configured thinking level/);
   assert.match(overrides, /Entry-level `null` overrides top-level batch thinking/);
+  assert.match(overrides, /project-agent approval remains required regardless of these overrides/);
 });
 
 test('README documents bounded per-call tool overrides and precedence', () => {
@@ -170,7 +171,9 @@ test('README documents bounded delegated working-directory paths and precedence'
   assert.match(usage, /Use a non-empty `cwd` path .* empty strings are rejected rather than treated as the parent directory/);
   assert.match(usage, /Precedence is entry `cwd`, top-level call `cwd`, agent frontmatter `cwd`, then the parent session directory/);
   assert.match(usage, /Project-agent approval lists the effective resolved child working directories, including dispatch overrides and the parent session fallback/);
-  assert.match(usage, /discovery and approval still use the parent session/);
+  assert.match(usage, /summarizes each requested project's effective model, thinking level, initial tool selection, and runtime deadline/);
+  assert.match(usage, /tool selection is not a sandbox/);
+  assert.match(usage, /Discovery and approval still use the parent session/);
   assert.match(usage, /Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined/);
 });
 

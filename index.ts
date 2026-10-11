@@ -725,6 +725,30 @@ function mergeDispatchOverrides(defaults: DispatchOverrides, entry: DispatchOver
 	};
 }
 
+interface ResolvedAgentSettings {
+	model?: string;
+	thinking?: ThinkingLevel;
+	tools?: string[];
+	timeoutMs?: number;
+}
+
+function resolveAgentSettings(
+	agent: AgentConfig,
+	defaults: DispatchDefaults,
+	overrides: DispatchOverrides,
+	timeoutOverride?: number | null,
+): ResolvedAgentSettings {
+	const inheritsDispatchConfig = overrides.model === null || (overrides.model === undefined && !agent.model);
+	const model = overrides.model === null ? defaults.model
+		: overrides.model !== undefined ? overrides.model.trim() : agent.model ?? defaults.model;
+	const inheritedThinking = inheritsDispatchConfig ? defaults.thinkingLevel : undefined;
+	const thinking = overrides.thinking === null ? inheritedThinking
+		: overrides.thinking ?? agent.thinking ?? inheritedThinking;
+	const tools = overrides.tools === null ? undefined : overrides.tools ?? agent.tools;
+	const timeoutMs = timeoutOverride === null ? undefined : timeoutOverride ?? agent.timeoutMs;
+	return { model, thinking, tools, timeoutMs };
+}
+
 async function runSingleAgent(
 	defaultCwd: string,
 	pool: ProcessPool,
@@ -767,18 +791,12 @@ async function runSingleAgent(
 		};
 	}
 
-	const effectiveTimeoutMs = timeoutMs === null ? undefined : timeoutMs ?? agent.timeoutMs;
+	const settings = resolveAgentSettings(agent, dispatchDefaults, overrides, timeoutMs);
+	const { model, thinking, tools: selectedTools, timeoutMs: effectiveTimeoutMs } = settings;
 	const unsetEnv = parseAgentUnsetEnv([...new Set([...(agent.unsetEnv ?? []), ...(overrides.unsetEnv ?? [])])]) ?? [];
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	const inheritsDispatchConfig = overrides.model === null || (overrides.model === undefined && !agent.model);
-	const model = overrides.model === null ? dispatchDefaults.model
-		: overrides.model !== undefined ? overrides.model.trim() : agent.model ?? dispatchDefaults.model;
 	if (model) args.push("--model", model);
-	const inheritedThinking = inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined;
-	const thinking = overrides.thinking === null ? inheritedThinking
-		: overrides.thinking ?? agent.thinking ?? inheritedThinking;
 	if (thinking) args.push("--thinking", thinking);
-	const selectedTools = overrides.tools === null ? undefined : overrides.tools ?? agent.tools;
 	if (selectedTools !== undefined) {
 		if (selectedTools.length > 0) args.push("--tools", selectedTools.join(","));
 		else args.push("--no-tools");
@@ -2082,9 +2100,35 @@ export default function (pi: ExtensionAPI) {
 						`${displayUntrustedText(agent)}: ${displayUntrustedText(Array.from(names).join(","))}`);
 					const filteredEnvironmentDetails = filteredEnvironment.length
 						? `\nInherited environment variables removed:\n${truncateOutput(filteredEnvironment.join("\n"), 4096, "...")}` : "";
+					const configurationByAgent = new Map<string, Set<string>>();
+					for (let index = 0; index < requested.length; index++) {
+						const agent = agents.find((candidate) => candidate.name === requested[index].agent);
+						if (agent?.source !== "project") continue;
+						const overrides = mergeDispatchOverrides(callOverrides, taskOverrides[index] ?? {});
+						const timeoutOverride = requested[index].timeoutMs !== undefined
+							? requested[index].timeoutMs : params.timeoutMs;
+						const settings = resolveAgentSettings(agent, dispatchDefaults, overrides, timeoutOverride);
+						const model = settings.model
+							? displayUntrustedText(truncateOutput(settings.model, MAX_MODEL_SELECTOR_BYTES, "..."))
+							: "Pi default";
+						const thinking = settings.thinking ?? "model/Pi default";
+						const tools = settings.tools === undefined ? "Pi defaults"
+							: settings.tools.length
+								? displayUntrustedText(truncateOutput(settings.tools.join(", "), 256, "..."))
+								: "none";
+						const timeout = settings.timeoutMs === undefined ? "unbounded" : `${settings.timeoutMs} ms`;
+						const summary = `model=${model}; thinking=${thinking}; initial tools=${tools}; timeout=${timeout}`;
+						const summaries = configurationByAgent.get(agent.name) ?? new Set<string>();
+						summaries.add(summary);
+						configurationByAgent.set(agent.name, summaries);
+					}
+					const configurationLines = Array.from(configurationByAgent, ([agent, summaries]) =>
+						`${displayUntrustedText(agent)}: ${Array.from(summaries).join(" | ")}`);
+					const configurationDetails = configurationLines.length
+						? `\nEffective child configuration (initial tool selection is not a sandbox):\n${truncateOutput(configurationLines.join("\n"), 4096, "...")}` : "";
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}${workingDirectoryDetails}${filteredEnvironmentDetails}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						`Agents: ${names}\nSource: ${dir}${workingDirectoryDetails}${configurationDetails}${filteredEnvironmentDetails}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
 					);
 					if (!ok)
 						return {
