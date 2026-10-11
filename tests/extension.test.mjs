@@ -15,7 +15,16 @@ import { initTheme } from '@earendil-works/pi-coding-agent';
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } = await jiti.import('../capture.ts');
 const { DEFAULT_PROGRESS_UPDATE_INTERVAL_MS } = await jiti.import('../progress.ts');
-const { MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_NAME_BYTES, MAX_AGENT_TOOL_COUNT, MAX_AGENT_TOOL_LIST_BYTES, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS } = await jiti.import('../agents.ts');
+const {
+  MAX_AGENT_DESCRIPTION_BYTES,
+  MAX_AGENT_DIAGNOSTICS,
+  MAX_AGENT_FILES,
+  MAX_AGENT_NAME_BYTES,
+  MAX_AGENT_TOOL_COUNT,
+  MAX_AGENT_TOOL_LIST_BYTES,
+  MAX_MODEL_SELECTOR_BYTES,
+  MAX_TIMEOUT_MS,
+} = await jiti.import('../agents.ts');
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
 const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -2165,6 +2174,29 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
   const maxToolEntry = structuredClone(listing);
   agent(maxToolEntry).tools = ['t'.repeat(MAX_AGENT_TOOL_LIST_BYTES)];
   assert.equal(Value.Check(schema, maxToolEntry), true, 'tool entries at the configured byte limit remain valid');
+});
+
+test('agent listing output schema caps agent and diagnostic collection sizes', async () => {
+  const listing = (await invoke('subagent_agents', {})).structuredContent;
+  const schema = tools.get('subagent_agents').definition.outputSchema;
+  const template = structuredClone(listing.agents[0]);
+
+  const atAgentLimit = structuredClone(listing);
+  atAgentLimit.agents = Array.from({ length: MAX_AGENT_FILES * 2 }, (_, index) => ({ ...template, name: `agent-${index}` }));
+  assert.equal(Value.Check(schema, atAgentLimit), true, 'two bounded sources fit in the listing schema');
+  const tooManyAgents = structuredClone(atAgentLimit);
+  tooManyAgents.agents.push({ ...template, name: 'one-too-many' });
+  assert.equal(Value.Check(schema, tooManyAgents), false, 'agent listings must not exceed both source-directory limits');
+
+  const diagnostic = { filePath: 'agent.md', source: 'user', message: 'Invalid definition.' };
+  const atDiagnosticLimit = structuredClone(listing);
+  atDiagnosticLimit.diagnostics = Array.from({ length: MAX_AGENT_DIAGNOSTICS }, (_, index) => ({
+    ...diagnostic, filePath: `agent-${index}.md`,
+  }));
+  assert.equal(Value.Check(schema, atDiagnosticLimit), true, 'the diagnostic limit remains valid');
+  const tooManyDiagnostics = structuredClone(atDiagnosticLimit);
+  tooManyDiagnostics.diagnostics.push({ ...diagnostic, filePath: 'one-too-many.md' });
+  assert.equal(Value.Check(schema, tooManyDiagnostics), false, 'diagnostics must not exceed their discovery cap');
 });
 
 test('ambiguous and modifier agent tool entries are rejected before child processes launch', async () => {

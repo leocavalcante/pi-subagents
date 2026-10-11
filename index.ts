@@ -34,6 +34,8 @@ import { Type, type Static } from "typebox";
 import {
 	AGENT_NAME_PATTERN,
 	MAX_AGENT_DESCRIPTION_BYTES,
+	MAX_AGENT_DIAGNOSTICS,
+	MAX_AGENT_FILES,
 	MAX_AGENT_NAME_BYTES,
 	MAX_AGENT_TOOL_COUNT,
 	MAX_AGENT_TOOL_LIST_BYTES,
@@ -1415,13 +1417,13 @@ export default function (pi: ExtensionAPI) {
 					uniqueItems: true,
 				})),
 				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
-			}, { additionalProperties: false })),
+			}, { additionalProperties: false }), { maxItems: 2 * MAX_AGENT_FILES }),
 			projectAgentsDir: Type.Union([Type.String(), Type.Null()]),
 			diagnostics: Type.Array(Type.Object({
 				filePath: Type.String(),
 				source: StringEnum(["user", "project"] as const),
 				message: Type.String(),
-			}, { additionalProperties: false })),
+			}, { additionalProperties: false }), { maxItems: MAX_AGENT_DIAGNOSTICS }),
 		}, { additionalProperties: false }),
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async execute(_id, params, _signal, _onUpdate, ctx) {
