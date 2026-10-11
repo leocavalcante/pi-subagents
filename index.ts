@@ -454,7 +454,8 @@ function isFailedResult(result: SingleResult): boolean {
 	return (
 		(result.exitCode !== 0 && result.exitCode !== -1) ||
 		result.stopReason === "error" ||
-		result.stopReason === "aborted"
+		result.stopReason === "aborted" ||
+		result.stopReason === "length"
 	);
 }
 
