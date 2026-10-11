@@ -39,6 +39,7 @@ process.env.SUBAGENT_TEST_TRACE = traceFile;
 mkdirSync(join(sandbox, 'agent/agents'), { recursive: true });
 writeFileSync(join(sandbox, 'agent/agents/worker.md'), '---\nname: worker\ndescription: Test worker\n---\nTest-only instructions.\n');
 writeFileSync(join(sandbox, 'agent/agents/pinned.md'), '---\nname: pinned\ndescription: Pinned worker\nmodel: fake/pinned:high\ntools: [read, bash]\n---\nPinned instructions.\n');
+writeFileSync(join(sandbox, 'agent/agents/env-default.md'), '---\nname: env-default\ndescription: Worker that removes selected inherited environment variables\nunsetEnv: [PI_SUBAGENTS_TEST_AGENT_ENV]\n---\nEnvironment test instructions.\n');
 mkdirSync(join(sandbox, 'project/.pi/agents'), { recursive: true });
 writeFileSync(join(sandbox, 'project/.pi/agents/project.md'), '---\nname: project\ndescription: Project worker\n---\nProject instructions.\n');
 
@@ -1875,6 +1876,125 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
   assert.equal(traces().length, 0, 'a joined path over the limit must be rejected before spawn');
 });
 
+test('unsetEnv filters inherited variables additively for agents, calls, entries, chains, and background jobs', async t => {
+  const variableNames = [
+    'PI_SUBAGENTS_TEST_AGENT_ENV', 'PI_SUBAGENTS_TEST_CALL_ENV',
+    'PI_SUBAGENTS_TEST_ENTRY_ENV', 'PI_SUBAGENTS_TEST_KEEP_ENV',
+  ];
+  const previous = new Map(variableNames.map(name => [name, process.env[name]]));
+  for (const name of variableNames) process.env[name] = `test-only-${name}`;
+  t.after(() => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  const single = await invoke('subagent', {
+    agent: 'env-default', task: 'unset-env single', unsetEnv: ['PI_SUBAGENTS_TEST_CALL_ENV'],
+  });
+  const child = task => traces().find(entry => entry.event === 'start' && entry.task === task);
+  const presence = task => child(task).envPresence;
+  assert.equal(single.details.results[0].exitCode, 0);
+  assert.deepEqual(presence('unset-env single'), {
+    PI_SUBAGENTS_TEST_AGENT_ENV: false,
+    PI_SUBAGENTS_TEST_CALL_ENV: false,
+    PI_SUBAGENTS_TEST_ENTRY_ENV: true,
+    PI_SUBAGENTS_TEST_KEEP_ENV: true,
+  });
+  assert.equal(child('unset-env single').nestingDepth, '1', 'the internal recursion guard must always reach the child');
+
+  const parallel = await invoke('subagent', {
+    unsetEnv: ['PI_SUBAGENTS_TEST_CALL_ENV'],
+    tasks: [
+      { agent: 'worker', task: 'unset-env parallel entry', unsetEnv: ['PI_SUBAGENTS_TEST_ENTRY_ENV'] },
+      { agent: 'env-default', task: 'unset-env parallel default' },
+    ],
+  });
+  assert.equal(parallel.details.results.every(result => result.exitCode === 0), true);
+  assert.deepEqual(presence('unset-env parallel entry'), {
+    PI_SUBAGENTS_TEST_AGENT_ENV: true,
+    PI_SUBAGENTS_TEST_CALL_ENV: false,
+    PI_SUBAGENTS_TEST_ENTRY_ENV: false,
+    PI_SUBAGENTS_TEST_KEEP_ENV: true,
+  });
+  assert.deepEqual(presence('unset-env parallel default'), {
+    PI_SUBAGENTS_TEST_AGENT_ENV: false,
+    PI_SUBAGENTS_TEST_CALL_ENV: false,
+    PI_SUBAGENTS_TEST_ENTRY_ENV: true,
+    PI_SUBAGENTS_TEST_KEEP_ENV: true,
+  });
+
+  const chain = await invoke('subagent', {
+    unsetEnv: ['PI_SUBAGENTS_TEST_CALL_ENV'],
+    chain: [
+      { agent: 'worker', task: 'unset-env chain first' },
+      { agent: 'env-default', task: 'unset-env chain second', unsetEnv: ['PI_SUBAGENTS_TEST_ENTRY_ENV'] },
+    ],
+  });
+  assert.equal(chain.details.results.every(result => result.exitCode === 0), true);
+  assert.equal(presence('unset-env chain first').PI_SUBAGENTS_TEST_CALL_ENV, false);
+  assert.equal(presence('unset-env chain first').PI_SUBAGENTS_TEST_ENTRY_ENV, true);
+  assert.deepEqual(presence('unset-env chain second'), {
+    PI_SUBAGENTS_TEST_AGENT_ENV: false,
+    PI_SUBAGENTS_TEST_CALL_ENV: false,
+    PI_SUBAGENTS_TEST_ENTRY_ENV: false,
+    PI_SUBAGENTS_TEST_KEEP_ENV: true,
+  });
+
+  const background = await invoke('subagent', {
+    agent: 'env-default', task: 'unset-env background', unsetEnv: ['PI_SUBAGENTS_TEST_CALL_ENV'],
+    background: true, notify: false,
+  });
+  assert.equal((await finish(background.details.background.id)).state, 'completed');
+  assert.equal(presence('unset-env background').PI_SUBAGENTS_TEST_AGENT_ENV, false);
+  assert.equal(presence('unset-env background').PI_SUBAGENTS_TEST_CALL_ENV, false);
+  assert.equal(presence('unset-env background').PI_SUBAGENTS_TEST_KEEP_ENV, true);
+
+  const listing = await invoke('subagent_agents', {});
+  assert.deepEqual(listing.details.agents.find(agent => agent.name === 'env-default').unsetEnv, ['PI_SUBAGENTS_TEST_AGENT_ENV']);
+  assert.match(listing.content[0].text, /unsetEnv=/);
+});
+
+test('unsetEnv bounds names and rejects malformed or internal variables before approval or spawn', async () => {
+  let approvals = 0;
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async () => { approvals++; return true; } } };
+  const schema = tools.get('subagent').definition.parameters;
+  const invalid = [
+    { agent: 'project', task: 'bad env name', agentScope: 'project', unsetEnv: ['BAD=NAME'] },
+    { agent: 'project', task: 'bad env name', agentScope: 'project', unsetEnv: ['bad-name'] },
+    { tasks: [{ agent: 'project', task: 'reserved env name', unsetEnv: ['pi_subagents_nesting_depth'] }], agentScope: 'project' },
+    { chain: [{ agent: 'project', task: 'invalid env name', unsetEnv: ['1BAD'] }], agentScope: 'project' },
+    { agent: 'project', task: 'overlong env name', agentScope: 'project', unsetEnv: ['x'.repeat(4097)] },
+  ];
+  assert.equal(Value.Check(schema, invalid[0]), false, 'the schema rejects names outside the portable environment-name syntax');
+  assert.equal(Value.Check(schema, invalid[2]), true, 'the internal variable is reserved by runtime validation');
+  for (const params of invalid) {
+    const result = await invoke('subagent', params, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /unsetEnv/);
+  }
+  assert.equal(approvals, 0);
+  assert.equal(traces().length, 0);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'valid', unsetEnv: ['AWS_SECRET_ACCESS_KEY'] }), true);
+  assert.equal(Value.Check(schema, invalid[4]), true, 'individual byte limits are checked by the bounded runtime parser');
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', unsetEnv: Array.from({ length: 129 }, (_, i) => `ENV_${i}`) }), false);
+
+  const fullList = Array.from({ length: 128 }, (_, index) => `FILTER_${index}`);
+  const configPath = join(sandbox, 'project/.pi/agents/full-env-list.md');
+  writeFileSync(configPath, `---\nname: full-env-list\ndescription: Full inherited environment filter\nunsetEnv: ${JSON.stringify(fullList)}\n---\nTest.\n`);
+  try {
+    const combined = await invoke('subagent', {
+      agent: 'full-env-list', task: 'combined env filter', agentScope: 'project', unsetEnv: ['ADDITIONAL_FILTER'],
+    }, context);
+    assert.equal(combined.isError, true);
+    assert.match(combined.content[0].text, /Invalid effective unsetEnv configuration/);
+    assert.equal(approvals, 0, 'combined limits must be enforced before project approval');
+    assert.equal(traces().length, 0, 'oversized combined filters must not spawn');
+  } finally { rmSync(configPath, { force: true }); }
+});
+
 test('top-level cwd defaults parallel and chain children while entry directories override it', async () => {
   const alternate = join(sandbox, 'alternate');
   mkdirSync(alternate, { recursive: true });
@@ -2056,7 +2176,7 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
     const result = await invoke('subagent_agents', {});
     assert.match(result.content[0].text, /worker.*Test worker/);
     assert.match(result.content[0].text, /broken.md/);
-    assert.deepEqual(result.details.agents.map(a => a.name), ['pinned', 'worker']);
+    assert.deepEqual(result.details.agents.map(a => a.name), ['env-default', 'pinned', 'worker']);
     assert.ok(result.details.agents.every(a => a.systemPrompt === undefined));
     assert.equal(result.details.diagnostics.length, 1);
     assert.deepEqual(result.structuredContent, result.details);
@@ -2687,16 +2807,20 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
   const configuredAgentFile = join(sandbox, 'project/.pi/agents/project-cwd.md');
   const configuredDirectory = join(sandbox, 'project/configured-cwd');
   mkdirSync(configuredDirectory, { recursive: true });
-  writeFileSync(configuredAgentFile, '---\nname: project-cwd\ndescription: Project working directory\ncwd: configured-cwd\n---\nProject cwd worker.\n');
+  writeFileSync(configuredAgentFile, '---\nname: project-cwd\ndescription: Project working directory\ncwd: configured-cwd\nunsetEnv: [PI_SUBAGENTS_PROJECT_TEST_ENV]\n---\nProject cwd worker.\n');
   try {
     const cwdApproved = await invoke('subagent', {
       agent: 'project-cwd', task: 'project cwd still requires approval', agentScope: 'project',
+      unsetEnv: ['PI_SUBAGENTS_TEST_CALL_ENV'],
     }, context);
     assert.notEqual(cwdApproved.isError, true);
     assert.equal(cwdApproved.details.projectAgentsDir, join(sandbox, 'project/.pi/agents'));
     assert.equal(approvals, 2, 'a configured child cwd must not bypass project-agent approval');
     assert.match(confirmation, /Configured child working directories:/);
     assert.ok(confirmation.includes('configured-cwd'), 'the approval prompt should disclose the configured child directory');
+    assert.match(confirmation, /Inherited environment variables removed:/);
+    assert.ok(confirmation.includes('PI_SUBAGENTS_PROJECT_TEST_ENV'));
+    assert.ok(confirmation.includes('PI_SUBAGENTS_TEST_CALL_ENV'));
     assert.equal(traces().filter(entry => entry.event === 'start').length, 2);
     assert.equal(traces().find(entry => entry.task === 'project cwd still requires approval').cwd, configuredDirectory);
   } finally { rmSync(configuredAgentFile, { force: true }); }

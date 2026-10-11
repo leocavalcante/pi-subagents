@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
 
-const { discoverAgents, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS, MAX_WORKING_DIRECTORY_LENGTH } = await jiti.import('../agents.ts');
+const { discoverAgents, parseAgentUnsetEnv, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_AGENT_UNSET_ENV_BYTES, MAX_AGENT_UNSET_ENV_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS, MAX_WORKING_DIRECTORY_LENGTH } = await jiti.import('../agents.ts');
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
@@ -201,6 +201,21 @@ test('agent filename precedence and name ordering are locale-independent', () =>
   const result = discoverAgents(cwd, 'user');
   assert.deepEqual(result.agents.map(a => a.name), ['a', 'aa', 'worker', 'z', 'á']);
   assert.equal(result.agents.find(a => a.name === 'worker').description, 'Underscore filename');
+});
+
+test('agent unsetEnv configuration accepts bounded portable variable names and rejects the recursion guard', () => {
+  assert.equal(parseAgentUnsetEnv(undefined), undefined);
+  assert.deepEqual(parseAgentUnsetEnv([]), []);
+  assert.deepEqual(parseAgentUnsetEnv(['AWS_SECRET_ACCESS_KEY', 'HOME', 'AWS_SECRET_ACCESS_KEY']),
+    ['AWS_SECRET_ACCESS_KEY', 'HOME'], 'exact duplicate names are removed while order is preserved');
+  assert.equal(parseAgentUnsetEnv(['x'.repeat(MAX_AGENT_UNSET_ENV_BYTES)])[0].length, MAX_AGENT_UNSET_ENV_BYTES);
+  assert.equal(parseAgentUnsetEnv(Array.from({ length: MAX_AGENT_UNSET_ENV_COUNT }, (_, index) => `ENV_${index}`)).length,
+    MAX_AGENT_UNSET_ENV_COUNT);
+  for (const value of [
+    null, 'AWS_SECRET_ACCESS_KEY', Array.from({ length: MAX_AGENT_UNSET_ENV_COUNT + 1 }, (_, index) => `ENV_${index}`),
+    [''], ['1INVALID'], ['HAS-DASH'], ['HAS=EQUALS'], ['PI_SUBAGENTS_NESTING_DEPTH'], ['pi_subagents_nesting_depth'],
+    ['x'.repeat(MAX_AGENT_UNSET_ENV_BYTES + 1)], ['A'.repeat(MAX_AGENT_UNSET_ENV_BYTES / 2), 'B'.repeat(MAX_AGENT_UNSET_ENV_BYTES / 2)],
+  ]) assert.throws(() => parseAgentUnsetEnv(value), /unsetEnv/);
 });
 
 test('model selectors are byte-bounded before becoming child arguments', () => {

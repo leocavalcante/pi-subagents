@@ -72,18 +72,19 @@ test('README documents bounded agent descriptions', () => {
 
 test('README documents the agent configuration exposed by discovery', () => {
   const usage = section('Usage');
-  assert.match(usage, /model, thinking, tool settings, configured timeout and working-directory defaults/);
-  assert.match(usage, /configured timeout and working-directory defaults/);
+  assert.match(usage, /model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults/);
+  assert.match(usage, /configured timeout, working-directory and filtered-environment defaults/);
 });
 
-test('README documents agent timeout defaults and precedence', () => {
+test('README documents agent timeout and environment-removal defaults and precedence', () => {
   const agents = section('Agent definitions');
   const usage = section('Usage');
   const deadlines = section('Task deadlines');
-  assert.match(agents, /default `timeoutMs`, and a default working directory with `cwd` in its frontmatter/);
+  assert.match(agents, /default `timeoutMs`, a default working directory with `cwd`, and inherited environment variables to remove with `unsetEnv` in its frontmatter/);
   assert.match(agents, /Agent `cwd` defaults must be non-empty, well-formed Unicode paths with no NUL characters/);
   assert.match(agents, /convenience, not a filesystem sandbox, and does not restrict access to other paths/);
-  assert.match(usage, /configured timeout and working-directory defaults/);
+  assert.match(agents, /Agent `unsetEnv` defaults list portable environment-variable names/);
+  assert.match(usage, /configured timeout, working-directory and filtered-environment defaults/);
   assert.match(agents, /whole milliseconds from 1 to 86400000 \(24 hours\)/);
   assert.match(deadlines, /a per-entry or top-level call value overrides it/);
   assert.match(deadlines, /Set `timeoutMs` to `null` on a call or entry to explicitly disable that deadline/);
@@ -181,11 +182,20 @@ test('README documents mandatory approval for untrusted project agents', () => {
   assert.match(security, /Approval cannot be disabled through a tool argument/);
 });
 
-test('README warns that delegated children inherit environment variables', () => {
+test('README documents inherited environment filtering without describing it as a sandbox', () => {
+  const agents = section('Agent definitions');
+  const filtering = section('Inherited environment filtering');
   const security = section('Security');
-  assert.match(security, /child `pi` process also inherits the parent process's environment/);
-  assert.match(security, /Credentials and other secrets stored there are available to code running in the delegated process and, unless a child tool removes them, its subprocesses/);
-  assert.match(security, /do not rely on environment variables to keep secrets from delegated work/);
+  assert.match(agents, /inherited environment variables to remove with `unsetEnv`/);
+  assert.match(agents, /at most 128 names and 4 KiB total/);
+  assert.match(filtering, /combine additively/);
+  assert.match(filtering, /applied case-insensitively on Windows/);
+  assert.match(filtering, /PI_SUBAGENTS_NESTING_DEPTH/);
+  assert.match(filtering, /Agent listings and project-agent approval prompts show variable names, never their values/);
+  assert.match(filtering, /only filters variables inherited at child startup; it is not a sandbox/);
+  assert.match(security, /child `pi` process inherits the parent process's environment by default/);
+  assert.match(security, /Use `unsetEnv` to omit known variables from the child's startup environment/);
+  assert.match(security, /do not rely on environment filtering as a security boundary/);
 });
 
 test('README documents temporary system-prompt storage and platform permissions', () => {

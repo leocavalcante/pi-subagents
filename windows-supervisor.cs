@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -12,6 +13,7 @@ internal static class WindowsSupervisor
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint CreateSuspended = 0x00000004;
     private const uint CreateNoWindow = 0x08000000;
+    private const uint CreateUnicodeEnvironment = 0x00000400;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint StartfUseShowWindow = 0x00000001;
     private const uint StartfUseStdHandles = 0x00000100;
@@ -151,6 +153,13 @@ internal static class WindowsSupervisor
 
     [DllImport("kernel32.dll", EntryPoint = "GetStdHandle", SetLastError = true)]
     private static extern IntPtr GetStandardHandle(int standardHandle);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetEnvironmentStringsW", SetLastError = true)]
+    private static extern IntPtr GetEnvironmentStrings();
+
+    [DllImport("kernel32.dll", EntryPoint = "FreeEnvironmentStringsW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FreeEnvironmentStrings(IntPtr environment);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -296,7 +305,51 @@ internal static class WindowsSupervisor
         }
     }
 
-    private static bool CreateSuspendedChild(string[] arguments, string workingDirectory, out ProcessInformation processInformation)
+    private static IntPtr CreateFilteredEnvironmentBlock(string unsetEnvironmentVariables)
+    {
+        var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in unsetEnvironmentVariables.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (name.Length == 0 || !((name[0] >= 'A' && name[0] <= 'Z') ||
+                (name[0] >= 'a' && name[0] <= 'z') || name[0] == '_')) return IntPtr.Zero;
+            for (var index = 1; index < name.Length; index++)
+            {
+                var character = name[index];
+                if (!((character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') ||
+                    (character >= '0' && character <= '9') || character == '_')) return IntPtr.Zero;
+            }
+            if (String.Equals(name, "PI_SUBAGENTS_NESTING_DEPTH", StringComparison.OrdinalIgnoreCase)) return IntPtr.Zero;
+            excluded.Add(name);
+        }
+
+        var environment = GetEnvironmentStrings();
+        if (environment == IntPtr.Zero) return IntPtr.Zero;
+        try
+        {
+            var entries = new List<string>();
+            var current = environment;
+            while (true)
+            {
+                var entry = Marshal.PtrToStringUni(current);
+                if (String.IsNullOrEmpty(entry)) break;
+                current = IntPtr.Add(current, (entry.Length + 1) * 2);
+                var separator = entry[0] == '=' ? entry.IndexOf('=', 1) : entry.IndexOf('=');
+                if (separator < 0) return IntPtr.Zero;
+                var name = entry.Substring(0, separator);
+                if (!excluded.Contains(name)) entries.Add(entry);
+            }
+            entries.Sort(StringComparer.OrdinalIgnoreCase);
+            var block = String.Join("\0", entries.ToArray()) + "\0\0";
+            return Marshal.StringToHGlobalUni(block);
+        }
+        finally
+        {
+            FreeEnvironmentStrings(environment);
+        }
+    }
+
+    private static bool CreateSuspendedChild(string[] arguments, string workingDirectory, string unsetEnvironmentVariables,
+        out ProcessInformation processInformation)
     {
         processInformation = new ProcessInformation();
         IntPtr[] standardHandles;
@@ -304,6 +357,7 @@ internal static class WindowsSupervisor
 
         IntPtr attributeList = IntPtr.Zero;
         IntPtr handleList = IntPtr.Zero;
+        IntPtr environmentBlock = IntPtr.Zero;
         var attributeListInitialized = false;
         try
         {
@@ -331,15 +385,23 @@ internal static class WindowsSupervisor
 
             var commandLine = new StringBuilder(BuildCommandLine(arguments));
             if (commandLine.Length >= 32767) return false;
+            if (!String.IsNullOrEmpty(unsetEnvironmentVariables))
+            {
+                environmentBlock = CreateFilteredEnvironmentBlock(unsetEnvironmentVariables);
+                if (environmentBlock == IntPtr.Zero) return false;
+            }
             var command = arguments[0];
+            var creationFlags = CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent;
+            if (environmentBlock != IntPtr.Zero) creationFlags |= CreateUnicodeEnvironment;
             return CreateProcess(command, commandLine, IntPtr.Zero, IntPtr.Zero, true,
-                CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent, IntPtr.Zero,
+                creationFlags, environmentBlock,
                 workingDirectory, ref startup, out processInformation);
         }
         finally
         {
             CloseDuplicatedHandles(standardHandles);
             if (attributeListInitialized) DeleteProcThreadAttributeList(attributeList);
+            if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
             if (handleList != IntPtr.Zero) Marshal.FreeHGlobal(handleList);
             if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);
         }
@@ -377,11 +439,12 @@ internal static class WindowsSupervisor
 
     public static int Main(string[] arguments)
     {
-        if (arguments.Length < 2) return FailClosed();
+        if (arguments.Length < 3) return FailClosed();
         var workingDirectory = arguments[1];
-        var childArguments = new string[arguments.Length - 1];
+        var unsetEnvironmentVariables = arguments[2];
+        var childArguments = new string[arguments.Length - 2];
         childArguments[0] = arguments[0];
-        Array.Copy(arguments, 2, childArguments, 1, arguments.Length - 2);
+        Array.Copy(arguments, 3, childArguments, 1, arguments.Length - 3);
 
         IntPtr outerJob = IntPtr.Zero;
         IntPtr innerJob = IntPtr.Zero;
@@ -409,7 +472,7 @@ internal static class WindowsSupervisor
             FailureStage = "inner job configuration";
             if (!ConfigureKillOnClose(innerJob)) return FailClosed();
             FailureStage = "suspended child creation";
-            if (!CreateSuspendedChild(childArguments, workingDirectory, out processInformation)) return FailClosed();
+            if (!CreateSuspendedChild(childArguments, workingDirectory, unsetEnvironmentVariables, out processInformation)) return FailClosed();
 
             // The suspended child is already a member of the outer Job Object, so
             // abrupt supervisor death during this assignment cannot orphan it.

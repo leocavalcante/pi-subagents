@@ -39,10 +39,14 @@ import {
 	MAX_AGENT_NAME_BYTES,
 	MAX_AGENT_TOOL_COUNT,
 	MAX_AGENT_TOOL_LIST_BYTES,
+	MAX_AGENT_UNSET_ENV_BYTES,
+	MAX_AGENT_UNSET_ENV_COUNT,
 	MAX_MODEL_SELECTOR_BYTES,
+	ENVIRONMENT_VARIABLE_NAME_PATTERN,
 	MAX_TIMEOUT_MS,
 	MAX_WORKING_DIRECTORY_LENGTH,
 	parseAgentToolList,
+	parseAgentUnsetEnv,
 	type AgentConfig,
 	type AgentScope,
 	discoverAgents,
@@ -648,11 +652,21 @@ function getWindowsSupervisor(): Promise<string> {
 	return windowsSupervisorState.promise;
 }
 
-async function getChildInvocation(args: string[], cwd: string, signal?: AbortSignal): Promise<{ command: string; args: string[] }> {
+async function getChildInvocation(args: string[], cwd: string, unsetEnv: string[], signal?: AbortSignal): Promise<{ command: string; args: string[] }> {
 	const invocation = getPiInvocation(args);
 	if (process.platform !== "win32") return invocation;
 	const supervisor = await waitWithAbort(getWindowsSupervisor(), signal);
-	return { command: supervisor, args: [invocation.command, cwd, ...invocation.args] };
+	return { command: supervisor, args: [invocation.command, cwd, unsetEnv.join(";"), ...invocation.args] };
+}
+
+function createChildEnvironment(unsetEnv: string[]): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	if (process.platform !== "win32") {
+		for (const name of unsetEnv) delete env[name];
+	}
+	// Apply the internal recursion guard after filtering; it is not caller-controlled.
+	env[SUBAGENT_NESTING_DEPTH_ENV] = String(getSubagentNestingDepth() + 1);
+	return env;
 }
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
@@ -666,12 +680,14 @@ interface DispatchOverrides {
 	model?: string | null;
 	thinking?: ThinkingLevel | null;
 	tools?: string[] | null;
+	unsetEnv?: string[];
 }
 
 interface DispatchOverrideInput {
 	model?: string | null;
 	thinking?: ThinkingLevel | null;
 	tools?: unknown;
+	unsetEnv?: unknown;
 }
 
 function normalizeDispatchOverrides(overrides: DispatchOverrideInput): DispatchOverrides {
@@ -680,6 +696,7 @@ function normalizeDispatchOverrides(overrides: DispatchOverrideInput): DispatchO
 		thinking: overrides.thinking,
 		tools: overrides.tools === undefined || overrides.tools === null
 			? overrides.tools : parseAgentToolList(overrides.tools),
+		unsetEnv: parseAgentUnsetEnv(overrides.unsetEnv),
 	};
 }
 
@@ -688,6 +705,7 @@ function mergeDispatchOverrides(defaults: DispatchOverrides, entry: DispatchOver
 		model: entry.model !== undefined ? entry.model : defaults.model,
 		thinking: entry.thinking !== undefined ? entry.thinking : defaults.thinking,
 		tools: entry.tools !== undefined ? entry.tools : defaults.tools,
+		unsetEnv: [...new Set([...(defaults.unsetEnv ?? []), ...(entry.unsetEnv ?? [])])],
 	};
 }
 
@@ -734,6 +752,7 @@ async function runSingleAgent(
 	}
 
 	const effectiveTimeoutMs = timeoutMs === null ? undefined : timeoutMs ?? agent.timeoutMs;
+	const unsetEnv = parseAgentUnsetEnv([...new Set([...(agent.unsetEnv ?? []), ...(overrides.unsetEnv ?? [])])]) ?? [];
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	const inheritsDispatchConfig = overrides.model === null || (overrides.model === undefined && !agent.model);
 	const model = overrides.model === null ? dispatchDefaults.model
@@ -862,7 +881,7 @@ async function runSingleAgent(
 		currentResult.capture = {};
 
 		setupPhase = process.platform === "win32" ? "preparing Windows process supervisor" : "launching child process";
-		const invocation = await getChildInvocation(args, resolvedCwd, signal);
+		const invocation = await getChildInvocation(args, resolvedCwd, unsetEnv, signal);
 		signal?.throwIfAborted();
 		setupPhase = "launching child process";
 		const exitCode = await new Promise<number>((resolve) => {
@@ -871,10 +890,7 @@ async function runSingleAgent(
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
 				windowsHide: process.platform === "win32",
-				env: {
-					...process.env,
-					[SUBAGENT_NESTING_DEPTH_ENV]: String(getSubagentNestingDepth() + 1),
-				},
+				env: createChildEnvironment(unsetEnv),
 				// On POSIX, cancel the entire group, including tools spawned by the child.
 				detached: process.platform !== "win32",
 			});
@@ -1183,6 +1199,11 @@ const DispatchTimeoutSchema = Type.Union([TimeoutSchema, Type.Null()], {
 });
 
 const DispatchOptions = {
+	unsetEnv: Type.Optional(Type.Array(Type.String({ pattern: ENVIRONMENT_VARIABLE_NAME_PATTERN }), {
+		maxItems: MAX_AGENT_UNSET_ENV_COUNT,
+		uniqueItems: true,
+		description: `Additional inherited child environment variable names to remove. Removal is additive with agent defaults and other dispatch levels; cannot remove the internal nesting guard. Maximum ${MAX_AGENT_UNSET_ENV_COUNT} names and ${MAX_AGENT_UNSET_ENV_BYTES} bytes.`,
+	})),
 	model: Type.Optional(Type.Union([
 		Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
 			description: `Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes; maximum ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` }),
@@ -1221,10 +1242,10 @@ const WorkingDirectory = Type.String({
 	description: `Working directory for the child process. Precedence: entry, top-level call, agent default, then parent session directory. Relative paths resolve from the parent session's working directory. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
 });
 
-const TASK_ITEM_KEYS = ["model", "thinking", "tools", "agent", "task", "timeoutMs", "cwd"] as const;
-const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "id", "agent", "task", "timeoutMs", "cwd"] as const;
+const TASK_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "agent", "task", "timeoutMs", "cwd"] as const;
+const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "id", "agent", "task", "timeoutMs", "cwd"] as const;
 const SUBAGENT_TOOL_KEYS = [
-	"model", "thinking", "tools", "background", "notify", "agent", "task", "tasks", "chain",
+	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
 const AGENT_TOOL_KEYS = ["agentScope"] as const;
@@ -1433,7 +1454,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
-			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Defaults to personal agents; use agentScope to include project agents.`,
+			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
 		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }, { additionalProperties: false }),
 		outputSchema: Type.Object({
@@ -1450,6 +1471,11 @@ export default function (pi: ExtensionAPI) {
 				tools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: MAX_AGENT_TOOL_LIST_BYTES }), {
 					maxItems: MAX_AGENT_TOOL_COUNT,
 					uniqueItems: true,
+				})),
+				unsetEnv: Type.Optional(Type.Array(Type.String({ pattern: ENVIRONMENT_VARIABLE_NAME_PATTERN }), {
+					maxItems: MAX_AGENT_UNSET_ENV_COUNT,
+					uniqueItems: true,
+					description: `Inherited child environment variable names to remove; values are never listed. Maximum ${MAX_AGENT_UNSET_ENV_COUNT} names and ${MAX_AGENT_UNSET_ENV_BYTES} bytes.`,
 				})),
 				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
 				cwd: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_WORKING_DIRECTORY_LENGTH,
@@ -1497,6 +1523,7 @@ export default function (pi: ExtensionAPI) {
 				...(agent.model !== undefined ? { model: agent.model } : {}),
 				...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
 				...(agent.tools !== undefined ? { tools: agent.tools } : {}),
+				...(agent.unsetEnv !== undefined ? { unsetEnv: agent.unsetEnv } : {}),
 				...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
 				...(agent.cwd !== undefined ? { cwd: agent.cwd } : {}),
 			}));
@@ -1505,6 +1532,7 @@ export default function (pi: ExtensionAPI) {
 					a.model && `model=${displayUntrustedText(a.model)}`,
 					a.thinking && `thinking=${a.thinking}`,
 					a.tools && `tools=${displayUntrustedText(a.tools.length ? a.tools.join(",") : "none")}`,
+					a.unsetEnv && `unsetEnv=${displayUntrustedText(a.unsetEnv.length ? a.unsetEnv.join(",") : "none")}`,
 					a.timeoutMs !== undefined && `timeoutMs=${a.timeoutMs}`,
 					a.cwd !== undefined && `cwd=${displayUntrustedText(a.cwd)}`,
 				].filter(Boolean).join("; ");
@@ -1670,7 +1698,7 @@ export default function (pi: ExtensionAPI) {
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			`Extension-mediated nested subagent calls are limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive delegation.`,
-			"Set model, thinking, or tools to override agent configuration. Use null to ignore an agent's configured model, thinking, or tool allowlist. Parallel/chain entries override batch defaults.",
+			"Set model, thinking, or tools to override agent configuration. Use null to ignore an agent's configured model, thinking, or tool allowlist. unsetEnv removes additional inherited environment variables from child processes; agent, batch, and entry lists combine additively. Parallel/chain entries override batch defaults for model, thinking, and tools.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project"). Untrusted projects require UI approval or Pi project trust; tool arguments cannot bypass this.`,
@@ -1845,7 +1873,7 @@ export default function (pi: ExtensionAPI) {
 				normalizedConfigurations = configurations.map(normalizeDispatchOverrides);
 			} catch (error) {
 				return {
-					content: [{ type: "text", text: `Invalid tools override: ${error instanceof Error ? error.message : "invalid tool selection."}` }],
+					content: [{ type: "text", text: `Invalid tools override or unsetEnv filter: ${error instanceof Error ? error.message : "invalid configuration."}` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
@@ -1918,6 +1946,20 @@ export default function (pi: ExtensionAPI) {
 					};
 			}
 
+			let effectiveUnsetEnv: string[][];
+			try {
+				effectiveUnsetEnv = requested.map((item, index) => {
+					const agent = agents.find((candidate) => candidate.name === item.agent)!;
+					const dispatch = mergeDispatchOverrides(callOverrides, taskOverrides[index] ?? {});
+					return parseAgentUnsetEnv([...new Set([...(agent.unsetEnv ?? []), ...(dispatch.unsetEnv ?? [])])]) ?? [];
+				});
+			} catch (error) {
+				return {
+					content: [{ type: "text", text: `Invalid effective unsetEnv configuration: ${error instanceof Error ? error.message : "invalid environment variable list."}` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+
 			if (getSubagentNestingDepth() >= MAX_SUBAGENT_NESTING_DEPTH) {
 				return {
 					content: [{
@@ -1954,9 +1996,21 @@ export default function (pi: ExtensionAPI) {
 						.map((agent) => `${displayUntrustedText(agent.name)}: ${displayUntrustedText(truncateOutput(agent.cwd!, 256, "..."))}`);
 					const workingDirectoryDetails = workingDirectories.length
 						? `\nConfigured child working directories:\n${truncateOutput(workingDirectories.join("\n"), 4096, "...")}` : "";
+					const environmentByAgent = new Map<string, Set<string>>();
+					for (let index = 0; index < requested.length; index++) {
+						const agent = agents.find((candidate) => candidate.name === requested[index].agent);
+						if (agent?.source !== "project") continue;
+						const names = environmentByAgent.get(agent.name) ?? new Set<string>();
+						for (const name of effectiveUnsetEnv[index]) names.add(name);
+						environmentByAgent.set(agent.name, names);
+					}
+					const filteredEnvironment = Array.from(environmentByAgent, ([agent, names]) =>
+						`${displayUntrustedText(agent)}: ${displayUntrustedText(Array.from(names).join(","))}`);
+					const filteredEnvironmentDetails = filteredEnvironment.length
+						? `\nInherited environment variables removed:\n${truncateOutput(filteredEnvironment.join("\n"), 4096, "...")}` : "";
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}${workingDirectoryDetails}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						`Agents: ${names}\nSource: ${dir}${workingDirectoryDetails}${filteredEnvironmentDetails}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
 					);
 					if (!ok)
 						return {
