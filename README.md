@@ -200,7 +200,11 @@ Set `timeoutMs` to bound a child's runtime:
 }
 ```
 
-There is no deadline by default. Numeric values must be whole milliseconds between 1 and 86400000, up to 24 hours. The timer starts at child spawn; permission prompts, prompt-file preparation, and waiting for a process slot do not count. An agent definition may set `timeoutMs` as its default, shown by `subagent_agents`; a per-entry or top-level call value overrides it. Set `timeoutMs` to `null` on a call or entry to explicitly disable that deadline, including any lower-priority default. Omitted values inherit by precedence: entry, top-level call, agent frontmatter, then no deadline.
+There is no deadline by default. Numeric values must be whole milliseconds between 1 and 86400000, up to 24 hours. The timer starts at child spawn; permission prompts, prompt-file preparation, and waiting for a process slot do not count.
+
+On Windows, first-use supervisor compilation also happens before child spawn and is outside the deadline. Cancellation during that compilation stops the caller's wait but does not stop the shared compilation, so later invocations in the same runtime wait for it too.
+
+An agent definition may set `timeoutMs` as its default, shown by `subagent_agents`; a per-entry or top-level call value overrides it. Set `timeoutMs` to `null` on a call or entry to explicitly disable that deadline, including any lower-priority default. Omitted values inherit by precedence: entry, top-level call, agent frontmatter, then no deadline.
 
 For parallel and chain modes, a top-level `timeoutMs` is the default for each child, not a deadline for the entire batch. An entry's `timeoutMs` overrides that default; an entry set to `null` opts that child out. Deadlines also work with background execution.
 

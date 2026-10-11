@@ -174,6 +174,13 @@ test('README documents bounded UUID job identifiers', () => {
   assert.match(background, /Job IDs are generated UUIDs \(36 characters\); `jobId` inputs are bounded to that length/);
 });
 
+test('README documents that Windows supervisor compilation is outside child deadlines', () => {
+  const deadlines = section('Task deadlines');
+  assert.match(deadlines, /first-use supervisor compilation also happens before child spawn and is outside the deadline/);
+  assert.match(deadlines, /Cancellation during that compilation stops the caller's wait but does not stop the shared compilation/);
+  assert.match(deadlines, /later invocations in the same runtime wait for it too/);
+});
+
 test('README documents timeout metadata on background output pages', () => {
   const output = section('Read captured job output');
   assert.match(output, /`output\.timedOut` indicates whether the runtime deadline fired/);
