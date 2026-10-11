@@ -29,7 +29,7 @@ test('README documents an available installation method', () => {
 });
 
 test('npm package includes required runtime support files', () => {
-  for (const file of ['windows-supervisor.cs', 'temporary-files.ts']) {
+  for (const file of ['windows-supervisor.cs', 'temporary-files.ts', 'abort.ts']) {
     assert.ok(packageJson.files.includes(file), `Package files must include ${file}`);
   }
 });

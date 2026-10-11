@@ -74,6 +74,7 @@ import { normalizeUsage, sumUsage } from "./usage.ts";
 import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
 import { isWellFormedUnicode } from "./unicode.ts";
 import { ProgressUpdateLimiter } from "./progress.ts";
+import { waitWithAbort } from "./abort.ts";
 import { removeTemporaryDirectory, trackTemporaryDirectory } from "./temporary-files.ts";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -643,26 +644,6 @@ function getWindowsSupervisor(): Promise<string> {
 		});
 	}
 	return windowsSupervisorState.promise;
-}
-
-function waitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-	if (!signal) return promise;
-	signal.throwIfAborted();
-	return new Promise<T>((resolve, reject) => {
-		const cleanup = () => signal.removeEventListener("abort", onAbort);
-		const onAbort = () => {
-			cleanup();
-			reject(signal.reason ?? new Error("Subagent was aborted"));
-		};
-		signal.addEventListener("abort", onAbort, { once: true });
-		promise.then((value) => {
-			cleanup();
-			resolve(value);
-		}, (error) => {
-			cleanup();
-			reject(error);
-		});
-	});
 }
 
 async function getChildInvocation(args: string[], cwd: string, signal?: AbortSignal): Promise<{ command: string; args: string[] }> {
