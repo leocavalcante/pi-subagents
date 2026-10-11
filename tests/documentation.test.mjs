@@ -199,6 +199,16 @@ test('README documents aggregate capture limits for parallel and chained results
   assert.match(capture, /Child stdout is capped at 128 MiB per task/);
 });
 
+test('README documents Pi interrupt-key behavior for foreground and background jobs', () => {
+  const usage = section('Usage');
+  const background = section('Background execution');
+  assert.match(usage, /configured interrupt key \(Escape by default in Pi 1\.1\) to cancel a foreground subagent operation/);
+  assert.match(usage, /Ctrl\+C is Pi's `app\.clear` binding .* not its interrupt key, and does not cancel a foreground subagent/);
+  assert.doesNotMatch(usage, /Ctrl\+C cancels foreground child processes/);
+  assert.match(background, /Ctrl\+C on the parent's turn does not cancel them/);
+  assert.match(background, /Use `subagent_jobs` to cancel a job/);
+});
+
 test('README documents bounded UUID job identifiers', () => {
   const background = section('Background execution');
   assert.match(background, /Job IDs are generated UUIDs \(36 characters\); `jobId` inputs are bounded to that length/);
