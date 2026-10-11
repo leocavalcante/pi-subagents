@@ -119,6 +119,9 @@ test('README documents the agent configuration exposed by discovery', () => {
   const usage = section('Usage');
   assert.match(usage, /model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults/);
   assert.match(usage, /configured timeout, working-directory and filtered-environment defaults/);
+  assert.match(usage, /paginated in groups of at most 10/);
+  assert.match(usage, /pass the returned `nextOffset` to continue/);
+  assert.match(usage, /structured entries retain complete validated metadata/);
 });
 
 test('README documents agent timeout and environment-removal defaults and precedence', () => {

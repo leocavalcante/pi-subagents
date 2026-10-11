@@ -89,7 +89,7 @@ The default scope is `"user"`. To include project definitions:
 { "agentScope": "both" }
 ```
 
-The list is sorted by name and excludes system prompt bodies. Project lookup starts at the parent session's working directory and checks ancestors for the nearest `.pi/agents` directory. A task's or agent's `cwd` changes where its child runs, not which definitions are loaded.
+Results are sorted by name and paginated in groups of at most 10. The response includes `offset`, `limit`, `totalAgents`, and `nextOffset`; pass the returned `nextOffset` to continue, keeping the same scope. For example, use `{ "agentScope": "both", "offset": 10 }` for the next default-sized page. You may request a smaller `limit` from 1 to 10. Display rows are clipped to keep responses bounded; structured entries retain complete validated metadata. Each page reports discovery diagnostics and excludes system prompt bodies. Project lookup starts at the parent session's working directory and checks ancestors for the nearest `.pi/agents` directory. A task's or agent's `cwd` changes where its child runs, not which definitions are loaded.
 
 Ask Pi to delegate:
 

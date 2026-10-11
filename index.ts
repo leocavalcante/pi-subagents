@@ -100,6 +100,10 @@ const MAX_JOB_RECORDS = MAX_ACTIVE_JOBS + MAX_RETAINED_JOBS;
 const MAX_JOB_LABEL_BYTES = 1024;
 const MAX_JOB_DIAGNOSTIC_BYTES = 2048;
 const MAX_JOB_AGENT_BYTES = 256;
+// Keep ten rendered rows and every capped diagnostic inside the 50 KiB model-response budget.
+const MAX_AGENT_LISTING_PAGE_SIZE = 10;
+const MAX_AGENT_LISTING_LINE_BYTES = 3 * 1024;
+const MAX_AGENT_DIAGNOSTIC_LINE_BYTES = 256;
 // Show every effective project-agent setting, or refuse approval rather than launch with a partial summary.
 const MAX_PROJECT_APPROVAL_BYTES = 32 * 1024;
 const SUBAGENT_NESTING_DEPTH_ENV = "PI_SUBAGENTS_NESTING_DEPTH";
@@ -1295,7 +1299,7 @@ const SUBAGENT_TOOL_KEYS = [
 	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
-const AGENT_TOOL_KEYS = ["agentScope"] as const;
+const AGENT_TOOL_KEYS = ["agentScope", "offset", "limit"] as const;
 const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limit", "stream", "timeoutMs"] as const;
 
 const TaskItem = Type.Object({
@@ -1511,10 +1515,17 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent agents",
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
+			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
 			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
-		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }, { additionalProperties: false }),
+		parameters: Type.Object({
+			agentScope: Type.Optional(AgentScopeSchema),
+			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
+				description: "Zero-based offset into the locale-independent agent-name ordering. Default: 0." })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE,
+				description: `Maximum number of definitions to return, from 1 to ${MAX_AGENT_LISTING_PAGE_SIZE}. Default: ${MAX_AGENT_LISTING_PAGE_SIZE}.` })),
+		}, { additionalProperties: false }),
 		outputSchema: Type.Object({
 			agentScope: AgentScopeSchema,
 			agents: Type.Array(Type.Object({
@@ -1538,7 +1549,11 @@ export default function (pi: ExtensionAPI) {
 				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
 				cwd: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_WORKING_DIRECTORY_LENGTH,
 					description: `Agent default child working directory, relative to the parent session unless absolute; at most ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` })),
-			}, { additionalProperties: false }), { maxItems: 2 * MAX_AGENT_FILES }),
+			}, { additionalProperties: false }), { maxItems: MAX_AGENT_LISTING_PAGE_SIZE }),
+			offset: Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2 }),
+			limit: Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE }),
+			totalAgents: Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2 }),
+			nextOffset: Type.Union([Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2 }), Type.Null()]),
 			projectAgentsDir: Type.Union([Type.String(), Type.Null()]),
 			diagnostics: Type.Array(Type.Object({
 				filePath: Type.String(),
@@ -1548,32 +1563,35 @@ export default function (pi: ExtensionAPI) {
 		}, { additionalProperties: false }),
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			if (!isToolParameterObject(params)) {
-				const details = { agentScope: "user" as const, agents: [], projectAgentsDir: null, diagnostics: [] };
-				return {
-					content: [{ type: "text" as const, text: "Tool parameters must be an object." }],
-					details, structuredContent: details, isError: true,
-				};
-			}
+			const emptyListing = (agentScope: AgentScope = "user", offset = 0, limit = MAX_AGENT_LISTING_PAGE_SIZE) => ({
+				agentScope, agents: [], offset, limit, totalAgents: 0, nextOffset: null,
+				projectAgentsDir: null, diagnostics: [],
+			});
+			const fail = (text: string, details = emptyListing()) => ({
+				content: [{ type: "text" as const, text }], details, structuredContent: details, isError: true,
+			});
+			if (!isToolParameterObject(params)) return fail("Tool parameters must be an object.");
 			if (hasUnexpectedToolParameters(params, AGENT_TOOL_KEYS)) {
-				const details = { agentScope: "user" as const, agents: [], projectAgentsDir: null, diagnostics: [] };
-				return {
-					content: [{ type: "text" as const, text: "Unsupported parameters were provided to subagent_agents." }],
-					details, structuredContent: details, isError: true,
-				};
+				return fail("Unsupported parameters were provided to subagent_agents.");
 			}
 			const requestedAgentScope: unknown = params.agentScope;
 			if (requestedAgentScope !== undefined && requestedAgentScope !== "user" &&
 				requestedAgentScope !== "project" && requestedAgentScope !== "both") {
-				const details = { agentScope: "user" as const, agents: [], projectAgentsDir: null, diagnostics: [] };
-				return {
-					content: [{ type: "text" as const, text: 'agentScope must be "user", "project", or "both".' }],
-					details, structuredContent: details, isError: true,
-				};
+				return fail('agentScope must be "user", "project", or "both".');
 			}
 			const agentScope: AgentScope = requestedAgentScope ?? "user";
+			const requestedOffset: unknown = params.offset;
+			const offset = requestedOffset === undefined ? 0 : requestedOffset;
+			if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_AGENT_FILES * 2) {
+				return fail(`offset must be an integer between 0 and ${MAX_AGENT_FILES * 2}.`, emptyListing(agentScope));
+			}
+			const requestedLimit: unknown = params.limit;
+			const limit = requestedLimit === undefined ? MAX_AGENT_LISTING_PAGE_SIZE : requestedLimit;
+			if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > MAX_AGENT_LISTING_PAGE_SIZE) {
+				return fail(`limit must be an integer between 1 and ${MAX_AGENT_LISTING_PAGE_SIZE}.`, emptyListing(agentScope, offset));
+			}
 			const discovery = discoverAgents(ctx.cwd, agentScope);
-			const agents = discovery.agents.map((agent) => ({
+			const allAgents = discovery.agents.map((agent) => ({
 				name: agent.name,
 				description: agent.description,
 				source: agent.source,
@@ -1585,7 +1603,9 @@ export default function (pi: ExtensionAPI) {
 				...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
 				...(agent.cwd !== undefined ? { cwd: agent.cwd } : {}),
 			}));
-			const listing = agents.map((a) => {
+			const pageAgents = allAgents.slice(offset, offset + limit);
+			const nextOffset = offset + pageAgents.length < allAgents.length ? offset + pageAgents.length : null;
+			const listing = pageAgents.map((a) => {
 				const config = [
 					a.model && `model=${displayUntrustedText(a.model)}`,
 					a.thinking && `thinking=${a.thinking}`,
@@ -1594,18 +1614,27 @@ export default function (pi: ExtensionAPI) {
 					a.timeoutMs !== undefined && `timeoutMs=${a.timeoutMs}`,
 					a.cwd !== undefined && `cwd=${displayUntrustedText(a.cwd)}`,
 				].filter(Boolean).join("; ");
-				return `${displayUntrustedText(a.name)} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
+				const line = `${displayUntrustedText(a.name)} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
+				return truncateOutput(line, MAX_AGENT_LISTING_LINE_BYTES, "...");
 			}).join("\n");
-			const warnings = discovery.diagnostics.map((d) => `${displayUntrustedText(d.filePath)}: ${displayUntrustedText(d.message)}`).join("\n");
+			const warnings = discovery.diagnostics
+				.map((diagnostic) => `${displayUntrustedText(diagnostic.filePath)}: ${displayUntrustedText(diagnostic.message)}`)
+				.map((line) => truncateOutput(line, MAX_AGENT_DIAGNOSTIC_LINE_BYTES, "..."))
+				.join("\n");
+			const totalAgents = allAgents.length;
+			const pageLabel = pageAgents.length
+				? `Agents ${offset + 1}-${offset + pageAgents.length} of ${totalAgents}.${nextOffset === null ? "" : ` Continue with offset ${nextOffset}.`}`
+				: totalAgents === 0 ? "No subagents found." : `No agents at offset ${offset}; ${totalAgents} total.`;
 			const details = {
-				agentScope, agents, projectAgentsDir: discovery.projectAgentsDir,
+				agentScope, agents: pageAgents, offset, limit, totalAgents, nextOffset,
+				projectAgentsDir: discovery.projectAgentsDir,
 				diagnostics: discovery.diagnostics.map((diagnostic) => ({ ...diagnostic })),
 			};
 			return {
 				content: [{
 					type: "text" as const,
 					text: truncateOutput(
-						(listing || "No subagents found.") + (warnings ? `\n\nDefinition diagnostics:\n${warnings}` : ""),
+						pageLabel + (listing ? `\n${listing}` : "") + (warnings ? `\n\nDefinition diagnostics:\n${warnings}` : ""),
 					),
 				}],
 				details,

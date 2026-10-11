@@ -2418,6 +2418,76 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
   } finally { rmSync(badFile); }
 });
 
+test('agent listing paginates large inventories with bounded text and complete structured entries', async () => {
+  const directory = join(sandbox, 'agent/agents');
+  const files = [];
+  const longCwd = 'c'.repeat(MAX_WORKING_DIRECTORY_LENGTH);
+  for (let index = 0; index < 24; index++) {
+    const name = `zz-page-${String(index).padStart(3, '0')}`;
+    const file = join(directory, `${name}.md`);
+    writeFileSync(file, `---\nname: ${name}\ndescription: Paged agent ${index}\ncwd: ${JSON.stringify(longCwd)}\n---\nPrivate prompt ${index}.\n`);
+    files.push(file);
+  }
+  for (let index = 0; index < 70; index++) {
+    const file = join(directory, `bad-page-${String(index).padStart(3, '0')}.md`);
+    writeFileSync(file, '---\nname: [invalid\n---\n');
+    files.push(file);
+  }
+  try {
+    const schema = tools.get('subagent_agents').definition.outputSchema;
+    const first = await invoke('subagent_agents', {});
+    assert.equal(Value.Check(schema, first.structuredContent), true);
+    assert.equal(first.details.offset, 0);
+    assert.equal(first.details.limit, 10);
+    assert.equal(first.details.totalAgents, 27);
+    assert.equal(first.details.agents.length, 10);
+    assert.equal(first.details.diagnostics.length, MAX_AGENT_DIAGNOSTICS);
+    assert.equal(first.details.diagnostics.at(-1).message, 'Further agent diagnostics omitted.');
+    assert.equal(first.details.nextOffset, 10);
+    assert.match(first.content[0].text, /Agents 1-10 of 27\. Continue with offset 10\./);
+    assert.ok(Buffer.byteLength(first.content[0].text) <= 50 * 1024);
+    assert.ok(first.details.agents.every(agent => agent.systemPrompt === undefined));
+    const longEntry = first.details.agents.find(agent => agent.name === 'zz-page-000');
+    assert.equal(longEntry.cwd, longCwd, 'structured pages preserve complete configuration');
+    assert.equal(first.content[0].text.includes(longCwd), false, 'oversized display fields are clipped without truncating the page');
+
+    const pages = [first.structuredContent];
+    let nextOffset = first.details.nextOffset;
+    while (nextOffset !== null) {
+      const page = await invoke('subagent_agents', { offset: nextOffset, limit: 7 });
+      assert.equal(Value.Check(schema, page.structuredContent), true);
+      assert.equal(page.details.offset, nextOffset);
+      assert.equal(page.details.limit, 7);
+      assert.ok(page.details.agents.length <= 7);
+      assert.ok(Buffer.byteLength(page.content[0].text) <= 50 * 1024);
+      pages.push(page.structuredContent);
+      nextOffset = page.details.nextOffset;
+    }
+    const names = pages.flatMap(page => page.agents.map(agent => agent.name));
+    assert.deepEqual(names, [...names].sort());
+    assert.equal(new Set(names).size, names.length, 'pages must not overlap');
+    assert.equal(names.length, first.details.totalAgents);
+    assert.equal(names.at(-1), 'zz-page-023');
+    assert.equal(pages.at(-1).nextOffset, null);
+    assert.equal(traces().length, 0);
+  } finally {
+    for (const file of files) rmSync(file, { force: true });
+  }
+});
+
+test('agent listing rejects invalid pagination before discovery output or child launch', async () => {
+  const parameters = tools.get('subagent_agents').definition.parameters;
+  const outputSchema = tools.get('subagent_agents').definition.outputSchema;
+  for (const params of [{ offset: -1 }, { offset: 513 }, { offset: 1.5 }, { limit: 0 }, { limit: 11 }, { limit: 1.5 }]) {
+    assert.equal(Value.Check(parameters, params), false);
+    const result = await invoke('subagent_agents', params);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /offset|limit/);
+    assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+  }
+  assert.equal(traces().length, 0);
+});
+
 test('agent timeout defaults apply in every dispatch mode and yield to call overrides', async () => {
   const file = join(sandbox, 'agent/agents/timeout-default.md');
   writeFileSync(file, '---\nname: timeout-default\ndescription: Timeout default worker\ntimeoutMs: 250\n---\nTimed worker.\n');
@@ -2604,11 +2674,11 @@ test('agent listing output schema caps agent and diagnostic collection sizes', a
   const template = structuredClone(listing.agents[0]);
 
   const atAgentLimit = structuredClone(listing);
-  atAgentLimit.agents = Array.from({ length: MAX_AGENT_FILES * 2 }, (_, index) => ({ ...template, name: `agent-${index}` }));
-  assert.equal(Value.Check(schema, atAgentLimit), true, 'two bounded sources fit in the listing schema');
+  atAgentLimit.agents = Array.from({ length: 10 }, (_, index) => ({ ...template, name: `agent-${index}` }));
+  assert.equal(Value.Check(schema, atAgentLimit), true, 'a full discovery page remains valid');
   const tooManyAgents = structuredClone(atAgentLimit);
   tooManyAgents.agents.push({ ...template, name: 'one-too-many' });
-  assert.equal(Value.Check(schema, tooManyAgents), false, 'agent listings must not exceed both source-directory limits');
+  assert.equal(Value.Check(schema, tooManyAgents), false, 'agent listing pages must not exceed their configured size');
 
   const diagnostic = { filePath: 'agent.md', source: 'user', message: 'Invalid definition.' };
   const atDiagnosticLimit = structuredClone(listing);
