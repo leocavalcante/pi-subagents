@@ -88,10 +88,10 @@ const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
 
 function getSubagentNestingDepth(): number {
 	const value = process.env[SUBAGENT_NESTING_DEPTH_ENV];
-	if (value === undefined) return 0;
-	if (!/^(0|[1-9]\d*)$/.test(value)) return MAX_SUBAGENT_NESTING_DEPTH;
-	const depth = Number(value);
-	return Number.isSafeInteger(depth) ? depth : MAX_SUBAGENT_NESTING_DEPTH;
+	if (value === undefined || value === "0") return 0;
+	if (value === "1") return 1;
+	if (value === "2") return 2;
+	return MAX_SUBAGENT_NESTING_DEPTH;
 }
 const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
@@ -1644,7 +1644,7 @@ export default function (pi: ExtensionAPI) {
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
-			`Nested delegation is limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive process trees.`,
+			`Extension-mediated nested subagent calls are limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive delegation.`,
 			"Set model or thinking to override agent configuration. Use null to ignore the agent's configured model or thinking default. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
