@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const contributing = readFileSync(new URL('../CONTRIBUTING.md', import.meta.url), 'utf8');
+const testWorkflow = readFileSync(new URL('../.github/workflows/test.yml', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function section(title) {
@@ -32,6 +33,16 @@ test('npm package includes required runtime support files', () => {
   for (const file of ['windows-supervisor.cs', 'temporary-files.ts', 'abort.ts']) {
     assert.ok(packageJson.files.includes(file), `Package files must include ${file}`);
   }
+});
+
+test('CONTRIBUTING documents the locally reproducible actionlint check', () => {
+  const version = testWorkflow.match(/^\s+version=(\d+\.\d+\.\d+)$/m)?.[1];
+  const ignore = testWorkflow.match(/^\s+-ignore '([^']+)'/m)?.[1];
+  assert.ok(version, 'CI must pin the actionlint version');
+  assert.ok(ignore, 'CI must scope its runner-label diagnostic ignore');
+  assert.ok(contributing.includes(`actionlint v${version}`));
+  assert.ok(contributing.includes(`actionlint -ignore '${ignore}' .github/workflows/*.yml`));
+  assert.match(contributing, /keep the explicit `ubuntu-26\.04` matrix row until GitHub's runner migration is confirmed/);
 });
 
 test('CONTRIBUTING explains how Windows process containment is validated', () => {
