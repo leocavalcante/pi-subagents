@@ -645,6 +645,47 @@ test('single, parallel, and chained failures report failed jobs', async () => {
   }
 });
 
+test('length-limited model turns fail as partial results across modes', async () => {
+  const single = await invoke('subagent', { agent: 'worker', task: 'length-limit' });
+  assert.equal(single.isError, true);
+  assert.equal(single.details.results[0].stopReason, 'length');
+  assert.equal(single.details.results[0].exitCode, 0, 'The model-level failure is distinct from the successful child exit');
+  assert.match(single.content[0].text, /Partial, unverified output/);
+  assert.match(single.content[0].text, /result: length-limit/);
+
+  const parallel = await invoke('subagent', { tasks: [
+    { agent: 'worker', task: 'ordinary parallel success' },
+    { agent: 'worker', task: 'length-limit' },
+  ] });
+  assert.equal(parallel.isError, true);
+  assert.match(parallel.content[0].text, /Parallel: 1\/2 succeeded/);
+  assert.match(parallel.content[0].text, /failed \(length\)/);
+  assert.match(parallel.content[0].text, /Partial, unverified output/);
+
+  const chain = await invoke('subagent', { chain: [
+    { agent: 'worker', task: 'length-limit' },
+    { agent: 'worker', task: 'must-not-run-after-length-limit' },
+  ] });
+  assert.equal(chain.isError, true);
+  assert.equal(chain.details.results.length, 1, 'A chain must stop after an incomplete answer');
+  assert.match(chain.content[0].text, /Chain stopped at step 1/);
+  assert.match(chain.content[0].text, /Partial, unverified output/);
+  assert.equal(traces().some(entry => entry.task === 'must-not-run-after-length-limit'), false);
+
+  const id = await launch({ task: 'length-limit' });
+  const job = await finish(id);
+  assert.equal(job.state, 'failed');
+  assert.equal(job.latest.details.results[0].stopReason, 'length');
+  assert.ok(messages.at(-1).message.content.includes('failed'));
+  const page = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.notEqual(page.isError, true, 'Inspecting an incomplete task is not itself a failure');
+  assert.equal(page.structuredContent.output.partial, true);
+  assert.equal(page.structuredContent.output.exitCode, 0);
+  assert.match(page.structuredContent.output.text, /Partial, unverified output/);
+  assert.match(page.structuredContent.output.text, /result: length-limit/);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, page.structuredContent), true);
+});
+
 test('background chains substitute previous output and capture working directory', async () => {
   const started = await invoke('subagent', {
     background: true,

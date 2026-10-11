@@ -248,7 +248,7 @@ setTimeout(async () => {
       : task === 'dollars' ? '$& $$ $` $\' {previous}'
       : task === 'huge-final' ? 'é'.repeat(2 * 1024 * 1024 + 1)
       : task.includes('large') ? 'é'.repeat(40000) : 'result: ' + task;
-    emit(output, task.includes('fail') ? 'error' : 'stop');
+    emit(output, task.includes('fail') ? 'error' : task === 'length-limit' ? 'length' : 'stop');
     process.exitCode = task.includes('fail') && !task.includes('zero-exit') ? 1 : 0;
   }
   if (task === 'stdout-flood-unterminated') await write(process.stdout, 'x'.repeat(9 * 1024 * 1024));
