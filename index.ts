@@ -78,7 +78,13 @@ import {
 import { assistantMessageError, isCapturedMessageRole, parseChildEvent, toolResultMessageError, userMessageError } from "./protocol.ts";
 import { MAX_PAGE_BYTES, createOutputPager, WeakOutputPagerCache } from "./paging.ts";
 import { normalizeUsage, sumUsage } from "./usage.ts";
-import { CHAIN_ID_PATTERN, validateChainReferences, substituteChainContext, substituteChainContextBounded } from "./chain.ts";
+import {
+	CHAIN_ID_PATTERN,
+	isValidChainId,
+	validateChainReferences,
+	substituteChainContext,
+	substituteChainContextBounded,
+} from "./chain.ts";
 import { isWellFormedUnicode } from "./unicode.ts";
 import { ProgressUpdateLimiter } from "./progress.ts";
 import { waitForSharedOperation, type SharedAbortableOperationState } from "./abort.ts";
@@ -1256,7 +1262,7 @@ const SUBAGENT_TOOL_KEYS = [
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
 const AGENT_TOOL_KEYS = ["agentScope"] as const;
-const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "offset", "limit", "stream", "timeoutMs"] as const;
+const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limit", "stream", "timeoutMs"] as const;
 
 const TaskItem = Type.Object({
 	...DispatchOptions,
@@ -1571,12 +1577,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
-		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job; at most 32 waits may be pending across the session. Use output to page through a finished task's captured text, failure diagnosis, and any partial, unverified assistant/tool output. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
+		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job; at most 32 waits may be pending across the session. Use output to page through a finished task's captured text, failure diagnosis, and any partial, unverified assistant/tool output. Select a named chain step by stepId or another task by taskIndex. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
 		parameters: Type.Object({
 			action: JobActionSchema,
 			jobId: Type.Optional(Type.String({ maxLength: JOB_ID_MAX_LENGTH,
 				description: "Generated UUID (36 characters), required except for list and clear." })),
-			taskIndex: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: zero-based task index. Default: 0." })),
+			taskIndex: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: zero-based task index. Default: 0 when stepId is not supplied." })),
+			stepId: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64,
+				description: "Output only: select a named chain step instead of using taskIndex." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: UTF-8 byte offset. Default: 0. Use nextOffset from the previous page." })),
 			limit: Type.Optional(Type.Integer({ minimum: 4, maximum: MAX_PAGE_BYTES, description: "Output only: maximum page bytes, from 4 to 32768. Default: 16384." })),
 			stream: Type.Optional(StringEnum(["result", "stderr"] as const, {
@@ -1608,17 +1616,23 @@ export default function (pi: ExtensionAPI) {
 				params.timeoutMs < 1 || params.timeoutMs > MAX_JOB_WAIT_MS)) {
 				return fail(`timeoutMs applies only to action: wait and must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`);
 			}
-			if (action !== "output" && [params.taskIndex, params.offset, params.limit, params.stream].some((v) => v !== undefined)) {
-				return fail("taskIndex, offset, limit, and stream apply only to action: output.");
+			if (action !== "output" && [params.taskIndex, params.stepId, params.offset, params.limit, params.stream].some((v) => v !== undefined)) {
+				return fail("taskIndex, stepId, offset, limit, and stream apply only to action: output.");
 			}
 			if (params.stream !== undefined && params.stream !== "result" && params.stream !== "stderr") {
 				return fail('stream must be "result" or "stderr".');
+			}
+			if (action === "output" && params.stepId !== undefined && !isValidChainId(params.stepId)) {
+				return fail("stepId must be a valid chain step ID: 1–64 characters, a leading ASCII letter followed by letters, digits, underscores, or hyphens.");
+			}
+			if (action === "output" && params.stepId !== undefined && params.taskIndex !== undefined) {
+				return fail("Use either taskIndex or stepId, not both.");
 			}
 			if (action === "output" && (
 				(params.taskIndex !== undefined && (!Number.isSafeInteger(params.taskIndex) || params.taskIndex < 0)) ||
 				(params.offset !== undefined && (!Number.isSafeInteger(params.offset) || params.offset < 0)) ||
 				(params.limit !== undefined && (!Number.isInteger(params.limit) || params.limit < 4 || params.limit > MAX_PAGE_BYTES)))) {
-				return fail("Invalid output query. Use non-negative integer taskIndex/offset and a limit between 4 and 32768.");
+				return fail("Invalid output query. Use a valid stepId, non-negative integer taskIndex/offset, and a limit between 4 and 32768.");
 			}
 			if (action === "clear") {
 				const cleared = jobs.clearFinished();
@@ -1655,7 +1669,10 @@ export default function (pi: ExtensionAPI) {
 			if (action === "output") {
 				if (!job.finishedAt) return fail("Output pages require a finished job. Use action: wait to await cleanup.", job);
 				if (job.outputEvicted) return fail(`Captured output was evicted from the job registry. ${completionHint}`, job);
-				const taskIndex = params.taskIndex ?? 0;
+				const taskIndex = params.stepId === undefined
+					? params.taskIndex ?? 0
+					: job.latest?.details?.results.findIndex((result) => result.stepId === params.stepId) ?? -1;
+				if (taskIndex < 0) return fail(`No retained chain step named "${params.stepId}". Inspect status for resultCount.`, job);
 				const task = job.latest?.details?.results[taskIndex];
 				if (!task) return fail("No retained task at this taskIndex. Inspect status for resultCount.", job);
 				try {
@@ -1692,10 +1709,17 @@ export default function (pi: ExtensionAPI) {
 			const action = escapeTerminalControls(truncateOutput(stringArg(args?.action), 64, "..."));
 			const jobId = typeof args?.jobId === "string"
 				? escapeTerminalControls(truncateOutput(args.jobId, 128, "...")) : "";
+			const stepId = typeof args?.stepId === "string"
+				? escapeTerminalControls(truncateOutput(args.stepId, 64, "...")) : "";
+			const requestedTaskIndex = args?.taskIndex;
+			const taskIndex = typeof requestedTaskIndex === "number" && Number.isSafeInteger(requestedTaskIndex) && requestedTaskIndex >= 0
+				? ` task ${requestedTaskIndex}` : "";
+			const selection = stepId ? ` step ${stepId}` : taskIndex;
 			const stream = args?.stream === "stderr" ? " stderr" : "";
 			return new Text(
 				theme.fg("toolTitle", theme.bold("subagent_jobs ")) + theme.fg("accent", action) +
-					(jobId ? theme.fg("muted", ` ${jobId}`) : "") + (stream ? theme.fg("muted", stream) : ""),
+					(jobId ? theme.fg("muted", ` ${jobId}`) : "") +
+					(selection ? theme.fg("muted", selection) : "") + (stream ? theme.fg("muted", stream) : ""),
 				0, 0,
 			);
 		},

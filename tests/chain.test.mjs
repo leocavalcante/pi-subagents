@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { jiti } from './pi-runtime.mjs';
-const { validateChainReferences, substituteChainContext, substituteChainContextBounded } = await jiti.import('../chain.ts');
+const { isValidChainId, validateChainReferences, substituteChainContext, substituteChainContextBounded } = await jiti.import('../chain.ts');
+
+test('chain step IDs share one strict validator for references and output lookup', () => {
+  for (const id of ['a', 'Step_1', 'x-y', 'A'.repeat(64)]) assert.equal(isValidChainId(id), true);
+  for (const id of ['', '1step', 'step name', 'x'.repeat(65), undefined, null, 42]) assert.equal(isValidChainId(id), false);
+});
 
 test('named references accept only earlier unique IDs with a bounded identifier format', () => {
   assert.equal(validateChainReferences([{ id: 'review-1', task: 'first' }, { task: '{steps.review-1} {previous}' }]), undefined);
