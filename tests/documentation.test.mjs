@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
@@ -33,6 +34,27 @@ test('README documents an available installation method', () => {
 test('npm package includes required runtime support files', () => {
   for (const file of ['windows-supervisor.cs', 'windows-supervisor-invocation.ts', 'temporary-files.ts', 'abort.ts']) {
     assert.ok(packageJson.files.includes(file), `Package files must include ${file}`);
+  }
+});
+
+test('npm package includes the full local dependency closure of its extension entrypoint', () => {
+  const pending = ['index.ts'];
+  const visited = new Set();
+  const localReference = /(?:\bfrom\s*|\bimport\s*\(?\s*|\bnew URL\(\s*)["'](\.{1,2}\/[^"']+)["']/g;
+
+  while (pending.length > 0) {
+    const sourceFile = pending.pop();
+    if (visited.has(sourceFile)) continue;
+    visited.add(sourceFile);
+    assert.ok(packageJson.files.includes(sourceFile), `Package files must include ${sourceFile}`);
+    assert.ok(existsSync(new URL(`../${sourceFile}`, import.meta.url)), `Missing local source dependency: ${sourceFile}`);
+    const source = readFileSync(new URL(`../${sourceFile}`, import.meta.url), 'utf8');
+    for (const [, specifier] of source.matchAll(localReference)) {
+      const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(sourceFile), specifier));
+      assert.ok(dependency !== '..' && !dependency.startsWith('../'), `Local dependency escapes package root: ${specifier}`);
+      assert.ok(packageJson.files.includes(dependency), `Package files must include ${dependency}, referenced by ${sourceFile}`);
+      if (dependency.endsWith('.ts')) pending.push(dependency);
+    }
   }
 });
 
