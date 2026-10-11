@@ -55,9 +55,19 @@ test('CodeQL scans the C# Windows supervisor and preserves the JavaScript check 
   const workflow = codeqlWorkflow.replace(/\r\n/g, '\n');
   assert.match(workflow, /^  analyze:\n    name: Analyze JavaScript and TypeScript$/m);
   assert.match(workflow, /^          languages: javascript-typescript$/m);
-  assert.match(workflow, /^  analyze-csharp:\n    name: Analyze C#$/m);
-  assert.match(workflow, /^          languages: csharp\n          build-mode: none$/m);
-  assert.match(workflow, /github\/codeql-action\/analyze@/);
+
+  const csharpJobMarker = '  analyze-csharp:\n';
+  const csharpJobStart = workflow.indexOf(csharpJobMarker);
+  assert.notEqual(csharpJobStart, -1, 'CodeQL must define a separate C# analysis job');
+  const csharpJobTail = workflow.slice(csharpJobStart + csharpJobMarker.length);
+  const nextJobStart = csharpJobTail.search(/^  \S/m);
+  const csharpJob = nextJobStart === -1 ? csharpJobTail : csharpJobTail.slice(0, nextJobStart);
+
+  assert.match(csharpJob, /^    name: Analyze C#$/m);
+  assert.match(csharpJob, /^    permissions:\n      actions: read\n      contents: read\n      security-events: write$/m);
+  assert.match(csharpJob, /^          languages: csharp\n          build-mode: none$/m);
+  assert.match(csharpJob, /^      - uses: github\/codeql-action\/analyze@/m);
+
   assert.match(workflow, /^  push:\n    branches:\n      - main$/m);
   assert.match(workflow, /^  pull_request:\n    branches:\n      - main$/m);
   assert.match(workflow, /^  schedule:\n    - cron:/m);
