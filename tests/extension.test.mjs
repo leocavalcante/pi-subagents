@@ -2735,6 +2735,71 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   }
 });
 
+test('project-agent approvals show effective model, thinking, tools, and timeout settings', async () => {
+  const agentFile = join(sandbox, 'project/.pi/agents/approval-config.md');
+  writeFileSync(agentFile, [
+    '---',
+    'name: approval-config',
+    'description: Configured project agent',
+    'model: fake/agent-model:low',
+    'thinking: high',
+    'tools: [read, bash]',
+    'timeoutMs: 9000',
+    '---',
+    'Project instructions.',
+    '',
+  ].join('\n'));
+  let confirmation = '';
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async (_title, body) => { confirmation = body; return false; } } };
+  const requestApproval = async params => {
+    const result = await invoke('subagent', { agentScope: 'project', ...params }, context);
+    assert.equal(result.content[0].text, 'Canceled: project-local agents not approved.');
+    assert.match(confirmation, /Effective child configuration/);
+    assert.match(confirmation, /initial tool selection is not a sandbox/);
+    assert.equal(traces().length, 0, 'approval denial must happen before any child launch');
+    return confirmation;
+  };
+  try {
+    const single = await requestApproval({
+      agent: 'approval-config', task: 'single override', model: 'fake/call-model',
+      thinking: 'xhigh', tools: ['grep'], timeoutMs: 5000,
+    });
+    assert.match(single, /model=.*fake\/call-model/);
+    assert.match(single, /thinking=xhigh/);
+    assert.match(single, /initial tools=.*grep/);
+    assert.match(single, /timeout=5000 ms/);
+
+    const defaults = await requestApproval({
+      chain: [{ agent: 'approval-config', task: 'agent defaults' }],
+    });
+    assert.match(defaults, /model=.*fake\/agent-model:low/);
+    assert.match(defaults, /thinking=high/);
+    assert.match(defaults, /initial tools=.*read, bash/);
+    assert.match(defaults, /timeout=9000 ms/);
+
+    const parallel = await requestApproval({
+      model: 'fake/batch-model', thinking: 'low', tools: ['read'], timeoutMs: 1000,
+      tasks: [{ agent: 'approval-config', task: 'entry nulls', model: null, thinking: null, tools: null, timeoutMs: null }],
+    });
+    assert.match(parallel, /model=.*fake\/parent/);
+    assert.match(parallel, /thinking=high/);
+    assert.match(parallel, /initial tools=Pi defaults/);
+    assert.match(parallel, /timeout=unbounded/);
+
+    const chain = await requestApproval({
+      model: 'fake/batch-model', thinking: 'low', tools: ['read'], timeoutMs: 1000,
+      chain: [{ agent: 'approval-config', task: 'batch defaults' }],
+    });
+    assert.match(chain, /model=.*fake\/batch-model/);
+    assert.match(chain, /thinking=low/);
+    assert.match(chain, /initial tools=.*read/);
+    assert.match(chain, /timeout=1000 ms/);
+  } finally {
+    rmSync(agentFile, { force: true });
+  }
+});
+
 test('untrusted project agents fail closed without UI approval and run only for trusted projects', async () => {
   const untrusted = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: false, isProjectTrusted: () => false };
   const denied = await invoke('subagent', { agent: 'project', task: 'must not run', agentScope: 'project' }, untrusted);
