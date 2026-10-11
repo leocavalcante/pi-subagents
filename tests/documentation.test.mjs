@@ -183,6 +183,17 @@ test('README discloses that Windows supervisor compilation is outside task deadl
   assert.match(deadlines, /not safe to terminate PowerShell without verified process-tree containment/);
 });
 
+test('README documents selecting paginated chain output by named step ID', () => {
+  const chains = section('Named chain outputs');
+  const background = section('Background execution');
+  const output = section('Read captured job output');
+  assert.match(chains, /Paginate a named step by `stepId`/);
+  assert.match(background, /"stepId": "review"/);
+  assert.match(output, /Select a named chain step with `stepId`/);
+  assert.match(output, /selectors are mutually exclusive/);
+  assert.match(output, /keep the same `stepId` or `taskIndex` selector and advance `offset`/);
+});
+
 test('README documents timeout metadata and the opt-in stderr stream on background output pages', () => {
   const output = section('Read captured job output');
   assert.match(output, /`output\.timedOut` indicates whether the runtime deadline fired/);

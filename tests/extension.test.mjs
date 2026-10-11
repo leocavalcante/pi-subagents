@@ -1784,12 +1784,13 @@ test('subagent_jobs renderers escape terminal controls without changing job outp
   }
 
   const hostileId = `job${esc}[2J${c1Csi}2J`;
-  const call = definition.renderCall({ action: 'output', jobId: hostileId }, theme, {});
+  const call = definition.renderCall({ action: 'output', jobId: hostileId, stepId: `review${esc}[2J` }, theme, {});
   const renderedCall = call.render(100).join('\n');
   assert.equal(renderedCall.includes(esc), false);
   assert.equal(renderedCall.includes(c1Csi), false);
   assert.ok(renderedCall.includes('\\u001b[2J'));
   assert.ok(renderedCall.includes('\\u009b2J'));
+  assert.ok(renderedCall.includes('step review\\u001b[2J'));
 });
 
 test('terminal display escaping bounds expansion for control-heavy tool output', () => {
@@ -3021,9 +3022,21 @@ test('named outputs work in silent background chains and output pages expose ste
   const finished = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
   assert.equal(finished.structuredContent.job.state, 'completed');
   assert.equal(traces().filter(row => row.event === 'start').at(-1).task, 'reuse ' + 'é'.repeat(40000));
-  const output = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 2 });
+  const definition = tools.get('subagent_jobs').definition;
+  assert.equal(Value.Check(definition.parameters, { action: 'output', jobId: id, stepId: 'reuse' }), true);
+  assert.equal(Value.Check(definition.parameters, { action: 'output', jobId: id, stepId: 'bad id' }), false);
+  const output = await invoke('subagent_jobs', { action: 'output', jobId: id, stepId: 'reuse' });
   assert.equal(output.structuredContent.output.stepId, 'reuse');
-  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, output.structuredContent), true);
+  assert.equal(output.structuredContent.output.taskIndex, 2, 'named lookup reports the original result index');
+  assert.match(output.structuredContent.output.text, /^result: reuse /);
+  assert.equal(Value.Check(definition.outputSchema, output.structuredContent), true);
+  const nextOffset = output.structuredContent.output.nextOffset;
+  assert.notEqual(nextOffset, null, 'the large named result requires additional pages');
+  const nextPage = await invoke('subagent_jobs', { action: 'output', jobId: id, stepId: 'reuse', offset: nextOffset, limit: 4096 });
+  assert.equal(nextPage.structuredContent.output.stepId, 'reuse');
+  assert.equal(nextPage.structuredContent.output.taskIndex, 2);
+  assert.equal(nextPage.structuredContent.output.offset, nextOffset);
+  assert.equal(Value.Check(definition.outputSchema, nextPage.structuredContent), true);
   assert.equal(messages.length, 0);
 });
 
@@ -3467,7 +3480,11 @@ test('background output can page captured stderr without changing the default re
 test('invalid output queries do not mutate jobs or launch children', async () => {
   const id = await launch({ task: 'small result' });
   await finish(id);
-  for (const query of [{ offset: -1 }, { offset: 1.5 }, { limit: 3 }, { limit: 32769 }, { taskIndex: -1 }, { taskIndex: 1 }, { offset: 999999 }, { stream: 'stdout' }]) {
+  for (const query of [
+    { offset: -1 }, { offset: 1.5 }, { limit: 3 }, { limit: 32769 }, { taskIndex: -1 }, { taskIndex: 1 },
+    { stepId: 'missing' }, { stepId: 'bad id' }, { taskIndex: 0, stepId: 'step' },
+    { offset: 999999 }, { stream: 'stdout' },
+  ]) {
     const result = await invoke('subagent_jobs', { action: 'output', jobId: id, ...query });
     assert.equal(result.isError, true);
     assert.ok(result.structuredContent.error);
@@ -3477,6 +3494,9 @@ test('invalid output queries do not mutate jobs or launch children', async () =>
   const wrongAction = await invoke('subagent_jobs', { action: 'status', jobId: id, stream: 'stderr' });
   assert.equal(wrongAction.isError, true);
   assert.match(wrongAction.structuredContent.error, /apply only to action: output/);
+  const wrongStepAction = await invoke('subagent_jobs', { action: 'status', jobId: id, stepId: 'step' });
+  assert.equal(wrongStepAction.isError, true);
+  assert.match(wrongStepAction.structuredContent.error, /apply only to action: output/);
   assert.equal((await status(id)).state, 'completed');
   assert.equal(traces().filter(t => t.event === 'start').length, 1);
 });

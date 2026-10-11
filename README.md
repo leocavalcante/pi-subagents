@@ -133,7 +133,7 @@ Give a chain step an optional `id` to reuse its output in any later step:
 
 The tool rejects invalid IDs, duplicate IDs, and unknown, self, or forward references before approval or child launch. A failed step still stops the chain. If substitution produces a blank task, the next child does not start.
 
-References use full captured text, not the model-facing preview. Substitution happens once, so placeholders and dollar sequences inside an agent's output stay literal. This works in foreground and background chains, including silent jobs. Captured step results include `stepId`, and output pages include it when present. Pagination still selects steps by zero-based `taskIndex`.
+References use full captured text, not the model-facing preview. Substitution happens once, so placeholders and dollar sequences inside an agent's output stay literal. This works in foreground and background chains, including silent jobs. Captured step results include `stepId`, and output pages include it when present. Paginate a named step by `stepId`; use zero-based `taskIndex` for parallel batches, unnamed steps, or positional lookup.
 
 ## Model and thinking overrides
 
@@ -252,6 +252,7 @@ The `subagent_jobs` tool manages jobs:
 { "action": "status", "jobId": "<job ID>" }
 { "action": "wait", "jobId": "<job ID>", "timeoutMs": 30000 }
 { "action": "output", "jobId": "<finished job ID>", "taskIndex": 0, "offset": 0, "limit": 16384 }
+{ "action": "output", "jobId": "<finished chain job ID>", "stepId": "review", "offset": 0, "limit": 16384 }
 { "action": "cancel", "jobId": "<job ID>" }
 { "action": "forget", "jobId": "<finished job ID>" }
 { "action": "clear" }
@@ -295,7 +296,7 @@ Use one bounded wait when needed rather than a repeated status or wait loop.
 
 ## Read captured job output
 
-After a job finishes, `action: "output"` reads a page of a task's captured final text or failure diagnosis. The default `stream: "result"` preserves this behavior; set `stream: "stderr"` to page the task's separately captured stderr without mixing it into the final answer. `output.stderrTruncated` indicates whether stderr reached its 64 KiB capture limit (the captured text includes a truncation notice). Failed tasks also expose retained assistant and tool-result text under an explicit **partial, unverified** label; it is not evidence that the task completed successfully or that its side effects were rolled back. `output.partial` marks task output as incomplete or failed. `output.timedOut` indicates whether the runtime deadline fired, and `output.timeoutMs` reports the effective per-task deadline when configured. `output.exitCode` is the extension-reported task exit code (protocol violations and timeouts use `1`), while `output.processExitCode`, when available, reports the child's actual exit code (or `null` if it exited without a numeric code). Protocol failures include bounded `failureContext` fields for event type, a safe role label, JSONL record number, and last valid assistant stop reason. Invalid payload contents and arbitrary role strings are not echoed. `taskIndex` is zero-based and defaults to 0. For a parallel batch or chain, use the task's position in the original request. Status reports `resultCount` while results are retained.
+After a job finishes, `action: "output"` reads a page of a task's captured final text or failure diagnosis. The default `stream: "result"` preserves this behavior; set `stream: "stderr"` to page the task's separately captured stderr without mixing it into the final answer. `output.stderrTruncated` indicates whether stderr reached its 64 KiB capture limit (the captured text includes a truncation notice). Failed tasks also expose retained assistant and tool-result text under an explicit **partial, unverified** label; it is not evidence that the task completed successfully or that its side effects were rolled back. `output.partial` marks task output as incomplete or failed. `output.timedOut` indicates whether the runtime deadline fired, and `output.timeoutMs` reports the effective per-task deadline when configured. `output.exitCode` is the extension-reported task exit code (protocol violations and timeouts use `1`), while `output.processExitCode`, when available, reports the child's actual exit code (or `null` if it exited without a numeric code). Protocol failures include bounded `failureContext` fields for event type, a safe role label, JSONL record number, and last valid assistant stop reason. Invalid payload contents and arbitrary role strings are not echoed. Select a named chain step with `stepId`, or use zero-based `taskIndex` (default 0); the selectors are mutually exclusive. Use `taskIndex` for parallel batches and unnamed chain steps. Status reports `resultCount` while results are retained.
 
 `offset` is a UTF-8 byte offset, not a character count. Start at 0 and use the returned `nextOffset` until it is `null`. `limit` is 4 to 32768 bytes, with a default of 16384. Pages never split a UTF-8 character. Active jobs, unavailable captures, invalid indices, and offsets inside a character return an error. Evicted output cannot be recovered from this registry.
 
@@ -315,7 +316,7 @@ if (logs.error) throw new Error(logs.error);
 text(logs.output.text);
 ```
 
-Read additional pages only when needed. Non-silent jobs send completion messages automatically, so do not poll for them.
+Read additional pages only when needed; keep the same `stepId` or `taskIndex` selector and advance `offset` with each page. Non-silent jobs send completion messages automatically, so do not poll for them.
 
 ## Usage accounting
 
