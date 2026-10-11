@@ -86,7 +86,7 @@ export function isSafeModelSelector(value: unknown, allowBlank = false): value i
 }
 
 export function isSafeWorkingDirectory(value: unknown): value is string {
-	return typeof value === "string" && value.length <= MAX_WORKING_DIRECTORY_LENGTH &&
+	return typeof value === "string" && value.length > 0 && value.length <= MAX_WORKING_DIRECTORY_LENGTH &&
 		isWellFormedUnicode(value) && !value.includes("\0");
 }
 
@@ -394,7 +394,7 @@ function loadAgentsFromDir(
 				throw new Error(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
 			}
 			const cwd = frontmatter.cwd;
-			if (cwd !== undefined && (!isSafeWorkingDirectory(cwd) || cwd.length === 0)) {
+			if (cwd !== undefined && !isSafeWorkingDirectory(cwd)) {
 				throw new Error(`cwd must be a non-empty path containing well-formed Unicode, no NUL characters, and at most ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.`);
 			}
 			const agent: AgentConfig = {

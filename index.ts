@@ -1258,8 +1258,9 @@ function taskTextSchema(description: string) {
 
 const WorkingDirectory = Type.String({
 	pattern: "^[^\\u0000]*$",
+	minLength: 1,
 	maxLength: MAX_WORKING_DIRECTORY_LENGTH,
-	description: `Working directory for the child process. Precedence: entry, top-level call, agent default, then parent session directory. Relative paths resolve from the parent session's working directory. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
+	description: `Non-empty working directory for the child process. Precedence: entry, top-level call, agent default, then parent session directory. Relative paths resolve from the parent session's working directory. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
 });
 
 const TASK_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "agent", "task", "timeoutMs", "cwd"] as const;
@@ -1964,7 +1965,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (workingDirectories.some((cwd) => cwd !== undefined && !isSafeWorkingDirectory(cwd))) {
 				return {
-					content: [{ type: "text", text: "cwd must contain well-formed Unicode and no NUL characters." }],
+					content: [{ type: "text", text: "cwd must be a non-empty path containing well-formed Unicode and no NUL characters." }],
 					details: makeDetails(mode)([]),
 					isError: true,
 				};
