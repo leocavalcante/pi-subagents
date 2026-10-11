@@ -121,6 +121,8 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /configured timeout, working-directory and filtered-environment defaults/);
   assert.match(usage, /paginated in groups of at most 10/);
   assert.match(usage, /pass the returned `nextOffset` to continue/);
+  assert.match(usage, /pass its exact, case-sensitive name/);
+  assert.match(usage, /Name filtering happens after scope precedence/);
   assert.match(usage, /structured entries retain complete validated metadata/);
 });
 
