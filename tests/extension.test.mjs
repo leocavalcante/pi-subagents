@@ -1109,6 +1109,19 @@ test('stdout records and stderr are bounded while both streams continue draining
   assert.match(result.stderr, /stderr capture truncated/);
   assert.equal(result.stderr.includes('\uFFFD'), false);
   assert.match(stderrJob.latest.content[0].text, /Capture notice/);
+  let offset = 0, pagedStderr = '';
+  do {
+    const page = await invoke('subagent_jobs', { action: 'output', jobId: stderrJob.id, stream: 'stderr', offset, limit: 32768 });
+    const output = page.structuredContent.output;
+    assert.equal(output.stream, 'stderr');
+    assert.equal(output.stderrTruncated, true);
+    assert.equal(output.totalBytes, Buffer.byteLength(result.stderr));
+    assert.ok(Buffer.byteLength(output.text) <= 32768);
+    pagedStderr += output.text;
+    if (output.nextOffset === null) break;
+    offset = output.nextOffset;
+  } while (true);
+  assert.equal(pagedStderr, result.stderr, 'The stderr stream pages reconstruct its bounded capture including the truncation notice');
 });
 
 test('cumulative stdout overflow terminates the child, reports truncation, and releases its process slot', async t => {
@@ -3416,16 +3429,54 @@ test('failed protocol jobs expose safe context and paginated unverified partial 
   assert.equal(text.includes('\uFFFD'), false, 'UTF-8 pagination must not split captured text');
 });
 
+test('background output can page captured stderr without changing the default result stream', async () => {
+  const id = await launch({ task: 'stderr-output', notify: false });
+  await finish(id);
+  const resultPage = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.equal(resultPage.structuredContent.output.stream, 'result');
+  assert.equal(resultPage.structuredContent.output.text, 'result: stderr-output');
+
+  let offset = 0, stderr = '', controlPage;
+  do {
+    const page = await invoke('subagent_jobs', { action: 'output', jobId: id, stream: 'stderr', offset, limit: 7 });
+    assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, page.structuredContent), true);
+    const output = page.structuredContent.output;
+    assert.equal(output.stream, 'stderr');
+    assert.equal(output.stderrTruncated, false);
+    assert.ok(Buffer.byteLength(output.text) <= 7);
+    if (output.text.includes(String.fromCharCode(27))) controlPage = page;
+    stderr += output.text;
+    if (output.nextOffset === null) break;
+    offset = output.nextOffset;
+  } while (true);
+
+  const esc = String.fromCharCode(27), bell = String.fromCharCode(7), c1 = String.fromCharCode(0x9b);
+  const expected = `warning: café 🛰️\nterminal ${esc}]52;c;pi-subagents-test${bell} ${esc}[2J${c1}2J\nnext line`;
+  assert.equal(stderr, expected, 'UTF-8 stderr pages reconstruct the original captured stream');
+  assert.ok(controlPage, 'The hostile stderr controls were present in a paginated response');
+  const definition = tools.get('subagent_jobs').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const rendered = definition.renderResult(controlPage, { expanded: true }, theme, { isError: false }).render(100).join('\n');
+  assert.equal(rendered.includes(esc), false, 'stderr terminal controls must be escaped for display');
+  assert.equal(rendered.includes(bell), false);
+  assert.equal(rendered.includes(c1), false);
+  const renderedCall = definition.renderCall({ action: 'output', jobId: id, stream: 'stderr' }, theme, {}).render(100).join('\n');
+  assert.match(renderedCall, /stderr/, 'The TUI call preview identifies the selected output stream');
+});
+
 test('invalid output queries do not mutate jobs or launch children', async () => {
   const id = await launch({ task: 'small result' });
   await finish(id);
-  for (const query of [{ offset: -1 }, { offset: 1.5 }, { limit: 3 }, { limit: 32769 }, { taskIndex: -1 }, { taskIndex: 1 }, { offset: 999999 }]) {
+  for (const query of [{ offset: -1 }, { offset: 1.5 }, { limit: 3 }, { limit: 32769 }, { taskIndex: -1 }, { taskIndex: 1 }, { offset: 999999 }, { stream: 'stdout' }]) {
     const result = await invoke('subagent_jobs', { action: 'output', jobId: id, ...query });
     assert.equal(result.isError, true);
     assert.ok(result.structuredContent.error);
   }
   const misuse = await invoke('subagent_jobs', { action: 'cancel', jobId: id, offset: 1 });
   assert.equal(misuse.isError, true);
+  const wrongAction = await invoke('subagent_jobs', { action: 'status', jobId: id, stream: 'stderr' });
+  assert.equal(wrongAction.isError, true);
+  assert.match(wrongAction.structuredContent.error, /apply only to action: output/);
   assert.equal((await status(id)).state, 'completed');
   assert.equal(traces().filter(t => t.event === 'start').length, 1);
 });

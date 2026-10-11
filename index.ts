@@ -480,9 +480,14 @@ function getResultOutput(result: SingleResult): string {
 }
 
 const outputPagerCache = new WeakOutputPagerCache<SingleResult>();
+const stderrPagerCache = new WeakOutputPagerCache<SingleResult>();
 
-function pageResultOutput(result: SingleResult, offset: number, limit: number) {
-	const pager = outputPagerCache.get(result, () => createOutputPager(getResultOutput(result)));
+type JobOutputStream = "result" | "stderr";
+
+function pageResultOutput(result: SingleResult, offset: number, limit: number, stream: JobOutputStream = "result") {
+	const pager = stream === "stderr"
+		? stderrPagerCache.get(result, () => createOutputPager(result.stderr))
+		: outputPagerCache.get(result, () => createOutputPager(getResultOutput(result)));
 	return pager(offset, limit);
 }
 
@@ -1251,7 +1256,7 @@ const SUBAGENT_TOOL_KEYS = [
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
 const AGENT_TOOL_KEYS = ["agentScope"] as const;
-const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "offset", "limit", "timeoutMs"] as const;
+const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "offset", "limit", "stream", "timeoutMs"] as const;
 
 const TaskItem = Type.Object({
 	...DispatchOptions,
@@ -1374,6 +1379,7 @@ const JobResponseSchema = Type.Object({
 		processExitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
 		partial: Type.Boolean(), timedOut: Type.Boolean(), timeoutMs: Type.Optional(TimeoutSchema),
 		failureContext: Type.Optional(FailureContextSchema), stepId: Type.Optional(Type.String()),
+		stream: StringEnum(["result", "stderr"] as const), stderrTruncated: Type.Optional(Type.Boolean()),
 		text: Type.String(), offset: Type.Integer(), totalBytes: Type.Integer(),
 		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
 	})),
@@ -1573,6 +1579,9 @@ export default function (pi: ExtensionAPI) {
 			taskIndex: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: zero-based task index. Default: 0." })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, description: "Output only: UTF-8 byte offset. Default: 0. Use nextOffset from the previous page." })),
 			limit: Type.Optional(Type.Integer({ minimum: 4, maximum: MAX_PAGE_BYTES, description: "Output only: maximum page bytes, from 4 to 32768. Default: 16384." })),
+			stream: Type.Optional(StringEnum(["result", "stderr"] as const, {
+				description: "Output only: captured result (default) or the task's bounded stderr stream.",
+			})),
 			timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_JOB_WAIT_MS, default: DEFAULT_JOB_WAIT_MS,
 				description: "Wait only: maximum milliseconds to wait, from 1 to 60000. Default: 30000. Does not cancel the job." })),
 		}, { additionalProperties: false }),
@@ -1599,8 +1608,11 @@ export default function (pi: ExtensionAPI) {
 				params.timeoutMs < 1 || params.timeoutMs > MAX_JOB_WAIT_MS)) {
 				return fail(`timeoutMs applies only to action: wait and must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`);
 			}
-			if (action !== "output" && [params.taskIndex, params.offset, params.limit].some((v) => v !== undefined)) {
-				return fail("taskIndex, offset, and limit apply only to action: output.");
+			if (action !== "output" && [params.taskIndex, params.offset, params.limit, params.stream].some((v) => v !== undefined)) {
+				return fail("taskIndex, offset, limit, and stream apply only to action: output.");
+			}
+			if (params.stream !== undefined && params.stream !== "result" && params.stream !== "stderr") {
+				return fail('stream must be "result" or "stderr".');
 			}
 			if (action === "output" && (
 				(params.taskIndex !== undefined && (!Number.isSafeInteger(params.taskIndex) || params.taskIndex < 0)) ||
@@ -1647,15 +1659,18 @@ export default function (pi: ExtensionAPI) {
 				const task = job.latest?.details?.results[taskIndex];
 				if (!task) return fail("No retained task at this taskIndex. Inspect status for resultCount.", job);
 				try {
-					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384),
-						taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode,
+					const stream: JobOutputStream = params.stream ?? "result";
+					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384, stream),
+						stream, taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode,
 						...(task.processExitCode !== undefined ? { processExitCode: task.processExitCode } : {}),
 						partial: isPartialResult(task), timedOut: task.timedOut === true,
+						...(stream === "stderr" ? { stderrTruncated: task.capture?.stderrTruncated === true } : {}),
 						...(task.timeoutMs !== undefined ? { timeoutMs: task.timeoutMs } : {}),
 						...(task.failureContext ? { failureContext: task.failureContext } : {}),
 						...(task.stepId !== undefined ? { stepId: task.stepId } : {}) };
 					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;
-					return reply(`${job.id} task ${taskIndex} [${output.agent}] bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
+					const streamLabel = stream === "stderr" ? " stderr" : "";
+					return reply(`${job.id} task ${taskIndex} [${output.agent}]${streamLabel} bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
 						metadata, { job: metadata, output });
 				} catch (error) {
 					if (!(error instanceof RangeError)) throw error;
@@ -1677,9 +1692,10 @@ export default function (pi: ExtensionAPI) {
 			const action = escapeTerminalControls(truncateOutput(stringArg(args?.action), 64, "..."));
 			const jobId = typeof args?.jobId === "string"
 				? escapeTerminalControls(truncateOutput(args.jobId, 128, "...")) : "";
+			const stream = args?.stream === "stderr" ? " stderr" : "";
 			return new Text(
 				theme.fg("toolTitle", theme.bold("subagent_jobs ")) + theme.fg("accent", action) +
-					(jobId ? theme.fg("muted", ` ${jobId}`) : ""),
+					(jobId ? theme.fg("muted", ` ${jobId}`) : "") + (stream ? theme.fg("muted", stream) : ""),
 				0, 0,
 			);
 		},

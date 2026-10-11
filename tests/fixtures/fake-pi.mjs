@@ -213,6 +213,7 @@ if (task === 'malformed-fractional-usage') console.log(JSON.stringify({ type: 'm
 } }));
 if (task === 'stdout-flood' || task.startsWith('stdout-flood-hang')) await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
 if (task === 'stderr-flood') await write(process.stderr, 'é'.repeat(100 * 1024));
+if (task === 'stderr-output') await write(process.stderr, `warning: café 🛰️\n${terminalControlText}`);
 if (task === 'history-final-evicted') {
   const finalMessage = { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'answer that should remain captured' }], stopReason: 'stop' } };
   await write(process.stdout, JSON.stringify(finalMessage) + '\n');
