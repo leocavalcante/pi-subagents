@@ -37,6 +37,7 @@ import {
 	MAX_AGENT_DIAGNOSTICS,
 	MAX_AGENT_FILES,
 	MAX_AGENT_NAME_BYTES,
+	MAX_AGENT_SEARCH_QUERY_BYTES,
 	MAX_AGENT_TOOL_COUNT,
 	MAX_AGENT_TOOL_LIST_BYTES,
 	MAX_AGENT_UNSET_ENV_BYTES,
@@ -51,6 +52,7 @@ import {
 	type AgentScope,
 	discoverAgents,
 	isSafeAgentName,
+	isSafeAgentSearchQuery,
 	isSafeModelSelector,
 	isSafeWorkingDirectory,
 	THINKING_LEVELS,
@@ -1299,7 +1301,7 @@ const SUBAGENT_TOOL_KEYS = [
 	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
-const AGENT_TOOL_KEYS = ["agentScope", "name", "offset", "limit"] as const;
+const AGENT_TOOL_KEYS = ["agentScope", "name", "query", "offset", "limit"] as const;
 const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limit", "stream", "timeoutMs"] as const;
 
 const TaskItem = Type.Object({
@@ -1515,7 +1517,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent agents",
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
-			"Set name to look up one exact, case-sensitive definition after scope precedence is applied.",
+			"Set name to look up one exact, case-sensitive definition, or query to search names and descriptions after scope precedence is applied.",
+			`Search queries use case-insensitive literal substring matching, are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes, and cannot be combined with exact name lookup.`,
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
 			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
@@ -1523,9 +1526,11 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			agentScope: Type.Optional(AgentScopeSchema),
 			name: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_NAME_BYTES,
-				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence.` })),
+				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with query.` })),
+			query: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_SEARCH_QUERY_BYTES,
+				description: `Case-insensitive literal substring search in agent names and descriptions (maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with name.` })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
-				description: "Zero-based offset into the locale-independent agent-name ordering, after any exact-name filter. Default: 0." })),
+				description: "Zero-based offset into the locale-independent agent-name ordering, after any name or query filter. Default: 0." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE,
 				description: `Maximum number of definitions to return, from 1 to ${MAX_AGENT_LISTING_PAGE_SIZE}. Default: ${MAX_AGENT_LISTING_PAGE_SIZE}.` })),
 		}, { additionalProperties: false }),
@@ -1587,7 +1592,17 @@ export default function (pi: ExtensionAPI) {
 			if (requestedName !== undefined && (typeof requestedName !== "string" || !isSafeAgentName(requestedName))) {
 				return fail(`name must be a valid agent name of at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes without terminal or bidirectional controls.`, emptyListing(agentScope));
 			}
+			const requestedQuery: unknown = params.query;
+			if (requestedQuery !== undefined &&
+				(typeof requestedQuery !== "string" || !isSafeAgentSearchQuery(requestedQuery))) {
+				return fail(`query must be valid Unicode, contain non-whitespace text, and be at most ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes without terminal or bidirectional controls.`, emptyListing(agentScope));
+			}
+			if (requestedName !== undefined && requestedQuery !== undefined) {
+				return fail("name and query cannot be combined; use exact-name lookup or text search.", emptyListing(agentScope));
+			}
 			const exactName = typeof requestedName === "string" ? requestedName : undefined;
+			const query = typeof requestedQuery === "string" ? requestedQuery.trim() : undefined;
+			const normalizedQuery = query?.toLowerCase();
 			const requestedOffset: unknown = params.offset;
 			const offset = requestedOffset === undefined ? 0 : requestedOffset;
 			if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_AGENT_FILES * 2) {
@@ -1601,6 +1616,9 @@ export default function (pi: ExtensionAPI) {
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const allAgents = discovery.agents
 				.filter((agent) => exactName === undefined || agent.name === exactName)
+				.filter((agent) => normalizedQuery === undefined ||
+					agent.name.toLowerCase().includes(normalizedQuery) ||
+					agent.description.toLowerCase().includes(normalizedQuery))
 				.map((agent) => ({
 					name: agent.name,
 					description: agent.description,
@@ -1632,10 +1650,14 @@ export default function (pi: ExtensionAPI) {
 				.map((line) => truncateOutput(line, MAX_AGENT_DIAGNOSTIC_LINE_BYTES, "..."))
 				.join("\n");
 			const totalAgents = allAgents.length;
+			const filterLabel = query === undefined ? "" : `Results for "${displayUntrustedText(query)}": `;
+			const continuation = nextOffset === null ? "" : ` Continue with offset ${nextOffset}.`;
 			const pageLabel = pageAgents.length
-				? `Agents ${offset + 1}-${offset + pageAgents.length} of ${totalAgents}.${nextOffset === null ? "" : ` Continue with offset ${nextOffset}.`}`
+				? `${filterLabel}Agents ${offset + 1}-${offset + pageAgents.length} of ${totalAgents}.${continuation}`
 				: totalAgents === 0
-					? (exactName === undefined ? "No subagents found." : `No agent named ${displayUntrustedText(exactName)} found.`)
+					? query !== undefined
+						? `No agents matching "${displayUntrustedText(query)}" found.`
+						: exactName === undefined ? "No subagents found." : `No agent named ${displayUntrustedText(exactName)} found.`
 					: `No agents at offset ${offset}; ${totalAgents} total.`;
 			const details = {
 				agentScope, agents: pageAgents, offset, limit, totalAgents, nextOffset,

@@ -122,7 +122,9 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /paginated in groups of at most 10/);
   assert.match(usage, /pass the returned `nextOffset` to continue/);
   assert.match(usage, /pass its exact, case-sensitive name/);
-  assert.match(usage, /Name filtering happens after scope precedence/);
+  assert.match(usage, /case-insensitive literal substring matching in names and descriptions/);
+  assert.match(usage, /Choose either `name` or `query`, not both/);
+  assert.match(usage, /Filtering happens after scope precedence/);
   assert.match(usage, /structured entries retain complete validated metadata/);
 });
 
