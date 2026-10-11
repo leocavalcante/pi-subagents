@@ -24,6 +24,18 @@ test('release jobs check out the immutable event commit across platform line end
   assertReleaseCheckoutsPinned(normalized.replace(/\n/g, '\r\n'));
 });
 
+test('release workflow gates publishing on preflight and matrix tests while testing prereleases', () => {
+  const workflow = publishWorkflow.replace(/\r\n/g, '\n');
+  assert.match(workflow, /^  preflight:\n    if: github\.event\.release\.prerelease == false$/m,
+    'stable releases must run the registry and metadata preflight');
+  assert.match(workflow,
+    /^  test:\n    needs: preflight\n    if: always\(\) && \(needs\.preflight\.result == 'success' \|\| needs\.preflight\.result == 'skipped'\)$/m,
+    'matrix tests must follow preflight and still run for prereleases');
+  assert.match(workflow,
+    /^  publish:\n    needs: \[preflight, test\]\n    if: github\.event\.release\.prerelease == false$/m,
+    'stable publishing must require both successful preflight and matrix tests');
+});
+
 test('release preflight validates stable version tags before querying npm', () => {
   let queries = 0;
   assert.throws(() => verifyStableRelease(packageJson, 'v0.2.0', () => { queries++; return 'available'; }), /tag matching/);
