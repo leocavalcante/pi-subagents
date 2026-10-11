@@ -164,6 +164,13 @@ test('README documents mandatory approval for untrusted project agents', () => {
   assert.match(security, /Approval cannot be disabled through a tool argument/);
 });
 
+test('README warns that delegated children inherit environment variables', () => {
+  const security = section('Security');
+  assert.match(security, /child `pi` process also inherits the parent process's environment/);
+  assert.match(security, /Credentials and other secrets stored there are available to code running in the delegated process and, unless a child tool removes them, its subprocesses/);
+  assert.match(security, /do not rely on environment variables to keep secrets from delegated work/);
+});
+
 test('README documents temporary system-prompt storage and platform permissions', () => {
   const security = section('Security');
   assert.match(security, /Agent system prompts are written briefly to a temporary UTF-8 file/);
