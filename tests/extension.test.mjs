@@ -27,6 +27,7 @@ const {
   MAX_WORKING_DIRECTORY_LENGTH,
 } = await jiti.import('../agents.ts');
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
+const { MAX_PAGE_BYTES } = await jiti.import('../paging.ts');
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Use the canonical path because macOS exposes many temp directories through symlink aliases.
 const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pi-subagents-test-')));
@@ -3348,6 +3349,48 @@ test('structured job responses exclude full captures and support selecting batch
     assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, response.structuredContent), true);
   }
   assert.equal(output.details.latest, undefined, 'Output pages must not duplicate full captures into session history');
+});
+
+test('background job response schema enforces runtime collection and page limits', () => {
+  const schema = tools.get('subagent_jobs').definition.outputSchema;
+  const metadata = {
+    id: 'j'.repeat(36), label: 'l'.repeat(1024), notify: true, state: 'completed',
+    startedAt: '2026-10-11T00:00:00.000Z', finishedAt: '2026-10-11T00:00:01.000Z',
+    error: 'e'.repeat(2048), outputEvicted: true, resultCount: 32,
+  };
+  const response = {
+    action: 'output', jobs: Array(40).fill(metadata), job: metadata,
+    output: {
+      taskIndex: 31, agent: 'a'.repeat(256), exitCode: 0, partial: false, timedOut: false,
+      stepId: 's'.repeat(64), stream: 'result', text: 'x'.repeat(MAX_PAGE_BYTES),
+      offset: Number.MAX_SAFE_INTEGER, totalBytes: Number.MAX_SAFE_INTEGER,
+      nextOffset: Number.MAX_SAFE_INTEGER,
+    },
+    cleared: 32, error: 'e'.repeat(2048),
+  };
+  assert.equal(Value.Check(schema, response), true, 'values at schema caps must remain valid');
+
+  const invalid = [
+    ['too many retained job records', candidate => candidate.jobs.push(metadata)],
+    ['overlong job label', candidate => { candidate.job.label += 'x'; }],
+    ['overlong diagnostic', candidate => { candidate.job.error += 'x'; }],
+    ['too many results', candidate => { candidate.job.resultCount++; }],
+    ['oversized agent name', candidate => { candidate.output.agent += 'x'; }],
+    ['out-of-range task index', candidate => { candidate.output.taskIndex++; }],
+    ['overlong chain step ID', candidate => { candidate.output.stepId += 'x'; }],
+    ['invalid chain step ID format', candidate => { candidate.output.stepId = 'step name'; }],
+    ['oversized output page', candidate => { candidate.output.text += 'x'; }],
+    ['unsafe byte offset', candidate => { candidate.output.offset++; }],
+    ['unsafe total byte count', candidate => { candidate.output.totalBytes++; }],
+    ['unsafe next offset', candidate => { candidate.output.nextOffset++; }],
+    ['too many cleared records', candidate => { candidate.cleared++; }],
+    ['oversized response error', candidate => { candidate.error += 'x'; }],
+  ];
+  for (const [message, mutate] of invalid) {
+    const candidate = structuredClone(response);
+    mutate(candidate);
+    assert.equal(Value.Check(schema, candidate), false, message);
+  }
 });
 
 test('output pages reject active jobs and expose failed-job diagnoses after completion', async () => {
