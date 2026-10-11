@@ -39,7 +39,7 @@ process.env.SUBAGENT_TEST_TRACE = traceFile;
 mkdirSync(join(sandbox, 'agent/agents'), { recursive: true });
 writeFileSync(join(sandbox, 'agent/agents/worker.md'), '---\nname: worker\ndescription: Test worker\n---\nTest-only instructions.\n');
 writeFileSync(join(sandbox, 'agent/agents/pinned.md'), '---\nname: pinned\ndescription: Pinned worker\nmodel: fake/pinned:high\ntools: [read, bash]\n---\nPinned instructions.\n');
-writeFileSync(join(sandbox, 'agent/agents/env-default.md'), '---\nname: env-default\ndescription: Worker that removes selected inherited environment variables\nunsetEnv: [PI_SUBAGENTS_TEST_AGENT_ENV]\n---\nEnvironment test instructions.\n');
+writeFileSync(join(sandbox, 'agent/agents/env-default.md'), '---\nname: env-default\ndescription: Worker that removes selected inherited environment variables\nunsetEnv: [PI_SUBAGENTS_TEST_AGENT_ENV, PI_SUBAGENTS_TEST_CASE_ENV]\n---\nEnvironment test instructions.\n');
 mkdirSync(join(sandbox, 'project/.pi/agents'), { recursive: true });
 writeFileSync(join(sandbox, 'project/.pi/agents/project.md'), '---\nname: project\ndescription: Project worker\n---\nProject instructions.\n');
 
@@ -1879,7 +1879,7 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
 test('unsetEnv filters inherited variables additively for agents, calls, entries, chains, and background jobs', async t => {
   const variableNames = [
     'PI_SUBAGENTS_TEST_AGENT_ENV', 'PI_SUBAGENTS_TEST_CALL_ENV',
-    'PI_SUBAGENTS_TEST_ENTRY_ENV', 'PI_SUBAGENTS_TEST_KEEP_ENV',
+    'PI_SUBAGENTS_TEST_ENTRY_ENV', 'PI_SUBAGENTS_TEST_KEEP_ENV', 'pi_subagents_test_case_env',
   ];
   const previous = new Map(variableNames.map(name => [name, process.env[name]]));
   for (const name of variableNames) process.env[name] = `test-only-${name}`;
@@ -1903,6 +1903,11 @@ test('unsetEnv filters inherited variables additively for agents, calls, entries
     PI_SUBAGENTS_TEST_KEEP_ENV: true,
   });
   assert.equal(child('unset-env single').nestingDepth, '1', 'the internal recursion guard must always reach the child');
+  assert.deepEqual(child('unset-env single').caseEnvPresence,
+    process.platform === 'win32'
+      ? { configuredName: false, differentCase: false }
+      : { configuredName: false, differentCase: true },
+    'Windows filtering is case-insensitive while POSIX environment names remain case-sensitive');
 
   const parallel = await invoke('subagent', {
     unsetEnv: ['PI_SUBAGENTS_TEST_CALL_ENV'],
@@ -1952,7 +1957,8 @@ test('unsetEnv filters inherited variables additively for agents, calls, entries
   assert.equal(presence('unset-env background').PI_SUBAGENTS_TEST_KEEP_ENV, true);
 
   const listing = await invoke('subagent_agents', {});
-  assert.deepEqual(listing.details.agents.find(agent => agent.name === 'env-default').unsetEnv, ['PI_SUBAGENTS_TEST_AGENT_ENV']);
+  assert.deepEqual(listing.details.agents.find(agent => agent.name === 'env-default').unsetEnv,
+    ['PI_SUBAGENTS_TEST_AGENT_ENV', 'PI_SUBAGENTS_TEST_CASE_ENV']);
   assert.match(listing.content[0].text, /unsetEnv=/);
 });
 

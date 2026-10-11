@@ -15,6 +15,10 @@ const trace = entry => {
 trace({ event: 'start', task, cwd: process.cwd(), model: flag('--model'), thinking: flag('--thinking'), tools: flag('--tools'), noTools: args.includes('--no-tools'), nestingDepth: process.env.PI_SUBAGENTS_NESTING_DEPTH,
   envPresence: Object.fromEntries(['PI_SUBAGENTS_TEST_AGENT_ENV', 'PI_SUBAGENTS_TEST_CALL_ENV', 'PI_SUBAGENTS_TEST_ENTRY_ENV', 'PI_SUBAGENTS_TEST_KEEP_ENV']
     .map(name => [name, Object.hasOwn(process.env, name)])),
+  caseEnvPresence: {
+    configuredName: process.env.PI_SUBAGENTS_TEST_CASE_ENV !== undefined,
+    differentCase: process.env.pi_subagents_test_case_env !== undefined,
+  },
   promptFile: args.includes('--append-system-prompt') ? flag('--append-system-prompt') : undefined });
 if (args.includes('--append-system-prompt')) readFileSync(flag('--append-system-prompt'), 'utf8');
 if (task.includes('stubborn')) process.on('SIGTERM', () => {});
