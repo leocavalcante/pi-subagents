@@ -15,6 +15,7 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
+	unsetEnv?: string[];
 	model?: string;
 	thinking?: ThinkingLevel;
 	timeoutMs?: number;
@@ -48,6 +49,7 @@ type AgentFrontmatter = {
 	name?: unknown;
 	description?: unknown;
 	tools?: unknown;
+	unsetEnv?: unknown;
 	model?: unknown;
 	thinking?: unknown;
 	timeoutMs?: unknown;
@@ -59,6 +61,9 @@ export const MAX_AGENT_NAME_BYTES = 256;
 export const MAX_AGENT_DESCRIPTION_BYTES = 1024;
 export const MAX_AGENT_TOOL_LIST_BYTES = 4 * 1024;
 export const MAX_AGENT_TOOL_COUNT = 256;
+export const MAX_AGENT_UNSET_ENV_COUNT = 128;
+export const MAX_AGENT_UNSET_ENV_BYTES = 4 * 1024;
+export const ENVIRONMENT_VARIABLE_NAME_PATTERN = "^[A-Za-z_][A-Za-z0-9_]*$";
 export const MAX_MODEL_SELECTOR_BYTES = 512;
 export const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
@@ -83,6 +88,36 @@ export function isSafeModelSelector(value: unknown, allowBlank = false): value i
 export function isSafeWorkingDirectory(value: unknown): value is string {
 	return typeof value === "string" && value.length <= MAX_WORKING_DIRECTORY_LENGTH &&
 		isWellFormedUnicode(value) && !value.includes("\0");
+}
+
+/** Parse variable names to remove from the child process's inherited environment. */
+export function parseAgentUnsetEnv(value: unknown): string[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.length > MAX_AGENT_UNSET_ENV_COUNT ||
+		!value.every((name): name is string => typeof name === "string")) {
+		throw new Error(`unsetEnv must be an array of at most ${MAX_AGENT_UNSET_ENV_COUNT} environment variable names.`);
+	}
+	const names: string[] = [];
+	const seen = new Set<string>();
+	let totalBytes = 0;
+	for (const name of value) {
+		if (name.length === 0 || name.length > MAX_AGENT_UNSET_ENV_BYTES ||
+			!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+			throw new Error("unsetEnv entries must be valid ASCII environment variable names.");
+		}
+		if (name.toUpperCase() === "PI_SUBAGENTS_NESTING_DEPTH") {
+			throw new Error("unsetEnv cannot remove the internal PI_SUBAGENTS_NESTING_DEPTH variable.");
+		}
+		if (seen.has(name)) continue;
+		const bytes = name.length + (names.length > 0 ? 1 : 0);
+		if (bytes > MAX_AGENT_UNSET_ENV_BYTES - totalBytes) {
+			throw new Error(`unsetEnv must be at most ${MAX_AGENT_UNSET_ENV_BYTES} bytes and contain at most ${MAX_AGENT_UNSET_ENV_COUNT} names.`);
+		}
+		names.push(name);
+		seen.add(name);
+		totalBytes += bytes;
+	}
+	return names;
 }
 
 const MAX_AGENT_DIRECTORY_ENTRIES = 4096;
@@ -366,6 +401,7 @@ function loadAgentsFromDir(
 				name: frontmatter.name.trim(),
 				description,
 				tools: parseAgentToolList(frontmatter.tools),
+				unsetEnv: parseAgentUnsetEnv(frontmatter.unsetEnv),
 				model: frontmatter.model?.trim() || undefined,
 				thinking: thinking as ThinkingLevel | undefined,
 				timeoutMs: timeoutMs as number | undefined,

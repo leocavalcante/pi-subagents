@@ -54,7 +54,7 @@ description: General-purpose worker
 Complete the delegated task. Report the changes made and checks run.
 ```
 
-An agent can set `model`, `thinking`, `tools`, a default `timeoutMs`, and a default working directory with `cwd` in its frontmatter. Agent `cwd` paths resolve relative to the parent session's working directory, not the definition file. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
+An agent can set `model`, `thinking`, `tools`, a default `timeoutMs`, a default working directory with `cwd`, and inherited environment variables to remove with `unsetEnv` in its frontmatter. Agent `cwd` paths resolve relative to the parent session's working directory, not the definition file. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
 
 ```yaml
 model: anthropic/claude-sonnet-4-5
@@ -62,13 +62,14 @@ thinking: high
 tools: [read, bash]
 timeoutMs: 120000
 cwd: packages/app
+unsetEnv: [AWS_SECRET_ACCESS_KEY, PRIVATE_TOKEN]
 ```
 
 Without `model`, it inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
 
 Without `tools`, it uses Pi's defaults. Both `tools: read, bash` and `tools: [read, bash]` work. Set `tools: []` to disable the initial tool selection. Entries cannot contain commas or control characters because the child CLI parses a comma-separated list; they also cannot start with `+` or `-`, which Pi interprets as modifiers to the default tool selection rather than allowlist names. Tool arrays are limited to 256 entries; comma-separated values and the normalized `--tools` argument are each capped at 4 KiB of UTF-8 text. This is not a sandbox; extensions can still change the selection.
 
-Definitions need non-empty `name` and `description` fields. Agent `timeoutMs` defaults must be whole milliseconds from 1 to 86400000 (24 hours); call-level values can override or explicitly disable a definition's deadline. Agent `cwd` defaults must be non-empty, well-formed Unicode paths with no NUL characters and at most 32,767 UTF-16 code units; dispatch paths can override them. A configured working directory is a convenience, not a filesystem sandbox, and does not restrict access to other paths. Agent definition files must be valid UTF-8, and metadata escapes that produce unpaired UTF-16 surrogates are rejected rather than silently normalized. Agent names are limited to 256 UTF-8 bytes and cannot contain terminal or bidirectional formatting controls; this keeps identifiers safe in trust prompts, diagnostics, and UI output. Descriptions are limited to 1 KiB of UTF-8 text so listing metadata remains compact. Untrusted metadata shown in listings and project-agent confirmations is escaped for display. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents. Duplicate names in the same directory produce a diagnostic naming both files. The last valid definition in locale-independent lexical filename order still wins. Intentional project-over-personal overrides do not produce a duplicate warning.
+Definitions need non-empty `name` and `description` fields. Agent `timeoutMs` defaults must be whole milliseconds from 1 to 86400000 (24 hours); call-level values can override or explicitly disable a definition's deadline. Agent `cwd` defaults must be non-empty, well-formed Unicode paths with no NUL characters and at most 32,767 UTF-16 code units; dispatch paths can override them. A configured working directory is a convenience, not a filesystem sandbox, and does not restrict access to other paths. Agent `unsetEnv` defaults list portable environment-variable names, with at most 128 names and 4 KiB total; calls and task entries can add more names to remove but cannot restore variables removed by the agent. `PI_SUBAGENTS_NESTING_DEPTH` is reserved for the recursion limit and cannot be removed. Agent definition files must be valid UTF-8, and metadata escapes that produce unpaired UTF-16 surrogates are rejected rather than silently normalized. Agent names are limited to 256 UTF-8 bytes and cannot contain terminal or bidirectional formatting controls; this keeps identifiers safe in trust prompts, diagnostics, and UI output. Descriptions are limited to 1 KiB of UTF-8 text so listing metadata remains compact. Untrusted metadata shown in listings and project-agent confirmations is escaped for display. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents. Duplicate names in the same directory produce a diagnostic naming both files. The last valid definition in locale-independent lexical filename order still wins. Intentional project-over-personal overrides do not produce a duplicate warning.
 
 Project-local definitions live in `.pi/agents/*.md`. The tool loads only personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents. Project definitions override personal definitions of the same name when using `"both"`. Project agent directories and files may use symlinks that resolve within the project root; links resolving outside it are skipped and reported as diagnostics. Personal agent symlinks are unchanged.
 
@@ -76,7 +77,7 @@ Agent discovery is bounded for both personal and project directories: it scans a
 
 ## Usage
 
-Use `subagent_agents` to list agent descriptions, source paths, model, thinking, tool settings, configured timeout and working-directory defaults, and invalid definitions without running an agent:
+Use `subagent_agents` to list agent descriptions, source paths, model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults, and invalid definitions without running an agent:
 
 ```json
 {}
@@ -166,6 +167,22 @@ Use `tools` to tailor the child's initial tool selection for a particular dispat
 A comma-separated string such as `"read, grep"` is also accepted. In parallel and chain modes, the top-level value is the default for each child and an entry's value overrides it. Tool selection precedence is entry, top-level call, agent frontmatter, then the child Pi defaults. Omitted values inherit that precedence. Set `tools: []` to disable the initial tool selection, or set `tools: null` on a call or entry to ignore the agent's configured allowlist and use child Pi defaults; an entry-level `null` also overrides a top-level selection.
 
 Overrides use the same validation as agent definitions: at most 256 entries and 4 KiB of normalized UTF-8 tool names, with no commas, controls, or leading `+`/`-` modifiers in individual names. This is a convenience for selecting tools, not a sandbox; extensions can still change the selection. Tool overrides work in foreground and background modes and do not bypass project-agent approval.
+
+## Inherited environment filtering
+
+The child Pi process inherits the parent environment by default. Set `unsetEnv` on an agent or dispatch to omit known variables from the child's initial environment:
+
+```json
+{
+  "agent": "worker",
+  "task": "Inspect the repository without using cloud credentials.",
+  "unsetEnv": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+}
+```
+
+Agent defaults, top-level call values, and parallel/chain entry values combine additively. Lists use portable ASCII environment-variable names, allow at most 128 entries and 4 KiB, and are applied case-insensitively on Windows. The internal `PI_SUBAGENTS_NESTING_DEPTH` variable cannot be removed. Agent listings and project-agent approval prompts show variable names, never their values.
+
+This only filters variables inherited at child startup; it is not a sandbox. A child can set variables for its own subprocesses, and it still has the parent's OS permissions to read files or obtain credentials elsewhere. Use trusted agents and do not put secrets in delegated tasks or prompts.
 
 ## Batch concurrency
 
@@ -319,7 +336,7 @@ On POSIX, when a child exits, the extension sends SIGTERM to remaining members o
 
 ## Security
 
-Context isolation is not a sandbox. Children run with the same OS permissions as Pi and can read or modify files. Include relevant context and task restrictions in each delegation. The child `pi` process also inherits the parent process's environment. Credentials and other secrets stored there are available to code running in the delegated process and, unless a child tool removes them, its subprocesses; do not rely on environment variables to keep secrets from delegated work.
+Context isolation is not a sandbox. Children run with the same OS permissions as Pi and can read or modify files. Include relevant context and task restrictions in each delegation. The child `pi` process inherits the parent process's environment by default. Use `unsetEnv` to omit known variables from the child's startup environment; this does not prevent the child from setting variables itself or reading credentials from files and other sources. Do not put secrets in delegated tasks or prompts, and do not rely on environment filtering as a security boundary.
 
 Agent system prompts are written briefly to a temporary UTF-8 file so the child CLI can append them, then removed during invocation cleanup. Transient removal failures get bounded retries, and failed cleanup is retried at process exit. On POSIX, the temporary directory and file grant no group or other access. On Windows, access follows the ACLs inherited from the configured temporary directory; secure that directory if prompts must be private to your account. Temporary-file permissions do not protect against other processes running as the same user or against the delegated child.
 
