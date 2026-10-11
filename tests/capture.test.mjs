@@ -82,6 +82,29 @@ test('byte JSON capture rejects malformed and truncated UTF-8 records, then reco
   assert.equal(overflow, 0);
 });
 
+test('byte JSON capture reuses its bounded tail buffer across small records', () => {
+  const count = 1000;
+  const chunk = Buffer.from('{"x":1}\n'.repeat(count));
+  const lines = [];
+  const originalAllocUnsafe = Buffer.allocUnsafe;
+  let tailAllocations = 0;
+  Buffer.allocUnsafe = size => {
+    if (size >= 64 * 1024) tailAllocations++;
+    return originalAllocUnsafe(size);
+  };
+  try {
+    const reader = new JsonLineCapture(line => lines.push(line), () => assert.fail('overflow'), 8 * 1024 * 1024);
+    reader.append(chunk);
+    reader.finish();
+  } finally {
+    Buffer.allocUnsafe = originalAllocUnsafe;
+  }
+  assert.equal(lines.length, count);
+  assert.equal(lines[0], '{"x":1}');
+  assert.equal(lines.at(-1), '{"x":1}');
+  assert.equal(tailAllocations, 1, 'small JSONL records should share one bounded scratch buffer');
+});
+
 test('oversized JSON records are discarded until LF without losing following records', () => {
   const lines = [];
   let overflow = 0;

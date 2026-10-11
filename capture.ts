@@ -136,7 +136,7 @@ export class JsonLineCapture {
 	private clearRecord(): void {
 		this.buffer = "";
 		this.byteFragments = [];
-		this.byteTail = undefined;
+		// Keep the bounded byte tail for reuse across records; decoding completes before this reset.
 		this.byteTailBytes = 0;
 		this.bytes = 0;
 	}
