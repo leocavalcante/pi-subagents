@@ -41,6 +41,7 @@ import {
 	MAX_AGENT_TOOL_LIST_BYTES,
 	MAX_MODEL_SELECTOR_BYTES,
 	MAX_TIMEOUT_MS,
+	parseAgentToolList,
 	type AgentConfig,
 	type AgentScope,
 	discoverAgents,
@@ -663,6 +664,30 @@ interface DispatchDefaults {
 interface DispatchOverrides {
 	model?: string | null;
 	thinking?: ThinkingLevel | null;
+	tools?: string[] | null;
+}
+
+interface DispatchOverrideInput {
+	model?: string | null;
+	thinking?: ThinkingLevel | null;
+	tools?: unknown;
+}
+
+function normalizeDispatchOverrides(overrides: DispatchOverrideInput): DispatchOverrides {
+	return {
+		model: overrides.model,
+		thinking: overrides.thinking,
+		tools: overrides.tools === undefined || overrides.tools === null
+			? overrides.tools : parseAgentToolList(overrides.tools),
+	};
+}
+
+function mergeDispatchOverrides(defaults: DispatchOverrides, entry: DispatchOverrides): DispatchOverrides {
+	return {
+		model: entry.model !== undefined ? entry.model : defaults.model,
+		thinking: entry.thinking !== undefined ? entry.thinking : defaults.thinking,
+		tools: entry.tools !== undefined ? entry.tools : defaults.tools,
+	};
 }
 
 async function runSingleAgent(
@@ -717,8 +742,9 @@ async function runSingleAgent(
 	const thinking = overrides.thinking === null ? inheritedThinking
 		: overrides.thinking ?? agent.thinking ?? inheritedThinking;
 	if (thinking) args.push("--thinking", thinking);
-	if (agent.tools) {
-		if (agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+	const selectedTools = overrides.tools === null ? undefined : overrides.tools ?? agent.tools;
+	if (selectedTools !== undefined) {
+		if (selectedTools.length > 0) args.push("--tools", selectedTools.join(","));
 		else args.push("--no-tools");
 	}
 
@@ -1164,6 +1190,15 @@ const DispatchOptions = {
 		StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." }),
 		Type.Null({ description: "Ignore the agent's configured thinking level; inherit parent thinking only when the model is also inherited." }),
 	], { description: "Override the thinking level, or set null to ignore the agent default and inherit parent thinking only when the model is inherited." })),
+	tools: Type.Optional(Type.Union([
+		Type.String({ maxLength: MAX_AGENT_TOOL_LIST_BYTES,
+			description: `Comma-separated tool names; maximum ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and ${MAX_AGENT_TOOL_COUNT} entries.` }),
+		Type.Array(Type.String({ maxLength: MAX_AGENT_TOOL_LIST_BYTES }), {
+			maxItems: MAX_AGENT_TOOL_COUNT,
+			description: `Tool names; maximum ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes total and ${MAX_AGENT_TOOL_COUNT} entries.`,
+		}),
+		Type.Null({ description: "Ignore the agent's configured tool allowlist and leave the child Pi tool selection at its defaults." }),
+	], { description: "Override the agent's configured tool allowlist. Use [] for no tools or null to use the child Pi defaults." })),
 };
 
 const AgentNameSchema = Type.String({
@@ -1184,10 +1219,10 @@ const WorkingDirectory = Type.String({
 	description: `Working directory for the child process; in batch modes the top-level cwd is the default and each task or step may override it. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
 });
 
-const TASK_ITEM_KEYS = ["model", "thinking", "agent", "task", "timeoutMs", "cwd"] as const;
-const CHAIN_ITEM_KEYS = ["model", "thinking", "id", "agent", "task", "timeoutMs", "cwd"] as const;
+const TASK_ITEM_KEYS = ["model", "thinking", "tools", "agent", "task", "timeoutMs", "cwd"] as const;
+const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "id", "agent", "task", "timeoutMs", "cwd"] as const;
 const SUBAGENT_TOOL_KEYS = [
-	"model", "thinking", "background", "notify", "agent", "task", "tasks", "chain",
+	"model", "thinking", "tools", "background", "notify", "agent", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
 const AGENT_TOOL_KEYS = ["agentScope"] as const;
@@ -1629,7 +1664,7 @@ export default function (pi: ExtensionAPI) {
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			`Extension-mediated nested subagent calls are limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive delegation.`,
-			"Set model or thinking to override agent configuration. Use null to ignore the agent's configured model or thinking default. Parallel/chain entries override batch defaults.",
+			"Set model, thinking, or tools to override agent configuration. Use null to ignore an agent's configured model, thinking, or tool allowlist. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project"). Untrusted projects require UI approval or Pi project trust; tool arguments cannot bypass this.`,
@@ -1790,15 +1825,26 @@ export default function (pi: ExtensionAPI) {
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
-			const configurations: DispatchOverrides[] = [params, ...(params.tasks ?? []), ...(params.chain ?? [])];
+			const configurations: DispatchOverrideInput[] = [params, ...(params.tasks ?? []), ...(params.chain ?? [])];
 			if (configurations.some((item) =>
 				(item.model !== undefined && item.model !== null && !isSafeModelSelector(item.model)) ||
-				(item.thinking !== undefined && item.thinking !== null && !THINKING_LEVELS.includes(item.thinking)))) {
+				(item.thinking !== undefined && item.thinking !== null && !THINKING_LEVELS.includes(item.thinking as ThinkingLevel)))) {
 				return {
 					content: [{ type: "text", text: `model must be a non-empty selector of at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes without control characters and contain well-formed Unicode; thinking must be one of: ${THINKING_LEVELS.join(", ")}.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
+			let normalizedConfigurations: DispatchOverrides[];
+			try {
+				normalizedConfigurations = configurations.map(normalizeDispatchOverrides);
+			} catch (error) {
+				return {
+					content: [{ type: "text", text: `Invalid tools override: ${error instanceof Error ? error.message : "invalid tool selection."}` }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
+			const callOverrides = normalizedConfigurations[0];
+			const taskOverrides = normalizedConfigurations.slice(1);
 			const deadlines = [params.timeoutMs, ...(params.tasks ?? []).map((t) => t.timeoutMs),
 				...(params.chain ?? []).map((t) => t.timeoutMs)];
 			if (deadlines.some((value) => value !== undefined && value !== null &&
@@ -1963,8 +2009,7 @@ export default function (pi: ExtensionAPI) {
 							step.agent,
 							taskWithContext,
 							step.cwd ?? params.cwd,
-							{ model: step.model !== undefined ? step.model : params.model,
-								thinking: step.thinking !== undefined ? step.thinking : params.thinking },
+							mergeDispatchOverrides(callOverrides, taskOverrides[i]),
 							step.timeoutMs !== undefined ? step.timeoutMs : params.timeoutMs,
 							i + 1,
 							signal,
@@ -2060,8 +2105,7 @@ export default function (pi: ExtensionAPI) {
 							t.agent,
 							t.task,
 							t.cwd ?? params.cwd,
-							{ model: t.model !== undefined ? t.model : params.model,
-								thinking: t.thinking !== undefined ? t.thinking : params.thinking },
+							mergeDispatchOverrides(callOverrides, taskOverrides[index]),
 							t.timeoutMs !== undefined ? t.timeoutMs : params.timeoutMs,
 							undefined,
 							signal,
@@ -2113,7 +2157,7 @@ export default function (pi: ExtensionAPI) {
 						params.agent,
 						params.task,
 						params.cwd,
-						params,
+						callOverrides,
 						params.timeoutMs,
 						undefined,
 						signal,
