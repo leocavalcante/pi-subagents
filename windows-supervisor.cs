@@ -439,12 +439,14 @@ internal static class WindowsSupervisor
 
     public static int Main(string[] arguments)
     {
-        if (arguments.Length < 3) return FailClosed();
-        var workingDirectory = arguments[1];
-        var unsetEnvironmentVariables = arguments[2];
-        var childArguments = new string[arguments.Length - 2];
+        if (arguments.Length < 2) return FailClosed();
+        // The supervisor is started with the child working directory already set.
+        // Do not repeat a potentially long path in argv: Windows caps command lines at 32,767 UTF-16 code units.
+        var workingDirectory = Environment.CurrentDirectory;
+        var unsetEnvironmentVariables = arguments[1];
+        var childArguments = new string[arguments.Length - 1];
         childArguments[0] = arguments[0];
-        Array.Copy(arguments, 3, childArguments, 1, arguments.Length - 3);
+        Array.Copy(arguments, 2, childArguments, 1, arguments.Length - 2);
 
         IntPtr outerJob = IntPtr.Zero;
         IntPtr innerJob = IntPtr.Zero;

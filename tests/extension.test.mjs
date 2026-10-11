@@ -1011,7 +1011,7 @@ test('Windows cancellation and deadlines skip the POSIX SIGKILL grace timer', { 
     'A deadline should schedule only the bounded inherited-pipe drain timer');
 });
 
-test('Windows Job Object supervision cleans descendants after cancellation and leader exit', { skip: process.platform !== 'win32' }, async () => {
+test('Windows Job Object supervision cleans descendants after cancellation and leader exit', { skip: process.platform !== 'win32' }, async t => {
   const descendantPids = new Set();
   const startedDescendant = task => traces().find(entry => entry.event === 'grandchild' && entry.task === task);
   try {
@@ -1023,6 +1023,51 @@ test('Windows Job Object supervision cleans descendants after cancellation and l
     const argumentTrace = traces().find(entry => entry.event === 'start' && entry.task === 'Windows supervisor quotes arguments');
     assert.equal(argumentTrace.model, model, 'quoted model arguments must arrive unchanged');
     assert.equal(argumentTrace.cwd, workingDirectory, 'the working directory must survive paths with spaces');
+
+    // The outer supervisor process receives cwd through spawn's dedicated option,
+    // not argv, whose Windows limit also includes the other Pi arguments.
+    const longCwdPrefix = join(sandbox, 'long-working-directory-');
+    const longWorkingDirectory = `${longCwdPrefix}${'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH - longCwdPrefix.length - 32)}`;
+    assert.equal(longWorkingDirectory.length, MAX_WORKING_DIRECTORY_LENGTH - 32);
+    let invocation;
+    const spawn = t.mock.method(childProcess, 'spawn', (command, args, options) => {
+      invocation = { command, args, options };
+      const child = new EventEmitter();
+      child.pid = 2_000_000_000;
+      child.kill = () => false;
+      child.stdin = new EventEmitter();
+      child.stdin.destroy = () => {};
+      child.stdin.end = () => queueMicrotask(() => {
+        child.emit('spawn');
+        child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'message_end', message: {
+          role: 'assistant', content: [{ type: 'text', text: 'long cwd accepted' }], stopReason: 'stop',
+          usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+        } }) + '\n'));
+        child.emit('exit', 0);
+        child.emit('close', 0);
+      });
+      child.stdout = new EventEmitter();
+      child.stdout.destroy = () => {};
+      child.stderr = new EventEmitter();
+      child.stderr.setEncoding = () => {};
+      child.stderr.destroy = () => {};
+      return child;
+    });
+    syncBuiltinESMExports();
+    try {
+      const longCwdResult = await invoke('subagent', {
+        agent: 'worker', task: 'long Windows cwd', cwd: longWorkingDirectory,
+      });
+      assert.equal(longCwdResult.details.results[0].exitCode, 0);
+      assert.equal(spawn.mock.callCount(), 1);
+      assert.match(invocation.command, /supervisor\.exe$/i);
+      assert.equal(invocation.options.cwd, longWorkingDirectory);
+      assert.equal(invocation.args.includes(longWorkingDirectory), false,
+        'the long working directory must not consume Windows command-line space');
+    } finally {
+      spawn.mock.restore();
+      syncBuiltinESMExports();
+    }
 
     const canceledTask = 'delay=10000 orphan grandchild-ignored grandchild-marker canceled Windows containment';
     const canceledId = await launch({ task: canceledTask });
