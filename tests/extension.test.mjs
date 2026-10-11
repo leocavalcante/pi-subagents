@@ -113,6 +113,48 @@ test('background returns before completion, retains progress, and sends a follow
   assert.equal(child.thinking, 'high');
 });
 
+test('foreground cancellation just after child close does not report a completed result', async t => {
+  const controller = new AbortController();
+  const spawn = t.mock.method(childProcess, 'spawn', () => {
+    const child = new EventEmitter();
+    child.pid = 2_000_000_000;
+    child.kill = () => false;
+    child.stdin = new EventEmitter();
+    child.stdin.end = () => queueMicrotask(() => {
+      child.emit('spawn');
+      child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'message_end', message: {
+        role: 'assistant', content: [{ type: 'text', text: 'completed answer' }], stopReason: 'stop',
+        usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
+      } }) + '\n'));
+      child.emit('exit', 0);
+      child.emit('close', 0);
+    });
+    child.stdout = new EventEmitter();
+    child.stdout.destroy = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stderr.destroy = () => {};
+    const emit = child.emit.bind(child);
+    child.emit = (event, ...args) => {
+      const emitted = emit(event, ...args);
+      if (event === 'close') process.nextTick(() => controller.abort());
+      return emitted;
+    };
+    return child;
+  });
+  syncBuiltinESMExports();
+  try {
+    const outcome = await invoke('subagent', { agent: 'worker', task: 'abort after child close' }, ctx(), controller.signal)
+      .then(result => ({ result }), reason => ({ reason }));
+    assert.equal(outcome.reason, controller.signal.reason,
+      'An abort delivered after process cleanup but before the tool result must still cancel the call');
+    assert.equal(outcome.result, undefined);
+  } finally {
+    spawn.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test('foreground cancellation preserves an explicit null abort reason and releases its slot', async () => {
   const controller = new AbortController();
   const pending = invoke('subagent', { agent: 'worker', task: 'delay=10000 null-abort-reason' }, ctx(), controller.signal).then(

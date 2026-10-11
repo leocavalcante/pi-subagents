@@ -1183,6 +1183,10 @@ async function runSingleAgent(
 	} finally {
 		release?.();
 		if (tmpPromptDir) await removeTemporaryDirectory(tmpPromptDir);
+		// The child-close handler detaches its abort listener before this async
+		// cleanup finishes. Recheck so a caller abort in that handoff window does
+		// not receive a completed, billable foreground result.
+		signal?.throwIfAborted();
 	}
 }
 
@@ -1322,7 +1326,11 @@ function boundedSubagentExecute(execute: SubagentExecute): SubagentExecute {
 				updatesEnabled = false;
 			}
 		} : undefined;
-		return boundResultText(await execute(id, params, signal, safeUpdate, ctx));
+		const result = await execute(id, params, signal, safeUpdate, ctx);
+		// A foreground signal can abort after child cleanup removes its listener but
+		// before this outer tool promise settles. Keep background launch detached.
+		if (!isToolParameterObject(params) || params.background !== true) signal?.throwIfAborted();
+		return boundResultText(result);
 	};
 }
 
