@@ -35,14 +35,24 @@ test('npm package includes required runtime support files', () => {
   }
 });
 
-test('CONTRIBUTING documents the locally reproducible actionlint check', () => {
-  const version = testWorkflow.match(/^\s+version=(\d+\.\d+\.\d+)$/m)?.[1];
-  const ignore = testWorkflow.match(/^\s+-ignore '([^']+)'/m)?.[1];
+function assertActionlintDocumentationMatchesWorkflow(workflowSource) {
+  const workflow = workflowSource.replace(/\r\n/g, '\n');
+  const version = workflow.match(/^\s+version=(\d+\.\d+\.\d+)$/m)?.[1];
+  const ignores = [...workflow.matchAll(/^\s+-ignore '([^']+)'/gm)].map(([, ignore]) => ignore);
   assert.ok(version, 'CI must pin the actionlint version');
-  assert.ok(ignore, 'CI must scope its runner-label diagnostic ignore');
+  assert.deepEqual(ignores, ['label "ubuntu-26\\.04" is unknown\\.'],
+    'the Ubuntu 26 runner-label catalog diagnostic must be the sole ignored actionlint diagnostic');
+  const [ignore] = ignores;
+  const invocation = `"$RUNNER_TEMP/actionlint" \\\n            -ignore '${ignore}' \\\n            .github/workflows/*.yml`;
+  assert.ok(workflow.includes(invocation), 'CI must invoke actionlint on the workflow files with the scoped ignore');
   assert.ok(contributing.includes(`actionlint v${version}`));
   assert.ok(contributing.includes(`actionlint -ignore '${ignore}' .github/workflows/*.yml`));
   assert.match(contributing, /keep the explicit `ubuntu-26\.04` matrix row until GitHub's runner migration is confirmed/);
+}
+
+test('CONTRIBUTING documents the sole narrowly scoped actionlint ignore used by CI', () => {
+  assertActionlintDocumentationMatchesWorkflow(testWorkflow);
+  assertActionlintDocumentationMatchesWorkflow(testWorkflow.replace(/\r?\n/g, '\r\n'));
 });
 
 test('CONTRIBUTING explains how Windows process containment is validated', () => {
