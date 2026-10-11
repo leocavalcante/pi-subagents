@@ -5,6 +5,7 @@ import test from 'node:test';
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const contributing = readFileSync(new URL('../CONTRIBUTING.md', import.meta.url), 'utf8');
 const testWorkflow = readFileSync(new URL('../.github/workflows/test.yml', import.meta.url), 'utf8');
+const codeqlWorkflow = readFileSync(new URL('../.github/workflows/codeql.yml', import.meta.url), 'utf8');
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function section(title) {
@@ -49,6 +50,18 @@ function assertActionlintDocumentationMatchesWorkflow(workflowSource) {
   assert.ok(contributing.includes(`actionlint -ignore '${ignore}' .github/workflows/*.yml`));
   assert.match(contributing, /keep the explicit `ubuntu-26\.04` matrix row until GitHub's runner migration is confirmed/);
 }
+
+test('CodeQL scans the C# Windows supervisor and preserves the JavaScript check name', () => {
+  const workflow = codeqlWorkflow.replace(/\r\n/g, '\n');
+  assert.match(workflow, /^  analyze:\n    name: Analyze JavaScript and TypeScript$/m);
+  assert.match(workflow, /^          languages: javascript-typescript$/m);
+  assert.match(workflow, /^  analyze-csharp:\n    name: Analyze C#$/m);
+  assert.match(workflow, /^          languages: csharp\n          build-mode: none$/m);
+  assert.match(workflow, /github\/codeql-action\/analyze@/);
+  assert.match(workflow, /^  push:\n    branches:\n      - main$/m);
+  assert.match(workflow, /^  pull_request:\n    branches:\n      - main$/m);
+  assert.match(workflow, /^  schedule:\n    - cron:/m);
+});
 
 test('CONTRIBUTING documents the sole narrowly scoped actionlint ignore used by CI', () => {
   assertActionlintDocumentationMatchesWorkflow(testWorkflow);
