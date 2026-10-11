@@ -1,8 +1,28 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { verifyStableRelease } from '../.github/scripts/check-release-package.mjs';
 
 const packageJson = { name: '@leocavalcante/pi-subagents', version: '0.1.0' };
+const publishWorkflow = readFileSync(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8');
+
+function assertReleaseCheckoutsPinned(source) {
+  const workflow = source.replace(/\r\n/g, '\n');
+  const checkouts = [...workflow.matchAll(/^      - uses: actions\/checkout@[^\n]*\n((?: {8,}[^\n]*\n)*)/gm)];
+  assert.equal(checkouts.length, 2, 'preflight and publish each need a checkout');
+  for (const [, step] of checkouts) {
+    const inputs = step.match(/^        with:\n((?: {10,}[^\n]*\n)*)/m);
+    assert.ok(inputs, 'checkout must have explicit inputs');
+    assert.match(inputs[1], /^          ref: \$\{\{ github\.sha \}\}$/m,
+      'checkout must be pinned to the release event commit');
+  }
+}
+
+test('release jobs check out the immutable event commit across platform line endings', () => {
+  const normalized = publishWorkflow.replace(/\r\n/g, '\n');
+  assertReleaseCheckoutsPinned(normalized);
+  assertReleaseCheckoutsPinned(normalized.replace(/\n/g, '\r\n'));
+});
 
 test('release preflight validates stable version tags before querying npm', () => {
   let queries = 0;
