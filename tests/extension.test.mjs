@@ -686,6 +686,44 @@ test('length-limited model turns fail as partial results across modes', async ()
   assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, page.structuredContent), true);
 });
 
+test('deferred model responses fail as incomplete results across modes', async () => {
+  const single = await invoke('subagent', { agent: 'worker', task: 'deferred' });
+  assert.equal(single.isError, true);
+  assert.equal(single.details.results[0].stopReason, 'deferred');
+  assert.equal(single.details.results[0].exitCode, 0, 'A deferred handle is a model-level incompletion, not a child-process error');
+  assert.match(single.content[0].text, /Subagent failed \(deferred\)/);
+
+  const parallel = await invoke('subagent', { tasks: [
+    { agent: 'worker', task: 'ordinary deferred sibling success' },
+    { agent: 'worker', task: 'deferred' },
+  ] });
+  assert.equal(parallel.isError, true);
+  assert.match(parallel.content[0].text, /Parallel: 1\/2 succeeded/);
+  assert.match(parallel.content[0].text, /failed \(deferred\)/);
+
+  const chain = await invoke('subagent', { chain: [
+    { agent: 'worker', task: 'deferred' },
+    { agent: 'worker', task: 'must-not-run-after-deferred' },
+  ] });
+  assert.equal(chain.isError, true);
+  assert.equal(chain.details.results.length, 1, 'A chain must stop when the model has not produced a final answer');
+  assert.match(chain.content[0].text, /Chain stopped at step 1/);
+  assert.match(chain.content[0].text, /Subagent failed \(deferred\)/);
+  assert.equal(traces().some(entry => entry.task === 'must-not-run-after-deferred'), false);
+
+  const id = await launch({ task: 'deferred' });
+  const job = await finish(id);
+  assert.equal(job.state, 'failed');
+  assert.equal(job.latest.details.results[0].messages.at(-1).stopReason, 'deferred');
+  assert.ok(messages.at(-1).message.content.includes('failed (deferred)'));
+  const page = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.notEqual(page.isError, true, 'Inspecting an incomplete task is not itself a failure');
+  assert.equal(page.structuredContent.output.partial, true);
+  assert.equal(page.structuredContent.output.exitCode, 0);
+  assert.match(page.structuredContent.output.text, /Subagent failed \(deferred\)/);
+  assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, page.structuredContent), true);
+});
+
 test('background chains substitute previous output and capture working directory', async () => {
   const started = await invoke('subagent', {
     background: true,

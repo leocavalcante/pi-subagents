@@ -38,7 +38,9 @@ if (task.includes('grandchild')) {
 }
 const emit = (text, stopReason = 'stop') => console.log(JSON.stringify({
   type: 'message_end', message: { role: 'assistant', content: (Array.isArray(text) ? text : [text]).map(text => ({ type: 'text', text })),
-    model: 'fake', stopReason, ...(stopReason === 'error' ? { errorMessage: task === 'large-error fail' ? 'é'.repeat(40000) : 'fixture failure' } : {}),
+    model: 'fake', stopReason,
+    ...(stopReason === 'deferred' ? { deferred: { provider: 'fake', modelId: 'fake', api: 'fake', id: 'fixture-deferred' } } : {}),
+    ...(stopReason === 'error' ? { errorMessage: task === 'large-error fail' ? 'é'.repeat(40000) : 'fixture failure' } : {}),
     ...(task === 'safe-token-overflow' ? {} : { usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } } }),
   },
 }));
@@ -240,7 +242,8 @@ setTimeout(async () => {
   if (task === 'terminal-control-crash') await write(process.stderr, terminalControlText);
   if (task.includes('crash')) { console.error(task === 'terminal-control-crash' ? '' : 'fixture crashed before final output'); process.exitCode = 1; }
   else {
-    const output = task.startsWith('retention-heavy') || task.startsWith('retention-registry-heavy:') || task.startsWith('usage-overflow-heavy:') ? 'retention fixture complete'
+    const output = task === 'deferred' ? []
+      : task.startsWith('retention-heavy') || task.startsWith('retention-registry-heavy:') || task.startsWith('usage-overflow-heavy:') ? 'retention fixture complete'
       : task === 'chain-capture-overflow' ? 'é'.repeat(600 * 1024)
       : task === 'chain-aggregate-output' ? 'CHAIN_BUDGET_DATA' + 'x'.repeat(900 * 1024)
       : task === 'terminal-control-text' ? terminalControlText
@@ -248,7 +251,7 @@ setTimeout(async () => {
       : task === 'dollars' ? '$& $$ $` $\' {previous}'
       : task === 'huge-final' ? 'é'.repeat(2 * 1024 * 1024 + 1)
       : task.includes('large') ? 'é'.repeat(40000) : 'result: ' + task;
-    emit(output, task.includes('fail') ? 'error' : task === 'length-limit' ? 'length' : 'stop');
+    emit(output, task.includes('fail') ? 'error' : task === 'length-limit' ? 'length' : task === 'deferred' ? 'deferred' : 'stop');
     process.exitCode = task.includes('fail') && !task.includes('zero-exit') ? 1 : 0;
   }
   if (task === 'stdout-flood-unterminated') await write(process.stdout, 'x'.repeat(9 * 1024 * 1024));

@@ -455,7 +455,8 @@ function isFailedResult(result: SingleResult): boolean {
 		(result.exitCode !== 0 && result.exitCode !== -1) ||
 		result.stopReason === "error" ||
 		result.stopReason === "aborted" ||
-		result.stopReason === "length"
+		result.stopReason === "length" ||
+		result.stopReason === "deferred"
 	);
 }
 
@@ -477,7 +478,7 @@ function getResultOutput(result: SingleResult): string {
 	const failed = isFailedResult(result);
 	const partial = isPartialResult(result);
 	const output = failed
-		? result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)"
+		? result.errorMessage || result.stderr || getFinalOutput(result.messages) || getFailureReason(result)
 		: getFinalOutput(result.messages) || "(no output)";
 	const sections = [output];
 	if (partial) {
