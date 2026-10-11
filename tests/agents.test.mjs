@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
 
-const { discoverAgents, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS } = await jiti.import('../agents.ts');
+const { discoverAgents, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS, MAX_WORKING_DIRECTORY_LENGTH } = await jiti.import('../agents.ts');
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
@@ -274,6 +274,27 @@ test('agent runtime timeout defaults are integer-bounded and invalid definitions
   assert.ok(result.diagnostics.every(diagnostic =>
     diagnostic.message === `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`));
   assert.equal(JSON.stringify(result).includes('Invalid timeout'), false);
+});
+
+test('agent working-directory defaults are non-empty, well-formed, and bounded', () => {
+  const atLimit = 'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH);
+  agent(userDir, 'valid-cwd', `name: valid-cwd\ndescription: Valid cwd\ncwd: ${JSON.stringify(atLimit)}`);
+  const invalid = [
+    ['empty', JSON.stringify('')], ['null', 'null'], ['number', '42'],
+    ['oversized', JSON.stringify('x'.repeat(MAX_WORKING_DIRECTORY_LENGTH + 1))],
+    ['nul', JSON.stringify(`dir${String.fromCharCode(0)}name`)],
+    ['surrogate', JSON.stringify(String.fromCharCode(0xd800))],
+  ];
+  for (const [name, value] of invalid) {
+    agent(userDir, `invalid-cwd-${name}`, `name: invalid-cwd-${name}\ndescription: Invalid cwd\ncwd: ${value}`);
+  }
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(entry => entry.name), ['valid-cwd']);
+  assert.equal(result.agents[0].cwd, atLimit);
+  assert.equal(result.diagnostics.length, invalid.length);
+  assert.ok(result.diagnostics.every(diagnostic => /cwd must be a non-empty path/.test(diagnostic.message)));
+  assert.equal(JSON.stringify(result).includes('Invalid cwd'), false);
 });
 
 test('normalizes config, preserves explicit empty tools, and supports thinking', () => {

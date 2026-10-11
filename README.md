@@ -54,20 +54,21 @@ description: General-purpose worker
 Complete the delegated task. Report the changes made and checks run.
 ```
 
-An agent can set `model`, `thinking`, `tools`, and a default `timeoutMs` in its frontmatter. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
+An agent can set `model`, `thinking`, `tools`, a default `timeoutMs`, and a default working directory with `cwd` in its frontmatter. Agent `cwd` paths resolve relative to the parent session's working directory, not the definition file. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
 
 ```yaml
 model: anthropic/claude-sonnet-4-5
 thinking: high
 tools: [read, bash]
 timeoutMs: 120000
+cwd: packages/app
 ```
 
 Without `model`, it inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
 
 Without `tools`, it uses Pi's defaults. Both `tools: read, bash` and `tools: [read, bash]` work. Set `tools: []` to disable the initial tool selection. Entries cannot contain commas or control characters because the child CLI parses a comma-separated list; they also cannot start with `+` or `-`, which Pi interprets as modifiers to the default tool selection rather than allowlist names. Tool arrays are limited to 256 entries; comma-separated values and the normalized `--tools` argument are each capped at 4 KiB of UTF-8 text. This is not a sandbox; extensions can still change the selection.
 
-Definitions need non-empty `name` and `description` fields. Agent `timeoutMs` defaults must be whole milliseconds from 1 to 86400000 (24 hours); call-level values can override or explicitly disable a definition's deadline. Agent definition files must be valid UTF-8, and metadata escapes that produce unpaired UTF-16 surrogates are rejected rather than silently normalized. Agent names are limited to 256 UTF-8 bytes and cannot contain terminal or bidirectional formatting controls; this keeps identifiers safe in trust prompts, diagnostics, and UI output. Descriptions are limited to 1 KiB of UTF-8 text so listing metadata remains compact. Untrusted metadata shown in listings and project-agent confirmations is escaped for display. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents. Duplicate names in the same directory produce a diagnostic naming both files. The last valid definition in locale-independent lexical filename order still wins. Intentional project-over-personal overrides do not produce a duplicate warning.
+Definitions need non-empty `name` and `description` fields. Agent `timeoutMs` defaults must be whole milliseconds from 1 to 86400000 (24 hours); call-level values can override or explicitly disable a definition's deadline. Agent `cwd` defaults must be non-empty, well-formed Unicode paths with no NUL characters and at most 32,767 UTF-16 code units; dispatch paths can override them. A configured working directory is a convenience, not a filesystem sandbox, and does not restrict access to other paths. Agent definition files must be valid UTF-8, and metadata escapes that produce unpaired UTF-16 surrogates are rejected rather than silently normalized. Agent names are limited to 256 UTF-8 bytes and cannot contain terminal or bidirectional formatting controls; this keeps identifiers safe in trust prompts, diagnostics, and UI output. Descriptions are limited to 1 KiB of UTF-8 text so listing metadata remains compact. Untrusted metadata shown in listings and project-agent confirmations is escaped for display. Invalid YAML or configuration skips that definition instead of breaking discovery for all agents. Duplicate names in the same directory produce a diagnostic naming both files. The last valid definition in locale-independent lexical filename order still wins. Intentional project-over-personal overrides do not produce a duplicate warning.
 
 Project-local definitions live in `.pi/agents/*.md`. The tool loads only personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents. Project definitions override personal definitions of the same name when using `"both"`. Project agent directories and files may use symlinks that resolve within the project root; links resolving outside it are skipped and reported as diagnostics. Personal agent symlinks are unchanged.
 
@@ -75,7 +76,7 @@ Agent discovery is bounded for both personal and project directories: it scans a
 
 ## Usage
 
-Use `subagent_agents` to list agent descriptions, source paths, model, thinking, and tool settings, configured timeout defaults, and invalid definitions without running an agent:
+Use `subagent_agents` to list agent descriptions, source paths, model, thinking, tool settings, configured timeout and working-directory defaults, and invalid definitions without running an agent:
 
 ```json
 {}
@@ -87,7 +88,7 @@ The default scope is `"user"`. To include project definitions:
 { "agentScope": "both" }
 ```
 
-The list is sorted by name and excludes system prompt bodies. Project lookup starts at the parent session's working directory and checks ancestors for the nearest `.pi/agents` directory. A task's `cwd` changes where its child runs, not which definitions it loads.
+The list is sorted by name and excludes system prompt bodies. Project lookup starts at the parent session's working directory and checks ancestors for the nearest `.pi/agents` directory. A task's or agent's `cwd` changes where its child runs, not which definitions are loaded.
 
 Ask Pi to delegate:
 
@@ -107,7 +108,7 @@ The `subagent` tool accepts exactly one mode. Empty arrays, blank tasks, partial
 
 At the first chain step, `{previous}` is an empty string. A first task containing only that placeholder is rejected before approval or launch. If a later substitution makes the task blank, the chain stops at that step without starting another child.
 
-Use `cwd` to set a working directory. Relative paths resolve from the parent session's working directory. In parallel and chain modes, the top-level `cwd` is the default for every child; an entry's own `cwd` overrides it. Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined to the parent working directory. Tasks reach children through stdin, so prompts do not depend on the operating system's command-line argument limit. Task, model-selector, and working-directory strings must be well-formed Unicode; isolated UTF-16 surrogates are rejected instead of being silently replaced by platform encoders. Each task is limited to 4 MiB of UTF-8 text, including chain context after substitution; all task text submitted in one dispatch is limited to 16 MiB total. Expanded chain task text is also limited to 16 MiB total across all steps, checked before each substitution is allocated.
+Use `cwd` to set a working directory. Relative paths resolve from the parent session's working directory. Precedence is entry `cwd`, top-level call `cwd`, agent frontmatter `cwd`, then the parent session directory. In parallel and chain modes, an entry's `cwd` overrides both top-level and agent defaults; top-level `cwd` overrides agent defaults. Project-agent approval lists configured child working directories, but discovery and approval still use the parent session and are not affected by the child working directory. Paths are limited to 32,767 UTF-16 code units, including the resolved path after a relative path is joined to the parent working directory. Tasks reach children through stdin, so prompts do not depend on the operating system's command-line argument limit. Task, model-selector, and working-directory strings must be well-formed Unicode; isolated UTF-16 surrogates are rejected instead of being silently replaced by platform encoders. Each task is limited to 4 MiB of UTF-8 text, including chain context after substitution; all task text submitted in one dispatch is limited to 16 MiB total. Expanded chain task text is also limited to 16 MiB total across all steps, checked before each substitution is allocated.
 
 Foreground execution is the default. Progress streams into the parent session at most 10 times per second per child; the first update is immediate and the latest pending output is flushed at completion. Throttling affects notifications only: all accepted child events are still parsed, accounted for, and captured. Ctrl+O expands tool output. Ctrl+C cancels foreground child processes. Model-facing text is capped at 50 KiB per response, including headers and truncation notices. The same limit applies to progress updates, single tasks, chains, and entire parallel batches. Parallel tasks share the available text budget so every task's status remains visible. Captured results remain in tool details, and chains pass the full captured final text to the next step.
 

@@ -41,12 +41,14 @@ import {
 	MAX_AGENT_TOOL_LIST_BYTES,
 	MAX_MODEL_SELECTOR_BYTES,
 	MAX_TIMEOUT_MS,
+	MAX_WORKING_DIRECTORY_LENGTH,
 	parseAgentToolList,
 	type AgentConfig,
 	type AgentScope,
 	discoverAgents,
 	isSafeAgentName,
 	isSafeModelSelector,
+	isSafeWorkingDirectory,
 	THINKING_LEVELS,
 } from "./agents.ts";
 import {
@@ -98,7 +100,6 @@ function getSubagentNestingDepth(): number {
 const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
-const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
@@ -773,7 +774,8 @@ async function runSingleAgent(
 	};
 
 	signal?.throwIfAborted();
-	const resolvedCwd = cwd ? path.resolve(defaultCwd, cwd) : defaultCwd;
+	const effectiveCwd = cwd ?? agent.cwd;
+	const resolvedCwd = effectiveCwd ? path.resolve(defaultCwd, effectiveCwd) : defaultCwd;
 	if (resolvedCwd.length > MAX_WORKING_DIRECTORY_LENGTH) {
 		currentResult.exitCode = 1;
 		currentResult.errorMessage = `Resolved working directory exceeds the ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code-unit limit.`;
@@ -1216,7 +1218,7 @@ function taskTextSchema(description: string) {
 const WorkingDirectory = Type.String({
 	pattern: "^[^\\u0000]*$",
 	maxLength: MAX_WORKING_DIRECTORY_LENGTH,
-	description: `Working directory for the child process; in batch modes the top-level cwd is the default and each task or step may override it. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
+	description: `Working directory for the child process. Precedence: entry, top-level call, agent default, then parent session directory. Relative paths resolve from the parent session's working directory. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
 });
 
 const TASK_ITEM_KEYS = ["model", "thinking", "tools", "agent", "task", "timeoutMs", "cwd"] as const;
@@ -1431,7 +1433,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
-			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Defaults to personal agents; use agentScope to include project agents.`,
+			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
 		parameters: Type.Object({ agentScope: Type.Optional(AgentScopeSchema) }, { additionalProperties: false }),
 		outputSchema: Type.Object({
@@ -1450,6 +1452,8 @@ export default function (pi: ExtensionAPI) {
 					uniqueItems: true,
 				})),
 				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
+				cwd: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_WORKING_DIRECTORY_LENGTH,
+					description: `Agent default child working directory, relative to the parent session unless absolute; at most ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` })),
 			}, { additionalProperties: false }), { maxItems: 2 * MAX_AGENT_FILES }),
 			projectAgentsDir: Type.Union([Type.String(), Type.Null()]),
 			diagnostics: Type.Array(Type.Object({
@@ -1494,6 +1498,7 @@ export default function (pi: ExtensionAPI) {
 				...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
 				...(agent.tools !== undefined ? { tools: agent.tools } : {}),
 				...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
+				...(agent.cwd !== undefined ? { cwd: agent.cwd } : {}),
 			}));
 			const listing = agents.map((a) => {
 				const config = [
@@ -1501,6 +1506,7 @@ export default function (pi: ExtensionAPI) {
 					a.thinking && `thinking=${a.thinking}`,
 					a.tools && `tools=${displayUntrustedText(a.tools.length ? a.tools.join(",") : "none")}`,
 					a.timeoutMs !== undefined && `timeoutMs=${a.timeoutMs}`,
+					a.cwd !== undefined && `cwd=${displayUntrustedText(a.cwd)}`,
 				].filter(Boolean).join("; ");
 				return `${displayUntrustedText(a.name)} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
 			}).join("\n");
@@ -1855,17 +1861,21 @@ export default function (pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
-			const workingDirectories: unknown[] = [params.cwd,
+			const explicitWorkingDirectories: unknown[] = [params.cwd,
 				...(params.tasks ?? []).map((task) => task.cwd),
 				...(params.chain ?? []).map((step) => step.cwd)];
+			const effectiveWorkingDirectories = requested.map((item) => {
+				const agent = agents.find((candidate) => candidate.name === item.agent);
+				return item.cwd ?? params.cwd ?? agent?.cwd;
+			});
+			const workingDirectories = [...explicitWorkingDirectories, ...effectiveWorkingDirectories];
 			if (workingDirectories.some((cwd) => typeof cwd === "string" && cwd.length > MAX_WORKING_DIRECTORY_LENGTH)) {
 				return {
 					content: [{ type: "text", text: `cwd must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
-			if (workingDirectories.some((cwd) => cwd !== undefined &&
-				(typeof cwd !== "string" || cwd.includes("\0") || !isWellFormedUnicode(cwd)))) {
+			if (workingDirectories.some((cwd) => cwd !== undefined && !isSafeWorkingDirectory(cwd))) {
 				return {
 					content: [{ type: "text", text: "cwd must contain well-formed Unicode and no NUL characters." }],
 					details: makeDetails(mode)([]),
@@ -1939,9 +1949,14 @@ export default function (pi: ExtensionAPI) {
 
 					const names = projectAgentsRequested.map((a) => displayUntrustedText(a.name)).join(", ");
 					const dir = displayUntrustedText(discovery.projectAgentsDir ?? "(unknown)");
+					const workingDirectories = projectAgentsRequested
+						.filter((agent) => agent.cwd !== undefined)
+						.map((agent) => `${displayUntrustedText(agent.name)}: ${displayUntrustedText(truncateOutput(agent.cwd!, 256, "..."))}`);
+					const workingDirectoryDetails = workingDirectories.length
+						? `\nConfigured child working directories:\n${truncateOutput(workingDirectories.join("\n"), 4096, "...")}` : "";
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						`Agents: ${names}\nSource: ${dir}${workingDirectoryDetails}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
 					);
 					if (!ok)
 						return {

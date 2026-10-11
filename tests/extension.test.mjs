@@ -24,9 +24,9 @@ const {
   MAX_AGENT_TOOL_LIST_BYTES,
   MAX_MODEL_SELECTOR_BYTES,
   MAX_TIMEOUT_MS,
+  MAX_WORKING_DIRECTORY_LENGTH,
 } = await jiti.import('../agents.ts');
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
-const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Use the canonical path because macOS exposes many temp directories through symlink aliases.
 const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pi-subagents-test-')));
@@ -1903,6 +1903,53 @@ test('top-level cwd defaults parallel and chain children while entry directories
   assert.equal(chainChildren.get('chain-entry-cwd'), alternate);
 });
 
+test('agent working-directory defaults resolve from the parent and yield to dispatch overrides in every mode', async () => {
+  const file = join(sandbox, 'agent/agents/cwd-default.md');
+  const agentDirectory = join(sandbox, 'agent-work');
+  const callDirectory = join(sandbox, 'call-work');
+  const entryDirectory = join(sandbox, 'entry-work');
+  for (const directory of [agentDirectory, callDirectory, entryDirectory]) mkdirSync(directory, { recursive: true });
+  writeFileSync(file, '---\nname: cwd-default\ndescription: Working directory default\ncwd: agent-work\n---\nCwd worker.\n');
+  try {
+    const listing = await invoke('subagent_agents', {});
+    const configured = listing.details.agents.find(agent => agent.name === 'cwd-default');
+    assert.equal(configured.cwd, 'agent-work');
+    assert.match(listing.content[0].text, /cwd=.*agent-work/);
+    assert.equal(Value.Check(tools.get('subagent_agents').definition.outputSchema, listing.structuredContent), true);
+
+    const single = await invoke('subagent', { agent: 'cwd-default', task: 'cwd default single' });
+    assert.equal(single.isError, undefined);
+    assert.equal(traces().find(entry => entry.task === 'cwd default single').cwd, agentDirectory);
+
+    const parallel = await invoke('subagent', {
+      cwd: 'call-work',
+      tasks: [
+        { agent: 'cwd-default', task: 'cwd call default parallel' },
+        { agent: 'cwd-default', task: 'cwd entry override parallel', cwd: 'entry-work' },
+      ],
+    });
+    assert.notEqual(parallel.isError, true);
+    assert.equal(traces().find(entry => entry.task === 'cwd call default parallel').cwd, callDirectory);
+    assert.equal(traces().find(entry => entry.task === 'cwd entry override parallel').cwd, entryDirectory);
+
+    const chain = await invoke('subagent', {
+      chain: [
+        { agent: 'cwd-default', task: 'cwd default chain' },
+        { agent: 'cwd-default', task: 'cwd entry override chain', cwd: 'entry-work' },
+      ],
+    });
+    assert.equal(chain.isError, undefined);
+    assert.equal(traces().find(entry => entry.task.startsWith('cwd default chain')).cwd, agentDirectory);
+    assert.equal(traces().find(entry => entry.task.startsWith('cwd entry override chain')).cwd, entryDirectory);
+
+    const background = await invoke('subagent', {
+      background: true, agent: 'cwd-default', task: 'cwd default background',
+    });
+    assert.equal((await finish(background.details.background.id)).state, 'completed');
+    assert.equal(traces().find(entry => entry.task === 'cwd default background').cwd, agentDirectory);
+  } finally { rmSync(file); }
+});
+
 test('large tasks use stdin and relative cwd resolves from the parent session', async () => {
   const task = 'x'.repeat(256 * 1024);
   const result = await invoke('subagent', { agent: 'worker', task, cwd: 'project' });
@@ -1910,6 +1957,23 @@ test('large tasks use stdin and relative cwd resolves from the parent session', 
   const child = traces().find(t => t.event === 'start');
   assert.equal(child.task, task);
   assert.equal(child.cwd, join(sandbox, 'project'));
+});
+
+test('agent working-directory defaults are bounded after resolution before project approval', async () => {
+  const agentFile = join(sandbox, 'project/.pi/agents/long-cwd.md');
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: async () => { throw new Error('An overlong resolved cwd must fail before approval'); } } };
+  const tooLong = 'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH);
+  writeFileSync(agentFile, `---\nname: long-cwd\ndescription: Long configured path\ncwd: ${JSON.stringify(tooLong)}\n---\nInvalid after resolution.\n`);
+  try {
+    const result = await invoke('subagent', {
+      agent: 'long-cwd', task: 'must not launch', agentScope: 'project',
+    }, context);
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Resolved cwd must not exceed/);
+    assert.equal(JSON.stringify(result).includes(tooLong), false);
+    assert.equal(traces().length, 0);
+  } finally { rmSync(agentFile, { force: true }); }
 });
 
 test('task input limits use UTF-8 bytes and reject oversized dispatches before approval or job creation', async () => {
@@ -2162,6 +2226,8 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
   assertRejected(candidate => { agent(candidate).tools = Array.from({ length: MAX_AGENT_TOOL_COUNT + 1 }, (_, index) => `tool-${index}`); }, 'oversized tool arrays must be rejected');
   assertRejected(candidate => { agent(candidate).tools = ['x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)]; }, 'oversized tool entries must be rejected');
   assertRejected(candidate => { agent(candidate).tools = ['read', 'read']; }, 'duplicate tool entries must be rejected');
+  assertRejected(candidate => { agent(candidate).cwd = ''; }, 'empty working-directory defaults must be rejected');
+  assertRejected(candidate => { agent(candidate).cwd = 'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH + 1); }, 'oversized working-directory defaults must be rejected');
   assertRejected(candidate => { agent(candidate).systemPrompt = 'private prompt'; }, 'agent entries must not permit undeclared prompt fields');
   assertRejected(candidate => { candidate.unexpected = true; }, 'listing results must not permit undeclared fields');
   assertRejected(candidate => { candidate.diagnostics.push({ filePath: 'agent.md', source: 'user', message: 'invalid', systemPrompt: 'private prompt' }); }, 'diagnostics must not permit undeclared fields');
@@ -2172,6 +2238,7 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
     description: 'd'.repeat(MAX_AGENT_DESCRIPTION_BYTES),
     model: 'm'.repeat(MAX_MODEL_SELECTOR_BYTES),
     tools: Array.from({ length: MAX_AGENT_TOOL_COUNT }, (_, index) => `tool-${index}`),
+    cwd: 'c'.repeat(MAX_WORKING_DIRECTORY_LENGTH),
   });
   assert.equal(Value.Check(schema, atLimits), true, 'metadata at configured limits remains valid');
   const maxToolEntry = structuredClone(listing);
@@ -2257,6 +2324,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   const escape = String.fromCharCode(27);
   const c1 = String.fromCodePoint(0x009b);
   const hostileDescription = `visible${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
+  const hostileCwd = `configured${String.fromCharCode(10)}${escape}[31m${String.fromCodePoint(0x202e)}`;
   const metadataFile = join(projectDir, 'metadata.md');
   const hostilePathFile = join(projectDir, `path-${escape}.md`);
   const yamlAgent = (name, description, suffix = '') => [
@@ -2270,7 +2338,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     'Untrusted test prompt.',
     '',
   ].filter(Boolean).join(String.fromCharCode(10));
-  writeFileSync(metadataFile, yamlAgent(hostileName, hostileDescription));
+  writeFileSync(metadataFile, yamlAgent(hostileName, hostileDescription, `cwd: ${JSON.stringify(hostileCwd)}`));
   const canUseControlFilename = process.platform !== 'win32';
   if (canUseControlFilename) writeFileSync(hostilePathFile, yamlAgent('path-safe', 'Path test'));
   try {
@@ -2285,6 +2353,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.ok(text.includes('u000a'));
     assert.equal(listed.details.agents.find(agent => agent.name === hostileName).description, hostileDescription);
     assert.deepEqual(listed.details.agents.find(agent => agent.name === hostileName).tools, ['read', 'custom-safe']);
+    assert.equal(listed.details.agents.find(agent => agent.name === hostileName).cwd, hostileCwd);
     if (canUseControlFilename) {
       assert.ok(listed.details.agents.some(agent => agent.filePath === hostilePathFile));
       assert.equal(text.includes(hostilePathFile), false);
@@ -2302,7 +2371,10 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(denied.content[0].text, 'Canceled: project-local agents not approved.');
     assert.equal(confirmation.includes(escape), false);
     assert.equal(confirmation.includes(String.fromCodePoint(0x202e)), false);
+    assert.equal(confirmation.includes(escape), false);
     assert.equal(confirmation.includes(hostileName), false);
+    assert.equal(confirmation.includes('Configured child working directories:'), true);
+    assert.equal(confirmation.includes('u000a'), true);
     assert.equal(confirmation.includes('Project agents are repo-controlled.'), true);
     assert.equal(traces().length, 0);
   } finally {
@@ -2593,8 +2665,9 @@ test('invalid background overrides are rejected before project approval or job c
 
 test('project-agent approval cannot be bypassed by a model-controlled parameter', async () => {
   let approvals = 0;
+  let confirmation = '';
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
-    ui: { confirm: async () => { approvals++; return true; } } };
+    ui: { confirm: async (_title, body) => { approvals++; confirmation = body; return true; } } };
   const schema = tools.get('subagent').definition.parameters;
   const bypass = { agent: 'project', task: 'must not run', agentScope: 'project', confirmProjectAgents: false };
   assert.equal(Value.Check(schema, bypass), false, 'the tool schema must not expose a per-call approval bypass');
@@ -2610,6 +2683,23 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
   assert.equal(approvals, 1, 'an untrusted project agent requires an actual UI approval');
   assert.equal(traces().filter(entry => entry.event === 'start').length, 1);
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
+
+  const configuredAgentFile = join(sandbox, 'project/.pi/agents/project-cwd.md');
+  const configuredDirectory = join(sandbox, 'project/configured-cwd');
+  mkdirSync(configuredDirectory, { recursive: true });
+  writeFileSync(configuredAgentFile, '---\nname: project-cwd\ndescription: Project working directory\ncwd: configured-cwd\n---\nProject cwd worker.\n');
+  try {
+    const cwdApproved = await invoke('subagent', {
+      agent: 'project-cwd', task: 'project cwd still requires approval', agentScope: 'project',
+    }, context);
+    assert.notEqual(cwdApproved.isError, true);
+    assert.equal(cwdApproved.details.projectAgentsDir, join(sandbox, 'project/.pi/agents'));
+    assert.equal(approvals, 2, 'a configured child cwd must not bypass project-agent approval');
+    assert.match(confirmation, /Configured child working directories:/);
+    assert.ok(confirmation.includes('configured-cwd'), 'the approval prompt should disclose the configured child directory');
+    assert.equal(traces().filter(entry => entry.event === 'start').length, 2);
+    assert.equal(traces().find(entry => entry.task === 'project cwd still requires approval').cwd, configuredDirectory);
+  } finally { rmSync(configuredAgentFile, { force: true }); }
 });
 
 test('invalid dispatch overrides fail before project approval or any child launch', async () => {
