@@ -1184,6 +1184,17 @@ test('bounded history keeps the final answer and usage from evicted messages', a
   }
 });
 
+test('a completed assistant answer evicted by trailing messages fails instead of reporting empty success', async () => {
+  const result = await invoke('subagent', { agent: 'worker', task: 'history-final-evicted' });
+  const task = result.details.results[0];
+  assert.equal(result.isError, true);
+  assert.equal(task.processExitCode, 0);
+  assert.equal(task.exitCode, 1);
+  assert.equal(task.capture.finalAssistantMessageDropped, true);
+  assert.equal(task.messages.some(message => message.role === 'assistant'), false);
+  assert.match(task.errorMessage, /Final assistant message was not retained in bounded history capture/);
+});
+
 test('task deadlines fail rather than cancel jobs and release the process slot', async () => {
   const job = await finish(await launch({ task: 'delay=10000 stubborn deadline', timeoutMs: 300 }));
   assert.equal(job.state, 'failed');
@@ -3169,7 +3180,7 @@ test('parallel and chain histories share a bounded aggregate capture budget', as
   assert.equal(overflow.isError, true, 'A dropped final answer must not be passed onward as an empty chain result');
   assert.equal(overflow.details.results.length, 1);
   assert.equal(overflow.details.results[0].capture.finalAssistantMessageDropped, true);
-  assert.match(overflow.content[0].text, /exceeded the available history capture budget/);
+  assert.match(overflow.content[0].text, /not retained in bounded history capture/);
 });
 
 test('single and chain responses cap text without truncating captured data or chain input', async () => {

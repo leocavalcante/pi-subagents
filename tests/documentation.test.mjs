@@ -162,7 +162,7 @@ test('README documents aggregate capture limits for parallel and chained results
   const capture = section('Output capture and cleanup');
   assert.match(capture, /16 MiB of source JSON records per task/);
   assert.match(capture, /parallel batches and chains share an additional 32 MiB aggregate history budget/i);
-  assert.match(capture, /final assistant message cannot fit its task's allocated history budget, that task fails/);
+  assert.match(capture, /final assistant message is not retained in bounded history, the task fails/);
   assert.match(capture, /at most 65,536 structural tokens/);
   assert.match(capture, /structure beyond 65,536 tokens/);
   assert.match(capture, /escaped unpaired surrogates/);
