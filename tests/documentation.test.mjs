@@ -31,7 +31,7 @@ test('README documents an available installation method', () => {
 });
 
 test('npm package includes required runtime support files', () => {
-  for (const file of ['windows-supervisor.cs', 'temporary-files.ts', 'abort.ts']) {
+  for (const file of ['windows-supervisor.cs', 'windows-supervisor-invocation.ts', 'temporary-files.ts', 'abort.ts']) {
     assert.ok(packageJson.files.includes(file), `Package files must include ${file}`);
   }
 });
