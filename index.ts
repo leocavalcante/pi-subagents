@@ -94,6 +94,11 @@ const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
 const MAX_CONCURRENCY = 4;
 const MAX_ACTIVE_JOBS = 8;
+const MAX_RETAINED_JOBS = 32;
+const MAX_JOB_RECORDS = MAX_ACTIVE_JOBS + MAX_RETAINED_JOBS;
+const MAX_JOB_LABEL_BYTES = 1024;
+const MAX_JOB_DIAGNOSTIC_BYTES = 2048;
+const MAX_JOB_AGENT_BYTES = 256;
 const SUBAGENT_NESTING_DEPTH_ENV = "PI_SUBAGENTS_NESTING_DEPTH";
 const MAX_SUBAGENT_NESTING_DEPTH = 2;
 // Allow every configured active background job to fill its process worker pool.
@@ -1369,29 +1374,35 @@ const FailureContextSchema = Type.Object({
 	record: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 	lastStopReason: Type.Optional(StringEnum(["stop", "length", "toolUse", "error", "aborted", "deferred"] as const)),
 });
+// JSON Schema maxLength counts characters; UTF-8 byte caps are conservative character bounds too.
 const JobMetadataSchema = Type.Object({
-	id: JobIdSchema, label: Type.String(), notify: Type.Boolean(),
+	id: JobIdSchema, label: Type.String({ maxLength: MAX_JOB_LABEL_BYTES }), notify: Type.Boolean(),
 	state: StringEnum(["running", "canceling", "completed", "failed", "canceled"] as const),
 	startedAt: Type.String(), finishedAt: Type.Optional(Type.String()),
-	error: Type.Optional(Type.String()), outputEvicted: Type.Optional(Type.Boolean()),
-	resultCount: Type.Optional(Type.Integer()), usage: Type.Optional(UsageSummarySchema),
+	error: Type.Optional(Type.String({ maxLength: MAX_JOB_DIAGNOSTIC_BYTES })), outputEvicted: Type.Optional(Type.Boolean()),
+	resultCount: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_CHAIN_STEPS })), usage: Type.Optional(UsageSummarySchema),
 });
 const JobResponseSchema = Type.Object({
 	action: JobActionSchema,
-	jobs: Type.Optional(Type.Array(JobMetadataSchema)),
+	jobs: Type.Optional(Type.Array(JobMetadataSchema, { maxItems: MAX_JOB_RECORDS })),
 	job: Type.Optional(JobMetadataSchema),
 	output: Type.Optional(Type.Object({
-		taskIndex: Type.Integer(), agent: Type.String(), exitCode: Type.Integer(),
+		taskIndex: Type.Integer({ minimum: 0, maximum: MAX_CHAIN_STEPS - 1 }),
+		agent: Type.String({ maxLength: MAX_JOB_AGENT_BYTES }), exitCode: Type.Integer(),
 		processExitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
 		partial: Type.Boolean(), timedOut: Type.Boolean(), timeoutMs: Type.Optional(TimeoutSchema),
-		failureContext: Type.Optional(FailureContextSchema), stepId: Type.Optional(Type.String()),
+		failureContext: Type.Optional(FailureContextSchema),
+		stepId: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64 })),
 		stream: StringEnum(["result", "stderr"] as const), stderrTruncated: Type.Optional(Type.Boolean()),
-		text: Type.String(), offset: Type.Integer(), totalBytes: Type.Integer(),
-		nextOffset: Type.Union([Type.Integer(), Type.Null()]),
+		text: Type.String({ maxLength: MAX_PAGE_BYTES }),
+		offset: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+		totalBytes: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+		nextOffset: Type.Union([Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()]),
 	})),
-	forgotten: Type.Optional(JobIdSchema), cleared: Type.Optional(Type.Integer()),
+	forgotten: Type.Optional(JobIdSchema),
+	cleared: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_RETAINED_JOBS })),
 	timedOut: Type.Optional(Type.Boolean()),
-	error: Type.Optional(Type.String()),
+	error: Type.Optional(Type.String({ maxLength: MAX_JOB_DIAGNOSTIC_BYTES })),
 });
 
 function summarizeJobUsage(result: JobResult | undefined): Usage | undefined {
@@ -1411,10 +1422,10 @@ function summarizeJobUsage(result: JobResult | undefined): Usage | undefined {
 function jobMetadata(job: JobSnapshot<JobResult>, observation?: Usage): Static<typeof JobMetadataSchema> {
 	const usage = observation ?? summarizeJobUsage(job.latest);
 	return {
-		id: job.id, label: truncateOutput(job.label, 1024, "..."),
+		id: job.id, label: truncateOutput(job.label, MAX_JOB_LABEL_BYTES, "..."),
 		state: job.state, notify: job.notify, startedAt: job.startedAt,
 		...(job.finishedAt ? { finishedAt: job.finishedAt } : {}),
-		...(job.error ? { error: truncateOutput(job.error, 2048, "...") } : {}),
+		...(job.error ? { error: truncateOutput(job.error, MAX_JOB_DIAGNOSTIC_BYTES, "...") } : {}),
 		...(job.outputEvicted ? { outputEvicted: true } : {}),
 		...(job.latest?.details ? { resultCount: job.latest.details.results.length } : {}),
 		...(usage !== undefined ? { usage } : {}),
@@ -1460,7 +1471,7 @@ export default function (pi: ExtensionAPI) {
 			);
 		},
 		(result) => Boolean(result.isError) || Boolean(result.details?.results.some(isFailedResult)),
-		MAX_ACTIVE_JOBS, 32, { maxBytes: MAX_RETAINED_JOB_BYTES, measure: estimateJobBytes }, summarizeJobUsage,
+		MAX_ACTIVE_JOBS, MAX_RETAINED_JOBS, { maxBytes: MAX_RETAINED_JOB_BYTES, measure: estimateJobBytes }, summarizeJobUsage,
 	);
 	pi.on("session_shutdown", async () => {
 		await jobs.shutdown();
@@ -1678,7 +1689,7 @@ export default function (pi: ExtensionAPI) {
 				try {
 					const stream: JobOutputStream = params.stream ?? "result";
 					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384, stream),
-						stream, taskIndex, agent: truncateOutput(task.agent, 256, "..."), exitCode: task.exitCode,
+						stream, taskIndex, agent: truncateOutput(task.agent, MAX_JOB_AGENT_BYTES, "..."), exitCode: task.exitCode,
 						...(task.processExitCode !== undefined ? { processExitCode: task.processExitCode } : {}),
 						partial: isPartialResult(task), timedOut: task.timedOut === true,
 						...(stream === "stderr" ? { stderrTruncated: task.capture?.stderrTruncated === true } : {}),
