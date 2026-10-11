@@ -46,6 +46,28 @@ test('project agent symlinks to non-regular files are rejected without blocking'
   assert.match(result.diagnostics[0].message, /regular file/);
 });
 
+test('small agent files use size-proportional read buffers', () => {
+  const contents = '---\nname: small\ndescription: Small definition\n---\nPrompt.\n';
+  writeFileSync(join(userDir, 'small.md'), contents);
+  const allocations = [];
+  const originalAllocUnsafe = Buffer.allocUnsafe;
+  Buffer.allocUnsafe = function(size, ...args) {
+    allocations.push(Number(size));
+    return originalAllocUnsafe.call(Buffer, size, ...args);
+  };
+  let result;
+  try {
+    result = discoverAgents(cwd, 'user');
+  } finally {
+    Buffer.allocUnsafe = originalAllocUnsafe;
+  }
+
+  assert.deepEqual(result.agents.map(a => a.name), ['small']);
+  assert.ok(allocations.includes(Buffer.byteLength(contents) + 1), 'allocate only the file size plus a growth-detection byte');
+  assert.equal(allocations.some(size => size >= 512 * 1024), false,
+    'small definitions must not allocate the 512 KiB per-file ceiling');
+});
+
 test('oversized agent files are skipped without retaining or echoing prompt contents', () => {
   const secret = 'OVERSIZED_PRIVATE_AGENT_PROMPT';
   const prefix = `---\nname: oversized\ndescription: Too large\n---\n${secret}`;
