@@ -64,6 +64,35 @@ test('rejects non-finite JSON numbers at any depth before duplicate keys can hid
   assert.throws(() => parseChildEvent('{"nested":[{"value":-1e400,"value":0}]}'), /outside the finite JavaScript range/);
 });
 
+test('malformed long JSON number candidates are scanned in linear work', () => {
+  const digitCount = 16_384;
+  const inputs = [
+    '1'.repeat(digitCount) + 'x',
+    '1'.repeat(digitCount) + 'e',
+    '1'.repeat(digitCount) + '.',
+    '1'.repeat(digitCount) + 'e+',
+  ];
+  const originalCharCodeAt = String.prototype.charCodeAt;
+
+  for (const input of inputs) {
+    let charCodeAtCalls = 0;
+    let syntaxError = false;
+    String.prototype.charCodeAt = function(index) {
+      charCodeAtCalls++;
+      return originalCharCodeAt.call(this, index);
+    };
+    try {
+      try { parseChildEvent(input); }
+      catch (error) { syntaxError = error instanceof SyntaxError; }
+    } finally {
+      String.prototype.charCodeAt = originalCharCodeAt;
+    }
+    assert.equal(syntaxError, true, 'malformed candidates must still be rejected as invalid JSON');
+    assert.ok(charCodeAtCalls <= input.length * 4,
+      `Expected linear character scanning, but read ${charCodeAtCalls} code units for ${input.length} input units`);
+  }
+});
+
 test('accepts completed messages, redacted thinking, and arbitrary tool arguments', () => {
   assert.equal(assistantMessageError(message()), undefined);
   assert.equal(assistantMessageError(message({ content: [{ type: 'thinking', redacted: true, thinkingSignature: 'opaque' }] })), undefined);
