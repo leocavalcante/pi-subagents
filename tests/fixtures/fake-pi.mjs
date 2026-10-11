@@ -20,6 +20,8 @@ trace({ event: 'start', task, cwd: process.cwd(), model: flag('--model'), thinki
     differentCase: process.env.pi_subagents_test_case_env !== undefined,
   },
   retainedEnvironmentPreserved: process.env.PI_SUBAGENTS_TEST_KEEP_UNICODE === 'test-only-東京=🛰️',
+  retainedEmptyEnvironmentPreserved: Object.hasOwn(process.env, 'PI_SUBAGENTS_TEST_KEEP_EMPTY') &&
+    process.env.PI_SUBAGENTS_TEST_KEEP_EMPTY === '',
   promptFile: args.includes('--append-system-prompt') ? flag('--append-system-prompt') : undefined });
 if (args.includes('--append-system-prompt')) readFileSync(flag('--append-system-prompt'), 'utf8');
 if (task.includes('stubborn')) process.on('SIGTERM', () => {});
