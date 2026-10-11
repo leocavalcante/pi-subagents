@@ -1299,7 +1299,7 @@ const SUBAGENT_TOOL_KEYS = [
 	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
-const AGENT_TOOL_KEYS = ["agentScope", "offset", "limit"] as const;
+const AGENT_TOOL_KEYS = ["agentScope", "name", "offset", "limit"] as const;
 const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limit", "stream", "timeoutMs"] as const;
 
 const TaskItem = Type.Object({
@@ -1515,14 +1515,17 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent agents",
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
+			"Set name to look up one exact, case-sensitive definition after scope precedence is applied.",
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
 			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
 		parameters: Type.Object({
 			agentScope: Type.Optional(AgentScopeSchema),
+			name: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_NAME_BYTES,
+				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence.` })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
-				description: "Zero-based offset into the locale-independent agent-name ordering. Default: 0." })),
+				description: "Zero-based offset into the locale-independent agent-name ordering, after any exact-name filter. Default: 0." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE,
 				description: `Maximum number of definitions to return, from 1 to ${MAX_AGENT_LISTING_PAGE_SIZE}. Default: ${MAX_AGENT_LISTING_PAGE_SIZE}.` })),
 		}, { additionalProperties: false }),
@@ -1580,6 +1583,11 @@ export default function (pi: ExtensionAPI) {
 				return fail('agentScope must be "user", "project", or "both".');
 			}
 			const agentScope: AgentScope = requestedAgentScope ?? "user";
+			const requestedName: unknown = params.name;
+			if (requestedName !== undefined && (typeof requestedName !== "string" || !isSafeAgentName(requestedName))) {
+				return fail(`name must be a valid agent name of at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes without terminal or bidirectional controls.`, emptyListing(agentScope));
+			}
+			const exactName = typeof requestedName === "string" ? requestedName : undefined;
 			const requestedOffset: unknown = params.offset;
 			const offset = requestedOffset === undefined ? 0 : requestedOffset;
 			if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_AGENT_FILES * 2) {
@@ -1591,18 +1599,20 @@ export default function (pi: ExtensionAPI) {
 				return fail(`limit must be an integer between 1 and ${MAX_AGENT_LISTING_PAGE_SIZE}.`, emptyListing(agentScope, offset));
 			}
 			const discovery = discoverAgents(ctx.cwd, agentScope);
-			const allAgents = discovery.agents.map((agent) => ({
-				name: agent.name,
-				description: agent.description,
-				source: agent.source,
-				filePath: agent.filePath,
-				...(agent.model !== undefined ? { model: agent.model } : {}),
-				...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
-				...(agent.tools !== undefined ? { tools: agent.tools } : {}),
-				...(agent.unsetEnv !== undefined ? { unsetEnv: agent.unsetEnv } : {}),
-				...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
-				...(agent.cwd !== undefined ? { cwd: agent.cwd } : {}),
-			}));
+			const allAgents = discovery.agents
+				.filter((agent) => exactName === undefined || agent.name === exactName)
+				.map((agent) => ({
+					name: agent.name,
+					description: agent.description,
+					source: agent.source,
+					filePath: agent.filePath,
+					...(agent.model !== undefined ? { model: agent.model } : {}),
+					...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
+					...(agent.tools !== undefined ? { tools: agent.tools } : {}),
+					...(agent.unsetEnv !== undefined ? { unsetEnv: agent.unsetEnv } : {}),
+					...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
+					...(agent.cwd !== undefined ? { cwd: agent.cwd } : {}),
+				}));
 			const pageAgents = allAgents.slice(offset, offset + limit);
 			const nextOffset = offset + pageAgents.length < allAgents.length ? offset + pageAgents.length : null;
 			const listing = pageAgents.map((a) => {
@@ -1624,7 +1634,9 @@ export default function (pi: ExtensionAPI) {
 			const totalAgents = allAgents.length;
 			const pageLabel = pageAgents.length
 				? `Agents ${offset + 1}-${offset + pageAgents.length} of ${totalAgents}.${nextOffset === null ? "" : ` Continue with offset ${nextOffset}.`}`
-				: totalAgents === 0 ? "No subagents found." : `No agents at offset ${offset}; ${totalAgents} total.`;
+				: totalAgents === 0
+					? (exactName === undefined ? "No subagents found." : `No agent named ${displayUntrustedText(exactName)} found.`)
+					: `No agents at offset ${offset}; ${totalAgents} total.`;
 			const details = {
 				agentScope, agents: pageAgents, offset, limit, totalAgents, nextOffset,
 				projectAgentsDir: discovery.projectAgentsDir,

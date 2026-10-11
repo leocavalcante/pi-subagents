@@ -2475,6 +2475,66 @@ test('agent listing paginates large inventories with bounded text and complete s
   }
 });
 
+test('agent listing supports exact-name lookup after scope precedence', async () => {
+  const projectAgent = join(sandbox, 'project/.pi/agents/worker-override.md');
+  writeFileSync(projectAgent, '---\nname: worker\ndescription: Project worker override\ntools: [read]\n---\nProject-only instructions.\n');
+  try {
+    const schema = tools.get('subagent_agents').definition.outputSchema;
+    const parameters = tools.get('subagent_agents').definition.parameters;
+    assert.equal(Value.Check(parameters, { name: 'worker' }), true);
+
+    const personal = await invoke('subagent_agents', { name: 'worker' });
+    assert.equal(Value.Check(schema, personal.structuredContent), true);
+    assert.equal(personal.details.agents.length, 1);
+    assert.equal(personal.details.totalAgents, 1);
+    assert.equal(personal.details.agents[0].source, 'user');
+    assert.equal(personal.details.agents[0].description, 'Test worker');
+    assert.equal(personal.details.nextOffset, null);
+
+    const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
+    const both = await invoke('subagent_agents', { agentScope: 'both', name: 'worker' }, projectContext);
+    assert.equal(Value.Check(schema, both.structuredContent), true);
+    assert.equal(both.details.agents.length, 1);
+    assert.equal(both.details.totalAgents, 1, 'totals describe the filtered inventory');
+    assert.equal(both.details.agents[0].source, 'project', 'project precedence is resolved before filtering');
+    assert.equal(both.details.agents[0].description, 'Project worker override');
+    assert.deepEqual(both.details.agents[0].tools, ['read']);
+
+    const missing = await invoke('subagent_agents', { name: 'Worker' });
+    assert.equal(Value.Check(schema, missing.structuredContent), true);
+    assert.deepEqual(missing.details.agents, []);
+    assert.equal(missing.details.totalAgents, 0);
+    assert.match(missing.content[0].text, /No agent named `Worker` found/);
+
+    const pastMatch = await invoke('subagent_agents', { name: 'worker', offset: 1 });
+    assert.deepEqual(pastMatch.details.agents, []);
+    assert.equal(pastMatch.details.totalAgents, 1);
+    assert.match(pastMatch.content[0].text, /No agents at offset 1; 1 total/);
+    assert.equal(traces().length, 0);
+  } finally { rmSync(projectAgent, { force: true }); }
+});
+
+test('agent listing rejects invalid names before discovery output or child launch', async () => {
+  const parameters = tools.get('subagent_agents').definition.parameters;
+  const outputSchema = tools.get('subagent_agents').definition.outputSchema;
+  for (const name of ['', '  ', 'x'.repeat(MAX_AGENT_NAME_BYTES + 1), '\u001bworker']) {
+    assert.equal(Value.Check(parameters, { name }), false);
+  }
+  const multibyteOversizedName = '€'.repeat(Math.floor(MAX_AGENT_NAME_BYTES / 3) + 1);
+  const unpairedSurrogateName = String.fromCharCode(0xd800);
+  for (const name of [multibyteOversizedName, unpairedSurrogateName]) {
+    assert.equal(Value.Check(parameters, { name }), true,
+      'the schema may be looser than runtime UTF-8 and Unicode-scalar validation');
+    const result = await invoke('subagent_agents', { name });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /name must be a valid agent name/);
+    assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+    assert.equal(result.details.totalAgents, 0);
+    assert.equal(JSON.stringify(result).includes('�'), false);
+  }
+  assert.equal(traces().length, 0);
+});
+
 test('agent listing rejects invalid pagination before discovery output or child launch', async () => {
   const parameters = tools.get('subagent_agents').definition.parameters;
   const outputSchema = tools.get('subagent_agents').definition.outputSchema;
