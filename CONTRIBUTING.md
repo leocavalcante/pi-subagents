@@ -25,7 +25,7 @@ actionlint -ignore 'label "ubuntu-26\.04" is unknown\.' .github/workflows/*.yml
 
 CI currently pins actionlint v1.7.12. The ignore is limited to its stale runner-label catalog; keep the explicit `ubuntu-26.04` matrix row until GitHub's runner migration is confirmed.
 
-On Windows, the project-agent file-symlink boundary test runs when the process can create symbolic links. If Windows denies that privilege (`EPERM` or `EACCES`), that test is skipped with an explanation; enable Developer Mode or grant symbolic-link creation privilege to run it. Other tests, including the junction-based project-directory boundary test, still run. The junction-based extension checkout setup is a separate installation option documented in [README.md](README.md#installation).
+The project-agent hard-link rejection test runs on every platform. On Windows, the project-agent file-symlink boundary test runs when the process can create symbolic links. If Windows denies that privilege (`EPERM` or `EACCES`), that test is skipped with an explanation; enable Developer Mode or grant symbolic-link creation privilege to run it. Other tests, including the junction-based project-directory boundary test, still run. The junction-based extension checkout setup is a separate installation option documented in [README.md](README.md#installation).
 
 ## Releasing
 

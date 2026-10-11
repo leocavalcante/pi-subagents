@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { after, beforeEach, test } from 'node:test';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
@@ -412,6 +412,77 @@ test('project agent file symlinks stay within the project trust boundary', t => 
   assert.equal(result.diagnostics.length, 1);
   assert.equal(result.diagnostics[0].filePath, join(projectDir, 'linked-external.md'));
   assert.match(result.diagnostics[0].message, /outside the project root/i);
+});
+
+test('project agent hard links are rejected while personal hard links remain supported', () => {
+  const external = join(sandbox, 'external-hard-linked-agent.md');
+  const contents = '---\nname: linked\ndescription: Hard-linked definition\n---\nLinked prompt.\n';
+  writeFileSync(external, contents);
+  linkSync(external, join(projectDir, 'linked.md'));
+  linkSync(external, join(userDir, 'linked.md'));
+
+  const project = discoverAgents(cwd, 'project');
+  assert.deepEqual(project.agents, []);
+  assert.equal(project.diagnostics.length, 1);
+  assert.match(project.diagnostics[0].message, /hard-linked project agent definitions are not supported/i);
+
+  const user = discoverAgents(cwd, 'user');
+  assert.deepEqual(user.agents.map(entry => entry.name), ['linked']);
+  assert.equal(user.agents[0].systemPrompt, 'Linked prompt.');
+  assert.deepEqual(user.diagnostics, []);
+});
+
+test('project agent link counts are rechecked after reading', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pi-agent-hardlink-race-'));
+  const projectRoot = join(root, 'project');
+  const projectDir = join(projectRoot, '.pi/agents');
+  const cwd = join(projectRoot, 'nested');
+  const filePath = join(projectDir, 'worker.md');
+  const outsidePath = join(root, 'outside-hard-link.md');
+  mkdirSync(projectDir, { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(filePath, '---\nname: worker\ndescription: Worker\n---\nPrompt.\n');
+  const script = `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { jiti } from ${JSON.stringify(new URL('./pi-runtime.mjs', import.meta.url).href)};
+    const { discoverAgents } = await jiti.import(${JSON.stringify(new URL('../agents.ts', import.meta.url).href)});
+    const originalReadSync = fs.readSync;
+    let linkCreated = false;
+    fs.readSync = function(...args) {
+      const count = originalReadSync.apply(this, args);
+      if (count > 0 && !linkCreated) {
+        fs.linkSync(process.env.AGENT_TEST_FILE, process.env.AGENT_TEST_OUTSIDE_LINK);
+        linkCreated = true;
+      }
+      return count;
+    };
+    syncBuiltinESMExports();
+    process.stdout.write(JSON.stringify(discoverAgents(process.env.AGENT_TEST_CWD, 'project')));
+  `;
+
+  try {
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PI_CODING_AGENT_DIR: join(root, 'user'),
+        AGENT_TEST_CWD: cwd,
+        AGENT_TEST_FILE: filePath,
+        AGENT_TEST_OUTSIDE_LINK: outsidePath,
+      },
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    assert.equal(child.error, undefined, `Discovery child must finish: ${child.error?.message}`);
+    assert.equal(child.status, 0, child.stderr);
+    const result = JSON.parse(child.stdout);
+    assert.deepEqual(result.agents, []);
+    assert.equal(result.diagnostics.length, 1);
+    assert.match(result.diagnostics[0].message, /changed while reading/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('project agent reads reject directory swaps during path revalidation and open', () => {
