@@ -2386,6 +2386,79 @@ test('per-call model and thinking overrides take precedence without broadening t
   assert.equal(last.thinking, 'off');
 });
 
+test('per-call tool overrides resolve across single, parallel, and chain dispatch', async () => {
+  await invoke('subagent', { agent: 'pinned', task: 'single override', tools: 'custom-read, custom-write,custom-read' });
+  let child = traces().find(entry => entry.task === 'single override');
+  assert.equal(child.tools, 'custom-read,custom-write', 'comma-separated overrides are normalized and deduplicated');
+  assert.equal(child.noTools, false);
+
+  await invoke('subagent', { agent: 'pinned', task: 'disable tools', tools: [] });
+  child = traces().find(entry => entry.task === 'disable tools');
+  assert.equal(child.noTools, true);
+  assert.equal(child.tools, undefined);
+
+  await invoke('subagent', { agent: 'pinned', task: 'use child defaults', tools: null });
+  child = traces().find(entry => entry.task === 'use child defaults');
+  assert.equal(child.tools, undefined);
+  assert.equal(child.noTools, false, 'null removes the agent allowlist without disabling tools');
+
+  await invoke('subagent', { agent: 'pinned', task: 'agent allowlist remains' });
+  child = traces().find(entry => entry.task === 'agent allowlist remains');
+  assert.equal(child.tools, 'read,bash', 'per-call overrides do not mutate agent configuration');
+
+  const parallelResult = await invoke('subagent', { tools: ['batch-tool'], tasks: [
+    { agent: 'pinned', task: 'entry override', tools: ['entry-tool'] },
+    { agent: 'pinned', task: 'batch override' },
+    { agent: 'pinned', task: 'entry defaults', tools: null },
+  ] });
+  assert.equal(parallelResult.isError, false, parallelResult.content[0].text);
+  const parallel = new Map(traces().filter(entry => entry.event === 'start' && ['entry override', 'batch override', 'entry defaults'].includes(entry.task))
+    .map(entry => [entry.task, entry]));
+  assert.equal(parallel.get('entry override').tools, 'entry-tool');
+  assert.equal(parallel.get('batch override').tools, 'batch-tool');
+  assert.equal(parallel.get('entry defaults').tools, undefined);
+  assert.equal(parallel.get('entry defaults').noTools, false);
+
+  await invoke('subagent', { tools: ['chain-default'], chain: [
+    { agent: 'pinned', task: 'chain no tools', tools: [] },
+    { agent: 'pinned', task: 'chain inherits' },
+  ] });
+  const chain = new Map(traces().filter(entry => entry.event === 'start' && ['chain no tools', 'chain inherits'].includes(entry.task))
+    .map(entry => [entry.task, entry]));
+  assert.equal(chain.get('chain no tools').noTools, true);
+  assert.equal(chain.get('chain inherits').tools, 'chain-default');
+
+  const background = await invoke('subagent', {
+    background: true, notify: false, agent: 'pinned', task: 'background override', tools: ['background-tool'],
+  });
+  await invoke('subagent_jobs', { action: 'wait', jobId: background.details.background.id, timeoutMs: 5000 });
+  child = traces().find(entry => entry.event === 'start' && entry.task === 'background override');
+  assert.equal(child.tools, 'background-tool');
+});
+
+test('invalid per-call tool overrides fail preflight and the schema bounds tool selections', async () => {
+  const invalid = [
+    ['comma', ['read,bash']],
+    ['modifier', ['+bash']],
+    ['control', [`read${String.fromCharCode(27)}bash`]],
+    ['oversized entry', ['x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)]],
+    ['oversized aggregate', ['x'.repeat(MAX_AGENT_TOOL_LIST_BYTES - 1), 'yy']],
+    ['too many entries', Array.from({ length: MAX_AGENT_TOOL_COUNT + 1 }, (_, index) => `tool-${index}`)],
+  ];
+  const schema = tools.get('subagent').definition.parameters;
+  assert.equal(Value.Check(schema, { agent: 'pinned', task: 'valid', tools: ['read', 'bash'] }), true);
+  assert.equal(Value.Check(schema, { agent: 'pinned', task: 'valid', tools: 'read, bash' }), true);
+  assert.equal(Value.Check(schema, { agent: 'pinned', task: 'valid', tools: [] }), true);
+  assert.equal(Value.Check(schema, { agent: 'pinned', task: 'valid', tools: null }), true);
+  assert.equal(Value.Check(schema, { agent: 'pinned', task: 'valid', tools: invalid.at(-1)[1] }), false);
+  for (const [label, selected] of invalid) {
+    const result = await invoke('subagent', { agent: 'pinned', task: `invalid ${label}`, tools: selected });
+    assert.equal(result.isError, true, label);
+    assert.match(result.content[0].text, /Invalid tools override/);
+    assert.equal(traces().length, 0, `${label} must be rejected before launch`);
+  }
+});
+
 test('thinking null ignores agent and batch defaults while inheriting parent settings only with an inherited model', async () => {
   const definition = tools.get('subagent').definition;
   assert.equal(Value.Check(definition.parameters, { agent: 'thinking-default', task: 'null thinking', thinking: null }), true);
@@ -2531,7 +2604,7 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
   assert.equal(approvals, 0);
   assert.equal(traces().length, 0);
 
-  const approved = await invoke('subagent', { agent: 'project', task: 'approved', agentScope: 'project' }, context);
+  const approved = await invoke('subagent', { agent: 'project', task: 'approved', agentScope: 'project', tools: null }, context);
   assert.notEqual(approved.isError, true);
   assert.equal(approved.details.results[0].exitCode, 0);
   assert.equal(approvals, 1, 'an untrusted project agent requires an actual UI approval');
@@ -2542,7 +2615,10 @@ test('project-agent approval cannot be bypassed by a model-controlled parameter'
 test('invalid dispatch overrides fail before project approval or any child launch', async () => {
   let approvals = 0;
   const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false, ui: { confirm: async () => { approvals++; return true; } } };
-  for (const overrides of [{ model: '' }, { model: '  ' }, { model: 42 }, { thinking: 'invalid' }, { thinking: 42 }]) {
+  for (const overrides of [
+    { model: '' }, { model: '  ' }, { model: 42 }, { thinking: 'invalid' }, { thinking: 42 },
+    { tools: ['read,write'] }, { tools: ['+bash'] }, { tools: [42] },
+  ]) {
     for (const params of [{ agent: 'project', task: 'x', ...overrides }, { tasks: [{ agent: 'project', task: 'x', ...overrides }] }, { chain: [{ agent: 'project', task: 'x', ...overrides }] }]) {
       assert.equal((await invoke('subagent', { ...params, agentScope: 'both' }, context)).isError, true);
     }

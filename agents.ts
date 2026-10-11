@@ -114,7 +114,7 @@ function addDiagnostic(
  * inherits defaults. Bound both forms before passing the normalized list through
  * one child-process argument. Reject malformed allowlists rather than broadening access.
  */
-function parseToolList(value: unknown): string[] | undefined {
+export function parseAgentToolList(value: unknown): string[] | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value === "string" && (value.length > MAX_AGENT_TOOL_LIST_BYTES || !isWellFormedUnicode(value) ||
 		Buffer.byteLength(value, "utf8") > MAX_AGENT_TOOL_LIST_BYTES)) {
@@ -353,7 +353,7 @@ function loadAgentsFromDir(
 			const agent: AgentConfig = {
 				name: frontmatter.name.trim(),
 				description,
-				tools: parseToolList(frontmatter.tools),
+				tools: parseAgentToolList(frontmatter.tools),
 				model: frontmatter.model?.trim() || undefined,
 				thinking: thinking as ThinkingLevel | undefined,
 				timeoutMs: timeoutMs as number | undefined,

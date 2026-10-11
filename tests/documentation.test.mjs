@@ -88,7 +88,7 @@ test('README documents agent timeout defaults and precedence', () => {
   assert.match(deadlines, /entry, top-level call, agent frontmatter, then no deadline/);
 });
 
-test('README documents bounded model selectors and tool allowlists', () => {
+test('README documents bounded model selectors and agent tool allowlists', () => {
   const agents = section('Agent definitions');
   const overrides = section('Model and thinking overrides');
   assert.match(agents, /Model selectors are limited to 512 UTF-8 bytes and reject control characters/);
@@ -100,6 +100,17 @@ test('README documents bounded model selectors and tool allowlists', () => {
   assert.match(overrides, /entry-level `null` also overrides a top-level batch model/);
   assert.match(overrides, /Set `thinking: null` to ignore the agent's configured thinking level/);
   assert.match(overrides, /Entry-level `null` overrides top-level batch thinking/);
+});
+
+test('README documents bounded per-call tool overrides and precedence', () => {
+  const overrides = section('Tool allowlist overrides');
+  assert.match(overrides, /comma-separated string .* also accepted/);
+  assert.match(overrides, /entry, top-level call, agent frontmatter, then the child Pi defaults/);
+  assert.match(overrides, /Set `tools: \[\]` to disable the initial tool selection/);
+  assert.match(overrides, /set `tools: null` .* ignore the agent's configured allowlist/);
+  assert.match(overrides, /at most 256 entries and 4 KiB of normalized UTF-8 tool names/);
+  assert.match(overrides, /not a sandbox/);
+  assert.match(overrides, /do not bypass project-agent approval/);
 });
 
 test('README documents bounded delegated working-directory paths', () => {
