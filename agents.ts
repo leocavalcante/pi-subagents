@@ -318,6 +318,11 @@ function loadAgentsFromDir(
 					throw new Error("Agent definition changed while opening; rejecting unsafe path.");
 				}
 				if (!stat.isFile()) throw new Error("Agent definition is not a regular file.");
+				// A hard link has no canonical target path, so realpath cannot prove
+				// that a project agent's contents originate within the project root.
+				if (source === "project" && stat.nlink !== 1n) {
+					throw new Error("Hard-linked project agent definitions are not supported.");
+				}
 				if (stat.size > BigInt(MAX_AGENT_FILE_BYTES)) {
 					throw new Error(`Agent definition exceeds the ${MAX_AGENT_FILE_BYTES / 1024} KiB size limit.`);
 				}
@@ -336,7 +341,9 @@ function loadAgentsFromDir(
 					if (count === 0) break;
 					length += count;
 				}
-				if (fs.fstatSync(fd, { bigint: true }).size !== stat.size || BigInt(length) !== stat.size) {
+				const finalStat = fs.fstatSync(fd, { bigint: true });
+				if (finalStat.size !== stat.size || BigInt(length) !== stat.size ||
+					(source === "project" && finalStat.nlink !== 1n)) {
 					throw new Error("Agent definition changed while reading; rejecting inconsistent content.");
 				}
 				if (length > MAX_AGENT_FILE_BYTES) {
