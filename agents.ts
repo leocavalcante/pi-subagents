@@ -327,12 +327,17 @@ function loadAgentsFromDir(
 						`Agent directory exceeds the ${MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024)} MiB content limit; remaining definitions were skipped.`);
 					break;
 				}
-				const bytes = Buffer.allocUnsafe(remaining < MAX_AGENT_FILE_BYTES ? remaining + 1 : MAX_AGENT_FILE_BYTES + 1);
+				// The opened file's size is already bounded; avoid allocating the full per-file
+				// limit for every small definition. One extra byte detects concurrent growth.
+				const bytes = Buffer.allocUnsafe(Number(stat.size) + 1);
 				let length = 0;
 				while (length < bytes.length) {
 					const count = fs.readSync(fd, bytes, length, bytes.length - length, null);
 					if (count === 0) break;
 					length += count;
+				}
+				if (fs.fstatSync(fd, { bigint: true }).size !== stat.size || BigInt(length) !== stat.size) {
+					throw new Error("Agent definition changed while reading; rejecting inconsistent content.");
 				}
 				if (length > MAX_AGENT_FILE_BYTES) {
 					throw new Error(`Agent definition exceeds the ${MAX_AGENT_FILE_BYTES / 1024} KiB size limit.`);
