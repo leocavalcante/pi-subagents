@@ -2000,7 +2000,7 @@ test('model selectors are bounded before child spawn or background retention', a
   assert.equal(traces().find(entry => entry.event === 'start').model, valid);
 });
 
-test('working directory arguments reject non-strings, NUL, and overlong paths before approval or spawn', async () => {
+test('working directory arguments reject empty, non-string, NUL, and overlong paths before approval or spawn', async () => {
   let approvals = 0;
   const context = {
     ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
@@ -2010,12 +2010,15 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
   const unpairedPath = `invalid${String.fromCharCode(0xd800)}path`;
   const invalid = [
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: null },
+    { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: '' },
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: 'bad\0path' },
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: unpairedPath },
     { agent: 'project', task: 'invalid cwd', agentScope: 'project', cwd: tooLong },
     { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: {} }] },
+    { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: '' }] },
     { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: unpairedPath }] },
     { agentScope: 'project', tasks: [{ agent: 'project', task: 'invalid cwd', cwd: tooLong }] },
+    { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: '' }] },
     { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: 'bad\0path' }] },
     { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: unpairedPath }] },
     { agentScope: 'project', chain: [{ agent: 'project', task: 'invalid cwd', cwd: tooLong }] },
@@ -2031,6 +2034,9 @@ test('working directory arguments reject non-strings, NUL, and overlong paths be
   assert.equal(traces().length, 0);
   const schema = tools.get('subagent').definition.parameters;
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'valid', cwd: 'project' }), true);
+  assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: '' }), false);
+  assert.equal(Value.Check(schema, { tasks: [{ agent: 'worker', task: 'invalid', cwd: '' }] }), false);
+  assert.equal(Value.Check(schema, { chain: [{ agent: 'worker', task: 'invalid', cwd: '' }] }), false);
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: 'bad\0path' }), false);
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: tooLong }), false);
   assert.equal(Value.Check(schema, { agent: 'worker', task: 'invalid', cwd: unpairedPath }), true,
@@ -2225,6 +2231,13 @@ test('agent working-directory defaults resolve from the parent and yield to disp
     assert.equal(configured.cwd, 'agent-work');
     assert.match(listing.content[0].text, /cwd=.*agent-work/);
     assert.equal(Value.Check(tools.get('subagent_agents').definition.outputSchema, listing.structuredContent), true);
+
+    const emptyOverride = await invoke('subagent', {
+      agent: 'cwd-default', task: 'empty cwd must not bypass agent default', cwd: '',
+    });
+    assert.equal(emptyOverride.isError, true);
+    assert.match(emptyOverride.content[0].text, /cwd must be a non-empty path/);
+    assert.equal(traces().some(entry => entry.task === 'empty cwd must not bypass agent default'), false);
 
     const single = await invoke('subagent', { agent: 'cwd-default', task: 'cwd default single' });
     assert.equal(single.isError, undefined);
