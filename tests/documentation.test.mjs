@@ -118,6 +118,8 @@ test('README documents bounded model selectors and agent tool allowlists', () =>
   const agents = section('Agent definitions');
   const overrides = section('Model and thinking overrides');
   assert.match(agents, /Model selectors are limited to 512 UTF-8 bytes and reject control characters/);
+  assert.match(agents, /empty or whitespace-only `model` value/);
+  assert.match(agents, /inherits the parent's active model and thinking level/);
   assert.match(agents, /Tool arrays are limited to 256 entries; comma-separated values and the normalized `--tools` argument are each capped at 4 KiB of UTF-8 text/);
   assert.match(agents, /Entries cannot contain commas or control characters/);
   assert.match(agents, /cannot start with `\+` or `-`, which Pi interprets as modifiers/);

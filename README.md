@@ -65,7 +65,7 @@ cwd: packages/app
 unsetEnv: [AWS_SECRET_ACCESS_KEY, PRIVATE_TOKEN]
 ```
 
-Without `model`, it inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
+An agent with no `model` configured—or with an empty or whitespace-only `model` value—inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
 
 Without `tools`, it uses Pi's defaults. Both `tools: read, bash` and `tools: [read, bash]` work. Set `tools: []` to disable the initial tool selection. Entries cannot contain commas or control characters because the child CLI parses a comma-separated list; they also cannot start with `+` or `-`, which Pi interprets as modifiers to the default tool selection rather than allowlist names. Tool arrays are limited to 256 entries; comma-separated values and the normalized `--tools` argument are each capped at 4 KiB of UTF-8 text. This is not a sandbox; extensions can still change the selection.
 
