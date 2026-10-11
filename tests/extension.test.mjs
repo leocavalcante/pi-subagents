@@ -668,11 +668,34 @@ test('parallel progress does not count running children as completed', async () 
 });
 
 test('all foreground and background invocations share a four-process budget', async () => {
-  const batch = prefix => Array.from({ length: 6 }, (_, i) => ({ agent: 'worker', task: `delay=100 ${prefix}-${i}` }));
+  const releaseFile = join(sandbox, 'process-budget.release');
+  rmSync(releaseFile, { force: true });
+  const batch = prefix => Array.from({ length: 6 }, (_, i) => ({
+    agent: 'worker', task: `process-budget-barrier:${releaseFile}|${prefix}-${i}`,
+  }));
   const a = await invoke('subagent', { background: true, tasks: batch('a') });
   const b = await invoke('subagent', { background: true, tasks: batch('b') });
-  const foreground = invoke('subagent', { agent: 'worker', task: 'delay=100 foreground-budget' });
-  await Promise.all([finish(a.details.background.id), finish(b.details.background.id), foreground]);
+  const foreground = invoke('subagent', {
+    agent: 'worker', task: `process-budget-barrier:${releaseFile}|foreground`,
+  });
+  const work = Promise.allSettled([finish(a.details.background.id), finish(b.details.background.id), foreground]);
+  // Keep every launched child alive until the shared pool has demonstrably filled.
+  // This tests the cap without relying on child startup being faster than a short sleep.
+  try {
+    await waitFor(() => traces().filter(entry => entry.event === 'start' &&
+      entry.task.startsWith('process-budget-barrier:')).length >= 4);
+    const activeBeforeRelease = traces().filter(entry => entry.event === 'start' &&
+      entry.task.startsWith('process-budget-barrier:')).length;
+    assert.equal(activeBeforeRelease, 4);
+    writeFileSync(releaseFile, 'release');
+    const outcomes = await work;
+    const failure = outcomes.find(outcome => outcome.status === 'rejected');
+    if (failure) throw failure.reason;
+  } finally {
+    writeFileSync(releaseFile, 'release');
+    await work;
+    rmSync(releaseFile, { force: true });
+  }
   let active = 0, peak = 0;
   for (const entry of traces()) {
     if (entry.event === 'start') { active++; peak = Math.max(peak, active); }
