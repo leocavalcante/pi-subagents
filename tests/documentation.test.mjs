@@ -174,11 +174,13 @@ test('README documents bounded UUID job identifiers', () => {
   assert.match(background, /Job IDs are generated UUIDs \(36 characters\); `jobId` inputs are bounded to that length/);
 });
 
-test('README documents that Windows supervisor compilation is outside child deadlines', () => {
+test('README discloses that Windows supervisor compilation is outside task deadlines and unbounded', () => {
   const deadlines = section('Task deadlines');
-  assert.match(deadlines, /first-use supervisor compilation also happens before child spawn and is outside the deadline/);
-  assert.match(deadlines, /Cancellation during that compilation stops the caller's wait but does not stop the shared compilation/);
-  assert.match(deadlines, /later invocations in the same runtime wait for it too/);
+  assert.match(deadlines, /first-use supervisor compilation happens before child spawn, is outside the task deadline, and has no independent deadline/);
+  assert.match(deadlines, /If PowerShell or `Add-Type` stalls, calls waiting on compilation may hang indefinitely/);
+  assert.match(deadlines, /Canceling a caller detaches only that caller; the shared compilation keeps running/);
+  assert.match(deadlines, /later invocations in the same runtime also wait for it/);
+  assert.match(deadlines, /not safe to terminate PowerShell without verified process-tree containment/);
 });
 
 test('README documents timeout metadata on background output pages', () => {
@@ -249,7 +251,7 @@ test('README documents terminal-control escaping for foreground, background, and
 test('README distinguishes POSIX process-group cleanup from Windows Job Object supervision', () => {
   const deadlines = section('Task deadlines');
   assert.match(deadlines, /On POSIX, cleanup signals the child's process group/);
-  assert.match(deadlines, /On Windows, a supervisor is compiled on first use with the built-in Windows PowerShell C# compiler/);
+  assert.match(deadlines, /On Windows, after compilation the supervisor joins a kill-on-close outer Job Object/);
   assert.match(deadlines, /creates Pi suspended with only its standard I\/O handles inherited/);
   assert.match(deadlines, /Job setup or cleanup failures fail closed/);
   assert.match(deadlines, /waits at most 30 seconds for job settlement/);
