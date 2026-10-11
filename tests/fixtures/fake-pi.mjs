@@ -213,6 +213,16 @@ if (task === 'malformed-fractional-usage') console.log(JSON.stringify({ type: 'm
 } }));
 if (task === 'stdout-flood' || task.startsWith('stdout-flood-hang')) await write(process.stdout, 'x'.repeat(9 * 1024 * 1024) + '\n');
 if (task === 'stderr-flood') await write(process.stderr, 'é'.repeat(100 * 1024));
+if (task === 'history-final-evicted') {
+  const finalMessage = { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'answer that should remain captured' }], stopReason: 'stop' } };
+  await write(process.stdout, JSON.stringify(finalMessage) + '\n');
+  for (let i = 0; i < 128; i++) {
+    const trailingMessage = { type: 'message_end', message: { role: 'user', content: `trailing context ${i}` } };
+    await write(process.stdout, JSON.stringify(trailingMessage) + '\n');
+  }
+  trace({ event: 'end', task });
+  process.exit(0);
+}
 if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`);
 // The compact workload keeps finished-registry tests cheap; the larger fixture exercises per-task history eviction.
 const retentionRecordBytes = compactRetentionWorkload ? 1024 * 1024 : 3 * 1024 * 1024;

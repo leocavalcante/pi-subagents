@@ -454,7 +454,7 @@ function isPartialResult(result: SingleResult): boolean {
 function getCaptureNotice(result: SingleResult): string {
 	const notices: string[] = [];
 	if (result.capture?.messagesDropped) notices.push(`${result.capture.messagesDropped} messages omitted from captured history.`);
-	if (result.capture?.finalAssistantMessageDropped) notices.push("Final assistant message omitted because it exceeded the history capture budget.");
+	if (result.capture?.finalAssistantMessageDropped) notices.push("Final assistant message was not retained in bounded history.");
 	if (result.capture?.stderrTruncated) notices.push("stderr capture truncated at 64 KiB.");
 	if (result.capture?.stdoutTruncated) notices.push(`stdout capture stopped at ${MAX_CHILD_STDOUT_BYTES / (1024 * 1024)} MiB.`);
 	if (result.capture?.inheritedPipesClosed) notices.push("Inherited output pipes were closed after the child exited.");
@@ -856,6 +856,7 @@ async function runSingleAgent(
 		let timedOut = false;
 		let protocolError: string | undefined;
 		let recordPosition = 0;
+		let lastAssistantMessage: Message | undefined;
 		const setProtocolError = (message: string, eventType: FailureEventType, record?: number, role?: unknown) => {
 			if (protocolError) return; // Preserve the first malformed record and its causal context.
 			protocolError = message;
@@ -1012,6 +1013,7 @@ async function runSingleAgent(
 					if (msg.role === "toolResult") previousToolResultRecord = { type: "message_end", message: msg };
 
 					if (msg.role === "assistant") {
+						lastAssistantMessage = msg;
 						currentResult.usage.turns++;
 						const usage = msg.usage;
 						if (usage) currentResult.usage.contextTokens = usage.totalTokens ?? normalizeUsage(usage).totalTokens;
@@ -1141,6 +1143,10 @@ async function runSingleAgent(
 			else signal?.addEventListener("abort", killProc, { once: true });
 		});
 
+		if (lastAssistantMessage) {
+			// Later captured messages can evict an assistant message that was initially retained.
+			currentResult.capture!.finalAssistantMessageDropped = !history.messages.includes(lastAssistantMessage);
+		}
 		if (exitCode === 0 && !wasAborted && !timedOut && !protocolError) {
 			if (currentResult.usage.turns === 0) {
 				setProtocolError("Subagent exited without a completed assistant message.", "process_exit");
@@ -1155,7 +1161,7 @@ async function runSingleAgent(
 		const failureCauses = [
 			timedOut ? `Subagent timed out after ${effectiveTimeoutMs} ms.` : undefined,
 			protocolError,
-			finalAssistantMessageDropped ? "Final assistant message exceeded the available history capture budget." : undefined,
+			finalAssistantMessageDropped ? "Final assistant message was not retained in bounded history capture." : undefined,
 		];
 		if (failureCauses.some(Boolean)) currentResult.errorMessage = failureCauses.filter(Boolean).join(" ");
 		if (wasAborted) throw signal && signal.reason !== undefined ? signal.reason : new Error("Subagent was aborted");
