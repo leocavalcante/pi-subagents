@@ -12,7 +12,7 @@ const trace = entry => {
   }
   appendFileSync(process.env.SUBAGENT_TEST_TRACE, JSON.stringify({ ...safeEntry, pid: process.pid }) + '\n');
 };
-trace({ event: 'start', task, cwd: process.cwd(), model: flag('--model'), thinking: flag('--thinking'), tools: flag('--tools'), noTools: args.includes('--no-tools'), promptFile: args.includes('--append-system-prompt') ? flag('--append-system-prompt') : undefined });
+trace({ event: 'start', task, cwd: process.cwd(), model: flag('--model'), thinking: flag('--thinking'), tools: flag('--tools'), noTools: args.includes('--no-tools'), nestingDepth: process.env.PI_SUBAGENTS_NESTING_DEPTH, promptFile: args.includes('--append-system-prompt') ? flag('--append-system-prompt') : undefined });
 if (args.includes('--append-system-prompt')) readFileSync(flag('--append-system-prompt'), 'utf8');
 if (task.includes('stubborn')) process.on('SIGTERM', () => {});
 if (task.includes('grandchild')) {
