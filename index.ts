@@ -795,6 +795,8 @@ async function runSingleAgent(
 
 	const progressLimiter = new ProgressUpdateLimiter();
 	let progressPending = false;
+	// Avoid rebuilding the bounded message array for each accepted child event.
+	let refreshMessageSnapshot = () => {};
 	const emitUpdate = (force = false) => {
 		if (!onUpdate) return;
 		if (!progressLimiter.shouldUpdate(performance.now(), force)) {
@@ -802,6 +804,7 @@ async function runSingleAgent(
 			return;
 		}
 		progressPending = false;
+		refreshMessageSnapshot();
 		onUpdate({
 			content: [
 				{
@@ -845,6 +848,7 @@ async function runSingleAgent(
 			};
 		};
 		const history = new MessageCapture<Message>(historyByteLimit);
+		refreshMessageSnapshot = () => { currentResult.messages = history.messages; };
 		const stderr = new TextCapture();
 		currentResult.capture = {};
 
@@ -985,7 +989,6 @@ async function runSingleAgent(
 					if (!duplicateLegacyCopy) {
 						const retained = history.push(msg, Buffer.byteLength(line, "utf8"));
 						if (msg.role === "assistant") currentResult.capture!.finalAssistantMessageDropped = !retained;
-						currentResult.messages = history.messages;
 						currentResult.capture!.messagesDropped = history.dropped;
 						currentResult.capture!.retainedMessageBytes = history.retainedBytes;
 					}
@@ -1008,7 +1011,6 @@ async function runSingleAgent(
 						isDeepStrictEqual(adjacentToolResultRecord.message, msg);
 					if (!duplicateCanonicalCopy) {
 						history.push(msg, Buffer.byteLength(line, "utf8"));
-						currentResult.messages = history.messages;
 						currentResult.capture!.messagesDropped = history.dropped;
 						currentResult.capture!.retainedMessageBytes = history.retainedBytes;
 						emitUpdate();
@@ -1047,6 +1049,7 @@ async function runSingleAgent(
 					signal?.removeEventListener("abort", killProc);
 					reader.finish();
 					if (progressPending) emitUpdate(true);
+					else refreshMessageSnapshot();
 					resolve(code ?? 1);
 				};
 				if (escalation) void escalation.then(complete);
