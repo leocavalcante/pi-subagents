@@ -106,6 +106,37 @@ test('background returns before completion, retains progress, and sends a follow
   assert.equal(child.thinking, 'high');
 });
 
+test('nested delegation propagates depth and blocks process trees past the limit', async () => {
+  const depthName = 'PI_SUBAGENTS_NESTING_DEPTH';
+  const originalDepth = process.env[depthName];
+  try {
+    delete process.env[depthName];
+    const first = await invoke('subagent', { agent: 'worker', task: 'nesting-depth-one' });
+    assert.notEqual(first.isError, true);
+    assert.equal(traces().find(entry => entry.event === 'start' && entry.task === 'nesting-depth-one').nestingDepth, '1');
+
+    process.env[depthName] = '1';
+    const second = await invoke('subagent', { agent: 'worker', task: 'nesting-depth-two' });
+    assert.notEqual(second.isError, true);
+    assert.equal(traces().find(entry => entry.event === 'start' && entry.task === 'nesting-depth-two').nestingDepth, '2');
+
+    const startsBeforeLimit = traces().filter(entry => entry.event === 'start').length;
+    process.env[depthName] = '2';
+    const blocked = await invoke('subagent', { agent: 'worker', task: 'nesting-depth-blocked' });
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.content[0].text, /limited to 2 levels/);
+    assert.equal(traces().filter(entry => entry.event === 'start').length, startsBeforeLimit);
+
+    process.env[depthName] = 'invalid';
+    const malformed = await invoke('subagent', { agent: 'worker', task: 'nesting-depth-invalid' });
+    assert.equal(malformed.isError, true, 'Malformed inherited depth must fail closed');
+    assert.equal(traces().filter(entry => entry.event === 'start').length, startsBeforeLimit);
+  } finally {
+    if (originalDepth === undefined) delete process.env[depthName];
+    else process.env[depthName] = originalDepth;
+  }
+});
+
 test('foreground cancellation preserves an explicit null abort reason and releases its slot', async () => {
   const controller = new AbortController();
   const pending = invoke('subagent', { agent: 'worker', task: 'delay=10000 null-abort-reason' }, ctx(), controller.signal).then(

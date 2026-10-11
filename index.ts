@@ -80,9 +80,19 @@ const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
 const MAX_CONCURRENCY = 4;
 const MAX_ACTIVE_JOBS = 8;
+const SUBAGENT_NESTING_DEPTH_ENV = "PI_SUBAGENTS_NESTING_DEPTH";
+const MAX_SUBAGENT_NESTING_DEPTH = 2;
 // Allow every configured active background job to fill its process worker pool.
 const MAX_PROCESS_QUEUE = MAX_ACTIVE_JOBS * MAX_CONCURRENCY;
 const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
+
+function getSubagentNestingDepth(): number {
+	const value = process.env[SUBAGENT_NESTING_DEPTH_ENV];
+	if (value === undefined) return 0;
+	if (!/^(0|[1-9]\d*)$/.test(value)) return MAX_SUBAGENT_NESTING_DEPTH;
+	const depth = Number(value);
+	return Number.isSafeInteger(depth) ? depth : MAX_SUBAGENT_NESTING_DEPTH;
+}
 const COLLAPSED_ITEM_COUNT = 10;
 const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
@@ -848,6 +858,10 @@ async function runSingleAgent(
 				shell: false,
 				stdio: ["pipe", "pipe", "pipe"],
 				windowsHide: process.platform === "win32",
+				env: {
+					...process.env,
+					[SUBAGENT_NESTING_DEPTH_ENV]: String(getSubagentNestingDepth() + 1),
+				},
 				// On POSIX, cancel the entire group, including tools spawned by the child.
 				detached: process.platform !== "win32",
 			});
@@ -1630,6 +1644,7 @@ export default function (pi: ExtensionAPI) {
 			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
+			`Nested delegation is limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive process trees.`,
 			"Set model or thinking to override agent configuration. Use null to ignore the agent's configured model or thinking default. Parallel/chain entries override batch defaults.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
@@ -1861,6 +1876,17 @@ export default function (pi: ExtensionAPI) {
 						details: makeDetails(mode)([]),
 						isError: true,
 					};
+			}
+
+			if (getSubagentNestingDepth() >= MAX_SUBAGENT_NESTING_DEPTH) {
+				return {
+					content: [{
+						type: "text",
+						text: `Nested subagent delegation is limited to ${MAX_SUBAGENT_NESTING_DEPTH} levels; this process is already at the limit.`,
+					}],
+					details: makeDetails(mode)([]),
+					isError: true,
+				};
 			}
 
 			if (agentScope === "project" || agentScope === "both") {
