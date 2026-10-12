@@ -27,6 +27,11 @@ const {
   MAX_TIMEOUT_MS,
   MAX_WORKING_DIRECTORY_LENGTH,
 } = await jiti.import('../agents.ts');
+const {
+  MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES,
+  MAX_AGENT_LISTING_PATH_BYTES,
+  truncateAgentListingText,
+} = await jiti.import('../agent-listing.ts');
 const { MAX_PENDING_JOB_WAITS } = await jiti.import('../jobs.ts');
 const { MAX_PAGE_BYTES } = await jiti.import('../paging.ts');
 const { buildWindowsSupervisorInvocation } = await jiti.import('../windows-supervisor-invocation.ts');
@@ -2419,7 +2424,7 @@ test('agent listing is read-only, scoped, and reports invalid files without expo
   } finally { rmSync(badFile); }
 });
 
-test('agent listing paginates large inventories with bounded text and complete structured entries', async () => {
+test('agent listing paginates large inventories with bounded text and metadata', async () => {
   const directory = join(sandbox, 'agent/agents');
   const files = [];
   const longCwd = 'c'.repeat(MAX_WORKING_DIRECTORY_LENGTH);
@@ -2449,7 +2454,9 @@ test('agent listing paginates large inventories with bounded text and complete s
     assert.ok(Buffer.byteLength(first.content[0].text) <= 50 * 1024);
     assert.ok(first.details.agents.every(agent => agent.systemPrompt === undefined));
     const longEntry = first.details.agents.find(agent => agent.name === 'zz-page-000');
-    assert.equal(longEntry.cwd, longCwd, 'structured pages preserve complete configuration');
+    assert.equal(longEntry.cwd, truncateAgentListingText(longCwd, MAX_AGENT_LISTING_PATH_BYTES),
+      'structured pages explicitly truncate oversized cwd metadata');
+    assert.ok(longEntry.cwd.endsWith('…[truncated]'));
     assert.equal(first.content[0].text.includes(longCwd), false, 'oversized display fields are clipped without truncating the page');
 
     const pages = [first.structuredContent];
@@ -2762,6 +2769,35 @@ test('agent timeout defaults apply in every dispatch mode and yield to call over
   } finally { rmSync(file); rmSync(invalidFile); }
 });
 
+test('structured agent listing strings are UTF-8 bounded and mark truncation', async () => {
+  for (const [limit, label] of [
+    [MAX_AGENT_LISTING_PATH_BYTES, 'path'],
+    [MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES, 'diagnostic'],
+  ]) {
+    const value = '🙂'.repeat(limit);
+    const bounded = truncateAgentListingText(value, limit);
+    assert.ok(Buffer.byteLength(bounded, 'utf8') <= limit, `${label} stays within its byte limit`);
+    assert.ok(bounded.endsWith('…[truncated]'), `${label} truncation is explicit`);
+    assert.equal(Buffer.byteLength(truncateAgentListingText('x'.repeat(limit), limit), 'utf8'), limit,
+      `${label} values at the limit remain unchanged`);
+  }
+});
+
+test('agent listings cap long working-directory metadata in structured output', async () => {
+  const file = join(sandbox, 'agent/agents/long-cwd.md');
+  const cwd = '🚀'.repeat(MAX_AGENT_LISTING_PATH_BYTES);
+  writeFileSync(file, `---\nname: long-cwd\ndescription: Long working-directory metadata\ncwd: ${JSON.stringify(cwd)}\n---\nPrompt.\n`);
+  try {
+    const listed = await invoke('subagent_agents', { name: 'long-cwd' });
+    const [agent] = listed.structuredContent.agents;
+    assert.equal(agent.name, 'long-cwd');
+    assert.ok(agent.cwd.endsWith('…[truncated]'));
+    assert.ok(Buffer.byteLength(agent.cwd, 'utf8') <= MAX_AGENT_LISTING_PATH_BYTES);
+    assert.equal(Value.Check(tools.get('subagent_agents').definition.outputSchema, listed.structuredContent), true);
+    assert.ok(Buffer.byteLength(JSON.stringify(listed.structuredContent), 'utf8') < 20_000);
+  } finally { rmSync(file, { force: true }); }
+});
+
 test('agent listings omit oversized descriptions from structured metadata', async () => {
   const file = join(sandbox, 'agent/agents/oversized-description.md');
   const description = `PRIVATE_DESCRIPTION_${'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES)}`;
@@ -2806,7 +2842,11 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
   assertRejected(candidate => { agent(candidate).tools = ['x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)]; }, 'oversized tool entries must be rejected');
   assertRejected(candidate => { agent(candidate).tools = ['read', 'read']; }, 'duplicate tool entries must be rejected');
   assertRejected(candidate => { agent(candidate).cwd = ''; }, 'empty working-directory defaults must be rejected');
-  assertRejected(candidate => { agent(candidate).cwd = 'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH + 1); }, 'oversized working-directory defaults must be rejected');
+  assertRejected(candidate => { agent(candidate).cwd = 'x'.repeat(MAX_AGENT_LISTING_PATH_BYTES + 1); }, 'oversized listed working directories must be rejected');
+  assertRejected(candidate => { agent(candidate).filePath = 'x'.repeat(MAX_AGENT_LISTING_PATH_BYTES + 1); }, 'oversized agent paths must be rejected');
+  assertRejected(candidate => { candidate.projectAgentsDir = 'x'.repeat(MAX_AGENT_LISTING_PATH_BYTES + 1); }, 'oversized project agent directories must be rejected');
+  assertRejected(candidate => { candidate.diagnostics.push({ filePath: 'x'.repeat(MAX_AGENT_LISTING_PATH_BYTES + 1), source: 'user', message: 'invalid' }); }, 'oversized diagnostic paths must be rejected');
+  assertRejected(candidate => { candidate.diagnostics.push({ filePath: 'agent.md', source: 'user', message: 'x'.repeat(MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES + 1) }); }, 'oversized diagnostic messages must be rejected');
   assertRejected(candidate => { agent(candidate).systemPrompt = 'private prompt'; }, 'agent entries must not permit undeclared prompt fields');
   assertRejected(candidate => { candidate.unexpected = true; }, 'listing results must not permit undeclared fields');
   assertRejected(candidate => { candidate.diagnostics.push({ filePath: 'agent.md', source: 'user', message: 'invalid', systemPrompt: 'private prompt' }); }, 'diagnostics must not permit undeclared fields');
@@ -2817,9 +2857,16 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
     description: 'd'.repeat(MAX_AGENT_DESCRIPTION_BYTES),
     model: 'm'.repeat(MAX_MODEL_SELECTOR_BYTES),
     tools: Array.from({ length: MAX_AGENT_TOOL_COUNT }, (_, index) => `tool-${index}`),
-    cwd: 'c'.repeat(MAX_WORKING_DIRECTORY_LENGTH),
+    cwd: 'c'.repeat(MAX_AGENT_LISTING_PATH_BYTES),
   });
   assert.equal(Value.Check(schema, atLimits), true, 'metadata at configured limits remains valid');
+  const diagnosticAtLimits = structuredClone(listing);
+  diagnosticAtLimits.projectAgentsDir = 'p'.repeat(MAX_AGENT_LISTING_PATH_BYTES);
+  diagnosticAtLimits.diagnostics = [{
+    filePath: 'f'.repeat(MAX_AGENT_LISTING_PATH_BYTES), source: 'user',
+    message: 'm'.repeat(MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES),
+  }];
+  assert.equal(Value.Check(schema, diagnosticAtLimits), true, 'path and diagnostic fields at their limits remain valid');
   const maxToolEntry = structuredClone(listing);
   agent(maxToolEntry).tools = ['t'.repeat(MAX_AGENT_TOOL_LIST_BYTES)];
   assert.equal(Value.Check(schema, maxToolEntry), true, 'tool entries at the configured byte limit remain valid');

@@ -126,7 +126,8 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /normalizing text to Unicode NFC \(so canonically equivalent composed and decomposed forms match\)/);
   assert.match(usage, /Choose either `name` or `query`, not both/);
   assert.match(usage, /Filtering happens after scope precedence/);
-  assert.match(usage, /structured entries retain complete validated metadata/);
+  assert.match(usage, /Structured paths and `cwd` values are capped at 4 KiB and diagnostic messages at 512 UTF-8 bytes/);
+  assert.match(usage, /These listing-only limits do not change the paths used to launch agents/);
 });
 
 test('README documents agent timeout and environment-removal defaults and precedence', () => {

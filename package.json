@@ -20,6 +20,7 @@
 	"files": [
 		"index.ts",
 		"agents.ts",
+		"agent-listing.ts",
 		"jobs.ts",
 		"capture.ts",
 		"protocol.ts",
