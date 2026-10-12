@@ -137,7 +137,10 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /Unicode 17\.0 default \(non-Turkic\) full case folding and NFC normalization \(so canonically equivalent composed and decomposed forms match\)/);
   assert.match(usage, /Greek sigma, German sharp s \(`ß`\/`ẞ` → `ss`\), long s, and ligature expansions/);
   assert.match(usage, /`STRASSE` matches `Straße`/);
-  assert.match(usage, /Choose either `name` or `query`, not both/);
+  assert.match(usage, /Choose one of `name`, `query`, or `tag`/);
+  assert.match(usage, /To return agents with one exact tag, pass `tag`/);
+  assert.match(usage, /tag matching is case-insensitive, matches a complete label, and normalizes input to lowercase/);
+  assert.match(usage, /A tag filter cannot be combined with `name` or `query`/);
   assert.match(usage, /Filtering happens after scope precedence/);
   assert.match(usage, /Structured paths and `cwd` values are capped at 4 KiB and diagnostic messages at 512 UTF-8 bytes/);
   assert.match(usage, /These listing-only limits do not change the paths used to launch agents/);

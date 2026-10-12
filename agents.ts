@@ -70,7 +70,9 @@ export const MAX_AGENT_TAG_LIST_BYTES = 2 * 1024;
 export const MAX_AGENT_UNSET_ENV_COUNT = 128;
 export const MAX_AGENT_UNSET_ENV_BYTES = 4 * 1024;
 export const ENVIRONMENT_VARIABLE_NAME_PATTERN = "^[A-Za-z_][A-Za-z0-9_]*$";
+export const AGENT_TAG_INPUT_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._-]*(?![\\s\\S])";
 export const AGENT_TAG_PATTERN = "^[a-z0-9][a-z0-9._-]*(?![\\s\\S])";
+const AGENT_TAG_INPUT_REGEX = new RegExp(AGENT_TAG_INPUT_PATTERN);
 export const MAX_MODEL_SELECTOR_BYTES = 512;
 export const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
@@ -104,6 +106,13 @@ export function isSafeWorkingDirectory(value: unknown): value is string {
 		isWellFormedUnicode(value) && !value.includes("\0");
 }
 
+/** Normalize one bounded, portable capability label; return undefined for invalid input. */
+export function normalizeAgentTag(value: unknown): string | undefined {
+	if (typeof value !== "string" || value.length === 0 || value.length > MAX_AGENT_TAG_BYTES ||
+		!AGENT_TAG_INPUT_REGEX.test(value)) return undefined;
+	return value.toLowerCase();
+}
+
 /** Parse bounded, portable capability labels for agent discovery and search. */
 export function parseAgentTags(value: unknown): string[] | undefined {
 	if (value === undefined) return undefined;
@@ -114,11 +123,10 @@ export function parseAgentTags(value: unknown): string[] | undefined {
 	const seen = new Set<string>();
 	let totalBytes = 0;
 	for (const rawTag of value) {
-		if (typeof rawTag !== "string" || rawTag.length === 0 || rawTag.length > MAX_AGENT_TAG_BYTES ||
-			!/^[A-Za-z0-9][A-Za-z0-9._-]*(?![\s\S])/.test(rawTag)) {
+		const tag = normalizeAgentTag(rawTag);
+		if (tag === undefined) {
 			throw new Error(`tags entries must be 1-${MAX_AGENT_TAG_BYTES} ASCII letters, digits, dots, underscores, or hyphens, beginning with a letter or digit.`);
 		}
-		const tag = rawTag.toLowerCase();
 		if (seen.has(tag)) continue;
 		const bytes = tag.length + (tags.length > 0 ? 1 : 0);
 		if (bytes > MAX_AGENT_TAG_LIST_BYTES - totalBytes) {
