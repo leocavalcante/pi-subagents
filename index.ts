@@ -33,11 +33,15 @@ import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
 	AGENT_NAME_PATTERN,
+	AGENT_TAG_PATTERN,
 	MAX_AGENT_DESCRIPTION_BYTES,
 	MAX_AGENT_DIAGNOSTICS,
 	MAX_AGENT_FILES,
 	MAX_AGENT_NAME_BYTES,
 	MAX_AGENT_SEARCH_QUERY_BYTES,
+	MAX_AGENT_TAG_BYTES,
+	MAX_AGENT_TAG_COUNT,
+	MAX_AGENT_TAG_LIST_BYTES,
 	MAX_AGENT_TOOL_COUNT,
 	MAX_AGENT_TOOL_LIST_BYTES,
 	MAX_AGENT_UNSET_ENV_BYTES,
@@ -1521,10 +1525,11 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent_agents",
 		label: "Subagent agents",
 		description: [
-			"List available subagents, descriptions, configuration, and source paths without running them.",
-			"Set name to look up one exact, case-sensitive definition, or query to search names, descriptions, source filenames, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
-			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, definition filenames (not parent directories), explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with exact name lookup.`,
+			"List available subagents, descriptions, capability tags, configuration, and source paths without running them.",
+			"Set name to look up one exact, case-sensitive definition, or query to search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
+			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with exact name lookup.`,
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
+			"Tags are bounded lowercase discovery labels and do not configure child execution.",
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes. Structured paths and cwd metadata are limited to ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; diagnostic messages are limited to ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes. Longer values are marked as truncated.`,
 			`Reports invalid and duplicate definitions and agent-directory inspection failures. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
@@ -1533,7 +1538,7 @@ export default function (pi: ExtensionAPI) {
 			name: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_NAME_BYTES,
 				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with query.` })),
 			query: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_SEARCH_QUERY_BYTES,
-				description: `NFC-normalized literal substring search in names, descriptions, definition filenames (not parent directories), explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred; environment variable values are never searched; cannot be combined with name.` })),
+				description: `NFC-normalized literal substring search in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred; environment variable values are never searched; cannot be combined with name.` })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
 				description: "Zero-based offset into the locale-independent agent-name ordering, after any name or query filter. Default: 0." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE,
@@ -1554,6 +1559,12 @@ export default function (pi: ExtensionAPI) {
 				tools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: MAX_AGENT_TOOL_LIST_BYTES }), {
 					maxItems: MAX_AGENT_TOOL_COUNT,
 					uniqueItems: true,
+				})),
+				tags: Type.Optional(Type.Array(Type.String({ pattern: AGENT_TAG_PATTERN,
+					minLength: 1, maxLength: MAX_AGENT_TAG_BYTES }), {
+					maxItems: MAX_AGENT_TAG_COUNT,
+					uniqueItems: true,
+					description: `Lowercase capability labels; maximum ${MAX_AGENT_TAG_COUNT} tags, ${MAX_AGENT_TAG_BYTES} bytes per tag, and ${MAX_AGENT_TAG_LIST_BYTES} bytes total.`,
 				})),
 				unsetEnv: Type.Optional(Type.Array(Type.String({ pattern: ENVIRONMENT_VARIABLE_NAME_PATTERN }), {
 					maxItems: MAX_AGENT_UNSET_ENV_COUNT,
@@ -1629,6 +1640,7 @@ export default function (pi: ExtensionAPI) {
 					caseFoldUnicode(agent.name).includes(normalizedQuery) ||
 					caseFoldUnicode(agent.description).includes(normalizedQuery) ||
 					caseFoldUnicode(path.basename(agent.filePath)).includes(normalizedQuery) ||
+					(agent.tags?.some((tag) => caseFoldUnicode(tag).includes(normalizedQuery)) ?? false) ||
 					(agent.tools?.some((tool) => caseFoldUnicode(tool).includes(normalizedQuery)) ?? false) ||
 					(agent.cwd !== undefined && caseFoldUnicode(agent.cwd).includes(normalizedQuery)) ||
 					(agent.unsetEnv?.some((name) => caseFoldUnicode(name).includes(normalizedQuery)) ?? false) ||
@@ -1643,6 +1655,7 @@ export default function (pi: ExtensionAPI) {
 					...(agent.model !== undefined ? { model: agent.model } : {}),
 					...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
 					...(agent.tools !== undefined ? { tools: agent.tools } : {}),
+					...(agent.tags !== undefined ? { tags: agent.tags } : {}),
 					...(agent.unsetEnv !== undefined ? { unsetEnv: agent.unsetEnv } : {}),
 					...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
 					...(agent.cwd !== undefined ? { cwd: truncateAgentListingText(agent.cwd, MAX_AGENT_LISTING_PATH_BYTES) } : {}),
@@ -1662,6 +1675,7 @@ export default function (pi: ExtensionAPI) {
 					a.model && `model=${displayUntrustedText(a.model)}`,
 					a.thinking && `thinking=${a.thinking}`,
 					a.tools && `tools=${displayUntrustedText(a.tools.length ? a.tools.join(",") : "none")}`,
+					a.tags && `tags=${a.tags.length ? a.tags.join(",") : "none"}`,
 					a.unsetEnv && `unsetEnv=${displayUntrustedText(a.unsetEnv.length ? a.unsetEnv.join(",") : "none")}`,
 					a.timeoutMs !== undefined && `timeoutMs=${a.timeoutMs}`,
 					a.cwd !== undefined && `cwd=${displayUntrustedText(a.cwd)}`,

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
 
-const { discoverAgents, parseAgentUnsetEnv, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_AGENT_UNSET_ENV_BYTES, MAX_AGENT_UNSET_ENV_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS, MAX_WORKING_DIRECTORY_LENGTH } = await jiti.import('../agents.ts');
+const { discoverAgents, parseAgentTags, parseAgentUnsetEnv, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TAG_BYTES, MAX_AGENT_TAG_COUNT, MAX_AGENT_TAG_LIST_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_AGENT_UNSET_ENV_BYTES, MAX_AGENT_UNSET_ENV_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS, MAX_WORKING_DIRECTORY_LENGTH } = await jiti.import('../agents.ts');
 const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
@@ -292,6 +292,34 @@ test('agent filename precedence and name ordering are locale-independent', () =>
   const result = discoverAgents(cwd, 'user');
   assert.deepEqual(result.agents.map(a => a.name), ['a', 'aa', 'worker', 'z', 'á']);
   assert.equal(result.agents.find(a => a.name === 'worker').description, 'Underscore filename');
+});
+
+test('agent tags are bounded portable slugs normalized for discovery', () => {
+  assert.equal(parseAgentTags(undefined), undefined);
+  assert.deepEqual(parseAgentTags([]), []);
+  assert.deepEqual(parseAgentTags(['Security-Audit', 'security-audit', 'Docs_v2', '42', 'v1.2']),
+    ['security-audit', 'docs_v2', '42', 'v1.2'], 'tags are lowercase and duplicates are removed in order');
+  assert.equal(parseAgentTags(['x'.repeat(MAX_AGENT_TAG_BYTES)])[0].length, MAX_AGENT_TAG_BYTES);
+  assert.equal(parseAgentTags(Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) => `tag-${index}`)).length,
+    MAX_AGENT_TAG_COUNT);
+
+  const oversizedAggregate = Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) =>
+    `${String(index).padStart(2, '0')}${'x'.repeat(MAX_AGENT_TAG_BYTES - 2)}`);
+  assert.ok(oversizedAggregate.reduce((size, tag) => size + tag.length, MAX_AGENT_TAG_COUNT - 1) > MAX_AGENT_TAG_LIST_BYTES);
+  for (const value of [
+    null, 'security', Array.from({ length: MAX_AGENT_TAG_COUNT + 1 }, (_, index) => `tag-${index}`),
+    [''], ['-leading'], ['has space'], ['unicode-é'], ['tag/segment'], ['tag,other'], ['tag\n'],
+    ['x'.repeat(MAX_AGENT_TAG_BYTES + 1)], oversizedAggregate,
+  ]) assert.throws(() => parseAgentTags(value), /tags/);
+
+  agent(userDir, 'valid-tags', `name: tagged\ndescription: Tagged agent\ntags: [Security-Audit, docs_v2]`);
+  agent(userDir, 'invalid-tags', `name: invalid-tags\ndescription: Invalid tag\ntags: [private/secret]`);
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents.map(entry => [entry.name, entry.tags]), [['tagged', ['security-audit', 'docs_v2']]]);
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0].message, /tags entries must be/);
+  assert.equal(JSON.stringify(result).includes('private/secret'), false,
+    'invalid tag payloads are not copied into diagnostics');
 });
 
 test('agent unsetEnv configuration accepts bounded portable variable names and rejects the recursion guard', () => {

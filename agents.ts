@@ -15,6 +15,7 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
+	tags?: string[];
 	unsetEnv?: string[];
 	model?: string;
 	thinking?: ThinkingLevel;
@@ -49,6 +50,7 @@ type AgentFrontmatter = {
 	name?: unknown;
 	description?: unknown;
 	tools?: unknown;
+	tags?: unknown;
 	unsetEnv?: unknown;
 	model?: unknown;
 	thinking?: unknown;
@@ -62,9 +64,13 @@ export const MAX_AGENT_SEARCH_QUERY_BYTES = 256;
 export const MAX_AGENT_DESCRIPTION_BYTES = 1024;
 export const MAX_AGENT_TOOL_LIST_BYTES = 4 * 1024;
 export const MAX_AGENT_TOOL_COUNT = 256;
+export const MAX_AGENT_TAG_BYTES = 64;
+export const MAX_AGENT_TAG_COUNT = 32;
+export const MAX_AGENT_TAG_LIST_BYTES = 2 * 1024;
 export const MAX_AGENT_UNSET_ENV_COUNT = 128;
 export const MAX_AGENT_UNSET_ENV_BYTES = 4 * 1024;
 export const ENVIRONMENT_VARIABLE_NAME_PATTERN = "^[A-Za-z_][A-Za-z0-9_]*$";
+export const AGENT_TAG_PATTERN = "^[a-z0-9][a-z0-9._-]*(?![\\s\\S])";
 export const MAX_MODEL_SELECTOR_BYTES = 512;
 export const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
@@ -96,6 +102,33 @@ export function isSafeModelSelector(value: unknown, allowBlank = false): value i
 export function isSafeWorkingDirectory(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= MAX_WORKING_DIRECTORY_LENGTH &&
 		isWellFormedUnicode(value) && !value.includes("\0");
+}
+
+/** Parse bounded, portable capability labels for agent discovery and search. */
+export function parseAgentTags(value: unknown): string[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || value.length > MAX_AGENT_TAG_COUNT) {
+		throw new Error(`tags must be an array of at most ${MAX_AGENT_TAG_COUNT} entries.`);
+	}
+	const tags: string[] = [];
+	const seen = new Set<string>();
+	let totalBytes = 0;
+	for (const rawTag of value) {
+		if (typeof rawTag !== "string" || rawTag.length === 0 || rawTag.length > MAX_AGENT_TAG_BYTES ||
+			!/^[A-Za-z0-9][A-Za-z0-9._-]*(?![\s\S])/.test(rawTag)) {
+			throw new Error(`tags entries must be 1-${MAX_AGENT_TAG_BYTES} ASCII letters, digits, dots, underscores, or hyphens, beginning with a letter or digit.`);
+		}
+		const tag = rawTag.toLowerCase();
+		if (seen.has(tag)) continue;
+		const bytes = tag.length + (tags.length > 0 ? 1 : 0);
+		if (bytes > MAX_AGENT_TAG_LIST_BYTES - totalBytes) {
+			throw new Error(`tags must be at most ${MAX_AGENT_TAG_LIST_BYTES} bytes and contain at most ${MAX_AGENT_TAG_COUNT} entries.`);
+		}
+		tags.push(tag);
+		seen.add(tag);
+		totalBytes += bytes;
+	}
+	return tags;
 }
 
 /** Parse variable names to remove from the child process's inherited environment. */
@@ -429,6 +462,7 @@ function loadAgentsFromDir(
 				name: frontmatter.name.trim(),
 				description,
 				tools: parseAgentToolList(frontmatter.tools),
+				tags: parseAgentTags(frontmatter.tags),
 				unsetEnv: parseAgentUnsetEnv(frontmatter.unsetEnv),
 				model: frontmatter.model?.trim() || undefined,
 				thinking: thinking as ThinkingLevel | undefined,
