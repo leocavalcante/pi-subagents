@@ -191,6 +191,20 @@ test('malformed YAML diagnostics never echo private frontmatter content', () => 
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
+test('project agent discovery rejects excessive YAML aliases before approval', () => {
+  const anchors = ['a0: &a0 [harmless]',
+    ...Array.from({ length: 7 }, (_, index) => `a${index + 1}: &a${index + 1} [*a${index}, *a${index}]`)];
+  writeFileSync(join(projectDir, 'alias-expansion.md'), [
+    '---', 'name: alias-expansion', 'description: Alias expansion test', ...anchors, 'unused: *a7', '---', 'Instructions.',
+  ].join('\n'));
+
+  const result = discoverAgents(cwd, 'project');
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.equal(result.diagnostics[0].source, 'project');
+  assert.equal(result.diagnostics[0].message, 'Invalid YAML frontmatter.');
+});
+
 test('agent definitions with invalid UTF-8 are rejected without exposing prompt bytes', () => {
   const privatePrompt = 'PRIVATE_INVALID_UTF8_PROMPT';
   writeFileSync(join(userDir, 'bad-utf8.md'), Buffer.concat([
