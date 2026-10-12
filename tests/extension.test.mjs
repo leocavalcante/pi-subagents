@@ -3385,10 +3385,17 @@ test('oversized agent tool lists are diagnosed and never reach child processes',
 
 test('project agent metadata is escaped in listings and trust confirmations', async () => {
   const projectDir = join(sandbox, 'project/.pi/agents');
-  const hostileName = 'safe `name` [link](https://example.invalid)';
+  const zeroWidthSpace = String.fromCodePoint(0x200b);
+  const wordJoiner = String.fromCodePoint(0x2060);
+  const zeroWidthNonJoiner = String.fromCodePoint(0x200c);
+  const zeroWidthJoiner = String.fromCodePoint(0x200d);
+  const variationSelector = String.fromCodePoint(0xfe0f);
+  const emojiSequence = `👩${zeroWidthJoiner}💻`;
+  const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
+  const hostileName = `safe${zeroWidthSpace} ` + `name${wordJoiner} [link](https://example.invalid)`;
   const escape = String.fromCharCode(27);
   const c1 = String.fromCodePoint(0x009b);
-  const hostileDescription = `visible${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
+  const hostileDescription = `visible${zeroWidthSpace}${wordJoiner} ${emojiSequence} ✈${variationSelector} ${scriptJoiner}${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
   const hostileCwd = `configured${String.fromCharCode(10)}${escape}[31m${String.fromCodePoint(0x202e)}`;
   const metadataFile = join(projectDir, 'metadata.md');
   const hostilePathFile = join(projectDir, `path-${escape}.md`);
@@ -3413,10 +3420,20 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(text.includes(escape), false);
     assert.equal(text.includes(String.fromCodePoint(0x202e)), false);
     assert.equal(text.includes(c1), false);
+    assert.equal(text.includes(zeroWidthSpace), false, 'zero-width spaces must be visible in display-only metadata');
+    assert.equal(text.includes(wordJoiner), false, 'word joiners must be visible in display-only metadata');
     assert.equal(text.split(String.fromCharCode(10)).some(line => line.startsWith('### forged heading')), false);
     assert.ok(text.includes('u001b'));
+    assert.ok(text.includes('u200b'));
+    assert.ok(text.includes('u2060'));
+    assert.ok(text.includes(emojiSequence), 'ZWJ emoji sequences remain intact');
+    assert.ok(text.includes(`✈${variationSelector}`), 'emoji variation selectors remain intact');
+    assert.ok(text.includes(scriptJoiner), 'script-specific ZWNJ remains intact');
     assert.ok(text.includes('u000a'));
-    assert.equal(listed.details.agents.find(agent => agent.name === hostileName).description, hostileDescription);
+    assert.equal(listed.details.agents.find(agent => agent.name === hostileName).name, hostileName,
+      'structured metadata preserves the original name');
+    assert.equal(listed.details.agents.find(agent => agent.name === hostileName).description, hostileDescription,
+      'structured metadata preserves original descriptions');
     assert.deepEqual(listed.details.agents.find(agent => agent.name === hostileName).tools, ['read', 'custom-safe']);
     assert.equal(listed.details.agents.find(agent => agent.name === hostileName).cwd, hostileCwd);
     if (canUseControlFilename) {
@@ -3436,6 +3453,10 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(denied.content[0].text, 'Canceled: project-local agents not approved.');
     assert.equal(confirmation.includes(escape), false);
     assert.equal(confirmation.includes(String.fromCodePoint(0x202e)), false);
+    assert.equal(confirmation.includes(zeroWidthSpace), false);
+    assert.equal(confirmation.includes(wordJoiner), false);
+    assert.equal(confirmation.includes('u200b'), true);
+    assert.equal(confirmation.includes('u2060'), true);
     assert.equal(confirmation.includes(escape), false);
     assert.equal(confirmation.includes(hostileName), false);
     assert.equal(confirmation.includes('Effective child working directories:'), true);
