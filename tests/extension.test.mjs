@@ -25,6 +25,7 @@ const {
   MAX_AGENT_TOOL_LIST_BYTES,
   MAX_AGENT_TAG_BYTES,
   MAX_AGENT_TAG_COUNT,
+  MAX_AGENT_TAG_LIST_BYTES,
   MAX_MODEL_SELECTOR_BYTES,
   MAX_TIMEOUT_MS,
   MAX_WORKING_DIRECTORY_LENGTH,
@@ -2859,6 +2860,7 @@ test('agentTags dispatch selects uniquely in single, parallel, and chain modes b
   });
   const personalScope = join(sandbox, 'agent/agents/dispatch-scope.md');
   const projectScope = join(sandbox, 'project/.pi/agents/dispatch-scope.md');
+  const exactLimitFile = join(sandbox, 'agent/agents/dispatch-exact-limit.md');
   writeFileSync(personalScope, '---\nname: dispatch-scope\ndescription: Personal shadow\ntags: [personal-route]\n---\nPersonal instructions.\n');
   writeFileSync(projectScope, '---\nname: dispatch-scope\ndescription: Project override\ntags: [project-route]\n---\nProject instructions.\n');
   try {
@@ -2882,6 +2884,17 @@ test('agentTags dispatch selects uniquely in single, parallel, and chain modes b
     const unmatched = await invoke('subagent', { agentTags: ['unavailable'], task: 'missing tags must not start' });
     assert.equal(unmatched.isError, true);
     assert.match(unmatched.content[0].text, /No in-scope agent/);
+    assert.equal(traces().length, beforeRejected, 'ambiguous and unmatched selectors must fail before starting children');
+    const exactLimitTags = Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) =>
+      `${String(index).padStart(2, '0')}${'x'.repeat(index === MAX_AGENT_TAG_COUNT - 1 ? 31 : MAX_AGENT_TAG_BYTES - 2)}`);
+    const exactLimitBytes = exactLimitTags.reduce((total, tag) => total + Buffer.byteLength(tag), exactLimitTags.length - 1);
+    assert.equal(exactLimitBytes, MAX_AGENT_TAG_LIST_BYTES, 'the fixture must exercise the inclusive aggregate byte limit');
+    writeFileSync(exactLimitFile, `---\nname: dispatch-exact-limit\ndescription: Exact aggregate tag limit\ntags: ${JSON.stringify(exactLimitTags)}\n---\nInstructions.\n`);
+    assert.equal(Value.Check(schema, { agentTags: exactLimitTags, task: 'exact selector boundary' }), true);
+    const exactLimitSelection = await invoke('subagent', { agentTags: exactLimitTags, task: 'exact selector boundary' });
+    assert.equal(exactLimitSelection.isError, undefined, 'a selector at the aggregate limit should remain valid');
+    assert.equal(exactLimitSelection.details.results[0].agent, 'dispatch-exact-limit');
+    const beforeMalformed = traces().length;
     const oversizedTags = Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) =>
       `${String(index).padStart(2, '0')}${'x'.repeat(MAX_AGENT_TAG_BYTES - 2)}`);
     assert.equal(Value.Check(schema, { agentTags: oversizedTags, task: 'oversized selector' }), true,
@@ -2908,7 +2921,7 @@ test('agentTags dispatch selects uniquely in single, parallel, and chain modes b
       const invalid = await invoke('subagent', params);
       assert.equal(invalid.isError, true);
     }
-    assert.equal(traces().length, beforeRejected, 'no-match, ambiguous, and malformed selectors must fail before starting children');
+    assert.equal(traces().length, beforeMalformed, 'oversized and malformed selectors must fail before starting children');
 
     const parallel = await invoke('subagent', { tasks: [
       { agentTags: ['security', 'code-review'], task: 'parallel tag selector' },
@@ -2947,7 +2960,7 @@ test('agentTags dispatch selects uniquely in single, parallel, and chain modes b
     assert.equal(projectDispatch.details.results[0].agent, 'dispatch-scope');
     assert.match(approval, /dispatch-scope/);
   } finally {
-    for (const file of [...definitions, personalScope, projectScope]) rmSync(file, { force: true });
+    for (const file of [...definitions, personalScope, projectScope, exactLimitFile]) rmSync(file, { force: true });
   }
 });
 
