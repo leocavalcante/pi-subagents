@@ -265,6 +265,7 @@ const MAX_TOOL_PREVIEW_ENTRIES = 4;
 const MAX_TOOL_PREVIEW_DEPTH = 2;
 const MAX_TOOL_PREVIEW_KEY_BYTES = 64;
 const MAX_TOOL_PREVIEW_STRING_BYTES = 128;
+const MAX_WRITE_PREVIEW_LINE_SCAN_CODE_UNITS = 64 * 1024;
 
 function previewToolArguments(args: Record<string, unknown>, depth = 0): Record<string, unknown> {
 	const preview: Record<string, unknown> = Object.create(null);
@@ -328,10 +329,14 @@ function formatToolCall(
 			const rawPath = stringArg(args.file_path ?? args.path);
 			const filePath = shortenPath(rawPath);
 			const content = stringArg(args.content, "");
-			let lines = 1;
-			for (let i = 0; i < content.length; i++) if (content.charCodeAt(i) === 10) lines++;
 			let text = themeFg("muted", "write ") + themeFg("accent", filePath);
-			if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
+			if (content.length > MAX_WRITE_PREVIEW_LINE_SCAN_CODE_UNITS) {
+				text += themeFg("dim", " (large content)");
+			} else {
+				let lines = 1;
+				for (let i = 0; i < content.length; i++) if (content.charCodeAt(i) === 10) lines++;
+				if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
+			}
 			return text;
 		}
 		case "edit": {
