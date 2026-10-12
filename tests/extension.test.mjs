@@ -4253,6 +4253,41 @@ test('all render modes show model, process, and protocol failure diagnoses', asy
   }
 });
 
+test('write-call previews bound line counting for large file contents', () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const renderWrite = content => definition.renderResult({
+    content: [],
+    details: {
+      mode: 'single', agentScope: 'user', projectAgentsDir: null,
+      results: [{
+        agent: 'worker', agentSource: 'user', task: 'bounded write preview', exitCode: 0, stderr: '',
+        messages: [{ role: 'assistant', content: [{ type: 'toolCall', name: 'write', arguments: { file_path: 'large.txt', content } }], stopReason: 'stop' }],
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+      }],
+    },
+  }, { expanded: false }, theme, {}).render(80).join('\n');
+
+  assert.ok(renderWrite('first\nsecond').includes('write large.txt (2 lines)'),
+    'small writes retain their exact line-count summary');
+
+  const largeContent = 'x'.repeat(2 * 1024 * 1024);
+  const originalCharCodeAt = String.prototype.charCodeAt;
+  let scannedCodeUnits = 0;
+  String.prototype.charCodeAt = function(index) {
+    if (this === largeContent) scannedCodeUnits++;
+    return originalCharCodeAt.call(this, index);
+  };
+  let preview;
+  try {
+    preview = renderWrite(largeContent);
+  } finally {
+    String.prototype.charCodeAt = originalCharCodeAt;
+  }
+  assert.equal(scannedCodeUnits, 0, 'large file contents are not scanned to render an omitted line count');
+  assert.ok(preview.includes('write large.txt (large content)'));
+});
+
 test('collapsed rendering bounds long lines, error messages, and tool paths', async () => {
   const definition = tools.get('subagent').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };
