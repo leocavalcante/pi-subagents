@@ -32,9 +32,9 @@ test('README contents links every section and subsection to its heading', () => 
 
 test('README quick start connects installation, agent setup, and a first delegation', () => {
   const quickStart = section('Quick start');
-  assert.ok(quickStart.includes('pi install git:github.com/leocavalcante/pi-subagents'));
+  assert.ok(quickStart.includes('pi install npm:@leocavalcante/pi-subagents@0.1.0'));
   assert.ok(quickStart.includes('enter `/reload`'));
-  assert.ok(quickStart.indexOf('pi install git:github.com/leocavalcante/pi-subagents') < quickStart.indexOf('enter `/reload`'));
+  assert.ok(quickStart.indexOf('pi install npm:@leocavalcante/pi-subagents@0.1.0') < quickStart.indexOf('enter `/reload`'));
   assert.ok(quickStart.indexOf('enter `/reload`') < quickStart.indexOf('~/.pi/agent/agents/reviewer.md'));
   assert.ok(quickStart.includes('~/.pi/agent/agents/reviewer.md'));
   assert.match(quickStart, /mkdir -p ~\/.pi\/agent\/agents/);
@@ -51,13 +51,22 @@ test('README documents the minimum Node.js version required by the package', () 
   assert.ok(readme.includes(`Node.js ${engine.slice(2)} or newer`), `README must document Node.js ${engine}`);
 });
 
-test('README documents an available installation method', () => {
+test('README documents the published npm version and unreleased GitHub installation', () => {
   const installation = section('Installation');
-  assert.match(installation, /The npm package is not yet published/);
+  assert.match(installation, /The npm package is published as version `0\.1\.0`/);
+  assert.match(installation, /pi install npm:@leocavalcante\/pi-subagents@0\.1\.0/);
+  assert.match(installation, /unreleased changes from the current GitHub `main` branch/);
   assert.match(installation, /pi install git:github\.com\/leocavalcante\/pi-subagents/);
   assert.match(installation, /From the checkout root, install the local copy/);
   assert.match(installation, /pi install \.\n```/);
-  assert.doesNotMatch(installation, /pi install npm:/);
+});
+
+test('CONTRIBUTING avoids repeating the immutable npm bootstrap version', () => {
+  assert.match(contributing, /already been bootstrapped on npm as version `0\.1\.0`/);
+  assert.match(contributing, /Do not repeat the initial publish or create a `v0\.1\.0` release/);
+  assert.match(contributing, /an authorized npm publisher must verify the package's Trusted Publisher settings/);
+  assert.match(contributing, /to a version not yet published on npm/);
+  assert.doesNotMatch(contributing, /npm publish --access public --provenance=false/);
 });
 
 test('CI preserves the required Node, runner, Pi, and Node.js type coverage', () => {

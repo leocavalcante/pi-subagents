@@ -29,21 +29,10 @@ The project-agent hard-link rejection test runs on every platform. On Windows, t
 
 ## Releasing
 
-GitHub Actions tests pushes and pull requests. Publishing a stable GitHub release tagged `v<package.json version>`, such as `v0.1.0`, first verifies release and npm registry prerequisites, then runs the same test matrix before publishing `@leocavalcante/pi-subagents` to npm with provenance. Prereleases still run the test matrix but are not published. Bump `package.json` and `package-lock.json` together before each new release. npm versions cannot be overwritten.
+GitHub Actions tests pushes and pull requests. Publishing a stable GitHub release tagged `v<package.json version>`, such as `v0.1.1`, first verifies release and npm registry prerequisites, then runs the same test matrix before publishing `@leocavalcante/pi-subagents` to npm with provenance. Prereleases still run the test matrix but are not published. Bump `package.json` and `package-lock.json` together before each new release. npm versions cannot be overwritten.
 
 Before running the stable-release test matrix, the publishing workflow verifies that the release commit is reachable from `main`, the tag matches `package.json`, the package has been bootstrapped on npm, and the release version is still unpublished. The publishing workflow uses npm Trusted Publishing with GitHub OIDC. It does not use an npm token or an Actions publishing secret.
 
-npm requires the package to exist before configuring a trusted publisher. Bootstrap version `0.1.0` once from this checkout using interactive npm login and 2FA, without creating a CI token:
+The package has already been bootstrapped on npm as version `0.1.0`. Do not repeat the initial publish or create a `v0.1.0` release; npm versions cannot be overwritten. Before the next stable release, an authorized npm publisher must verify the package's Trusted Publisher settings use GitHub owner `leocavalcante`, repository `pi-subagents`, and workflow filename `publish.yml`. Leave the environment name blank and allow `npm publish`; the workflow must already exist on GitHub. Also verify npm's publishing access requires two-factor authentication and disallows tokens. Public registry visibility alone does not confirm these settings.
 
-```sh
-npm login
-npm ci --ignore-scripts
-npm audit --audit-level=high
-npm run check
-npm test
-npm publish --access public --provenance=false --ignore-scripts
-```
-
-The initial local publish has no provenance. Configure the package's trusted publisher on npm using GitHub owner `leocavalcante`, repository `pi-subagents`, and workflow filename `publish.yml`. Leave the environment name blank and allow `npm publish`. The workflow must already exist on GitHub.
-
-After configuring trust, select "Require two-factor authentication and disallow tokens" in npm's publishing access settings. Bump to a new version, such as `0.1.1`, before publishing a GitHub release. Do not run the workflow for the already-published bootstrap version. Later releases publish through OIDC with provenance. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/) and the [package-existence prerequisite](https://docs.npmjs.com/cli/v11/commands/npm-trust/#prerequisites).
+After verifying the publishing configuration, bump `package.json` and `package-lock.json` together to a version not yet published on npm (for example, `0.1.1` only if registry checks confirm it is available), then publish the matching GitHub release. Do not run the workflow for the already-published bootstrap version. Later releases publish through OIDC with provenance. See [npm's trusted publishing guide](https://docs.npmjs.com/trusted-publishers/) and the [package-existence prerequisite](https://docs.npmjs.com/cli/v11/commands/npm-trust/#prerequisites).
