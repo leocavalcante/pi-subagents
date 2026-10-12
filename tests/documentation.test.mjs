@@ -123,6 +123,7 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /pass the returned `nextOffset` to continue/);
   assert.match(usage, /pass its exact, case-sensitive name/);
   assert.match(usage, /case-insensitive literal substring matching in names and descriptions/);
+  assert.match(usage, /normalizing text to Unicode NFC \(so canonically equivalent composed and decomposed forms match\)/);
   assert.match(usage, /Choose either `name` or `query`, not both/);
   assert.match(usage, /Filtering happens after scope precedence/);
   assert.match(usage, /structured entries retain complete validated metadata/);

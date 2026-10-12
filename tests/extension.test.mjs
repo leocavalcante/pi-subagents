@@ -2521,6 +2521,9 @@ test('agent listing searches names and descriptions after scope precedence with 
     ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
     ['lookup-db.md', 'lookup-db', 'Database migration helper'],
     ['lookup-greek.md', 'lookup-greek', 'ΟΣ reviewer'],
+    ['lookup-cafe-composed.md', 'lookup-cafe-composed', 'Café tooling'],
+    ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
+    ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
     ['lookup-override.md', 'lookup-override', 'Secret token helper'],
   ];
   const userFiles = definitions.map(([filename, name, description]) => {
@@ -2553,6 +2556,18 @@ test('agent listing searches names and descriptions after scope precedence with 
     const greekMatch = await invoke('subagent_agents', { query: 'σ' });
     assert.deepEqual(greekMatch.details.agents.map(agent => agent.name), ['lookup-greek'],
       'Greek final sigma in stored text should match ordinary sigma in a query');
+
+    const decomposedQuery = await invoke('subagent_agents', { query: 'cafe\u0301 tool' });
+    assert.deepEqual(decomposedQuery.details.agents.map(agent => agent.name), ['lookup-cafe-composed'],
+      'decomposed query text should match canonically equivalent composed metadata');
+
+    const composedQuery = await invoke('subagent_agents', { query: 'café ass' });
+    assert.deepEqual(composedQuery.details.agents.map(agent => agent.name), ['lookup-cafe-decomposed'],
+      'composed query text should match canonically equivalent decomposed metadata');
+
+    const nameQuery = await invoke('subagent_agents', { query: 'lookup-cafe\u0301-name' });
+    assert.deepEqual(nameQuery.details.agents.map(agent => agent.name), ['lookup-café-name'],
+      'decomposed query text should also match canonically equivalent agent names');
 
     const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
     const scoped = await invoke('subagent_agents', { agentScope: 'both', query: 'database' }, projectContext);
