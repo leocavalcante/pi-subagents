@@ -593,6 +593,12 @@ function previewText(text: string): string {
 	return truncateOutput(preview, 1024, notice);
 }
 
+/** Bound untrusted error text before Unicode display escaping scans it. */
+function previewEscapedText(text: string): string {
+	const bounded = truncateOutput(text, 1024, "\n[Preview truncated. Ctrl+O to expand.]");
+	return previewText(escapeTerminalText(bounded));
+}
+
 function getFailureReason(result: SingleResult): string {
 	if (!isFailedResult(result)) return "";
 	return result.errorMessage || result.stderr || `Subagent failed (${result.stopReason ?? `exit code ${result.exitCode}`}).`;
@@ -2782,7 +2788,7 @@ export default function (pi: ExtensionAPI) {
 
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
-				if (isError) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(getFailureReason(r)))}`)}`;
+				if (isError) text += `\n${theme.fg("error", `Error: ${previewEscapedText(getFailureReason(r))}`)}`;
 				else if (displayItems.items.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems)}`;
@@ -2898,7 +2904,7 @@ export default function (pi: ExtensionAPI) {
 					const displayItems = getDisplayItems(r.messages, 5);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
 					const failure = getFailureReason(r);
-					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(failure))}`)}`;
+					if (failure) text += `\n${theme.fg("error", `Error: ${previewEscapedText(failure)}`)}`;
 					if (displayItems.items.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems)}`;
 					const captureNotice = getCaptureNotice(r);
@@ -2982,7 +2988,7 @@ export default function (pi: ExtensionAPI) {
 					const displayItems = getDisplayItems(r.messages, 5);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
 					const failure = getFailureReason(r);
-					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(failure))}`)}`;
+					if (failure) text += `\n${theme.fg("error", `Error: ${previewEscapedText(failure)}`)}`;
 					if (displayItems.items.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems)}`;
