@@ -52,6 +52,7 @@ import {
 	MAX_TIMEOUT_MS,
 	MAX_WORKING_DIRECTORY_LENGTH,
 	normalizeAgentTag,
+	parseAgentTags,
 	parseAgentToolList,
 	parseAgentUnsetEnv,
 	type AgentConfig,
@@ -1312,7 +1313,7 @@ const SUBAGENT_TOOL_KEYS = [
 	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
-const AGENT_TOOL_KEYS = ["agentScope", "name", "query", "tag", "offset", "limit"] as const;
+const AGENT_TOOL_KEYS = ["agentScope", "name", "query", "tag", "tags", "offset", "limit"] as const;
 const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limit", "stream", "timeoutMs"] as const;
 
 const TaskItem = Type.Object({
@@ -1528,8 +1529,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent agents",
 		description: [
 			"List available subagents, descriptions, capability tags, configuration, and source paths without running them.",
-			"Set name to look up one exact, case-sensitive definition, tag to filter by one exact, case-insensitive capability label, or query to search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
-			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with name or tag filters.`,
+			"Set name to look up one exact, case-sensitive definition, tag to filter by one exact, case-insensitive capability label, tags to require every listed exact label, or query to search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
+			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with name, tag, or tags filters.`,
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
 			"Tags are bounded lowercase discovery labels and do not configure child execution.",
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes. Structured paths and cwd metadata are limited to ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; diagnostic messages are limited to ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes. Longer values are marked as truncated.`,
@@ -1538,13 +1539,18 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			agentScope: Type.Optional(AgentScopeSchema),
 			name: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_NAME_BYTES,
-				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with query or tag.` })),
+				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with query, tag, or tags.` })),
 			query: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_SEARCH_QUERY_BYTES,
-				description: `NFC-normalized literal substring search in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred; environment variable values are never searched; cannot be combined with name or tag.` })),
+				description: `NFC-normalized literal substring search in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred; environment variable values are never searched; cannot be combined with name, tag, or tags.` })),
 			tag: Type.Optional(Type.String({ pattern: AGENT_TAG_INPUT_PATTERN, minLength: 1, maxLength: MAX_AGENT_TAG_BYTES,
-				description: `Filter for one exact, case-insensitive capability tag using ASCII letters, digits, dots, underscores, or hyphens. Applied after scope precedence and before pagination; cannot be combined with name or query.` })),
+				description: `Filter for one exact, case-insensitive capability tag using ASCII letters, digits, dots, underscores, or hyphens. Applied after scope precedence and before pagination; cannot be combined with name, query, or tags.` })),
+			tags: Type.Optional(Type.Array(Type.String({ pattern: AGENT_TAG_INPUT_PATTERN, minLength: 1, maxLength: MAX_AGENT_TAG_BYTES }), {
+				minItems: 1,
+				maxItems: MAX_AGENT_TAG_COUNT,
+				description: `Require every listed exact, case-insensitive capability tag. Duplicate labels are ignored after lowercase normalization; maximum ${MAX_AGENT_TAG_COUNT} labels and ${MAX_AGENT_TAG_LIST_BYTES} bytes total. Applied after scope precedence and before pagination; cannot be combined with name, query, or tag.`,
+			})),
 			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
-				description: "Zero-based offset into the locale-independent agent-name ordering, after any name, query, or tag filter. Default: 0." })),
+				description: "Zero-based offset into the locale-independent agent-name ordering, after any name, query, tag, or tags filter. Default: 0." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE,
 				description: `Maximum number of definitions to return, from 1 to ${MAX_AGENT_LISTING_PAGE_SIZE}. Default: ${MAX_AGENT_LISTING_PAGE_SIZE}.` })),
 		}, { additionalProperties: false }),
@@ -1626,8 +1632,20 @@ export default function (pi: ExtensionAPI) {
 			if (requestedTag !== undefined && tag === undefined) {
 				return fail(`tag must be a valid ASCII label of at most ${MAX_AGENT_TAG_BYTES} bytes, beginning with a letter or digit.`, emptyListing(agentScope));
 			}
-			if ((requestedName !== undefined ? 1 : 0) + (requestedQuery !== undefined ? 1 : 0) + (requestedTag !== undefined ? 1 : 0) > 1) {
-				return fail("name, query, and tag filters cannot be combined; choose one discovery filter.", emptyListing(agentScope));
+			const requestedTags: unknown = params.tags;
+			let tags: string[] | undefined;
+			if (requestedTags !== undefined) {
+				try { tags = parseAgentTags(requestedTags); }
+				catch {
+					return fail(`tags must be an array of 1-${MAX_AGENT_TAG_COUNT} valid ASCII labels totaling at most ${MAX_AGENT_TAG_LIST_BYTES} bytes.`, emptyListing(agentScope));
+				}
+				if (!tags?.length) {
+					return fail("tags must contain at least one valid capability label.", emptyListing(agentScope));
+				}
+			}
+			if ((requestedName !== undefined ? 1 : 0) + (requestedQuery !== undefined ? 1 : 0) +
+				(requestedTag !== undefined ? 1 : 0) + (requestedTags !== undefined ? 1 : 0) > 1) {
+				return fail("name, query, tag, and tags filters cannot be combined; choose one discovery filter.", emptyListing(agentScope));
 			}
 			const exactName = typeof requestedName === "string" ? requestedName : undefined;
 			const query = typeof requestedQuery === "string" ? requestedQuery.trim() : undefined;
@@ -1646,6 +1664,7 @@ export default function (pi: ExtensionAPI) {
 			const allAgents = discovery.agents
 				.filter((agent) => exactName === undefined || agent.name === exactName)
 				.filter((agent) => tag === undefined || (agent.tags?.includes(tag) ?? false))
+				.filter((agent) => tags === undefined || tags.every((tag) => agent.tags?.includes(tag) ?? false))
 				.filter((agent) => normalizedQuery === undefined ||
 					caseFoldUnicode(agent.name).includes(normalizedQuery) ||
 					caseFoldUnicode(agent.description).includes(normalizedQuery) ||
@@ -1699,7 +1718,8 @@ export default function (pi: ExtensionAPI) {
 				.join("\n");
 			const totalAgents = allAgents.length;
 			const filterLabel = query !== undefined ? `Results for "${displayUntrustedText(query)}": `
-				: tag !== undefined ? `Results for tag "${tag}": ` : "";
+				: tag !== undefined ? `Results for tag "${tag}": `
+					: tags !== undefined ? `Results with all tags ${tags.map((tag) => `"${tag}"`).join(", ")}: ` : "";
 			const continuation = nextOffset === null ? "" : ` Continue with offset ${nextOffset}.`;
 			const pageLabel = pageAgents.length
 				? `${filterLabel}Agents ${offset + 1}-${offset + pageAgents.length} of ${totalAgents}.${continuation}`
@@ -1708,7 +1728,9 @@ export default function (pi: ExtensionAPI) {
 						? `No agents matching "${displayUntrustedText(query)}" found.`
 						: tag !== undefined
 							? `No agents tagged "${tag}" found.`
-							: exactName === undefined ? "No subagents found." : `No agent named ${displayUntrustedText(exactName)} found.`
+							: tags !== undefined
+								? `No agents with all tags ${tags.map((tag) => `"${tag}"`).join(", ")} found.`
+								: exactName === undefined ? "No subagents found." : `No agent named ${displayUntrustedText(exactName)} found.`
 					: `No agents at offset ${offset}; ${totalAgents} total.`;
 			const details = {
 				agentScope, agents: pageAgents, offset, limit, totalAgents, nextOffset,
