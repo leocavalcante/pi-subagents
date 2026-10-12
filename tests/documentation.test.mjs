@@ -273,6 +273,13 @@ test('README relative file links are included in the npm package', () => {
   }
 });
 
+test('README documents fail-closed lookup when a nearer project-agent directory is inaccessible', () => {
+  const usage = section('Usage');
+  assert.match(usage, /Missing and non-directory candidates are skipped/);
+  assert.match(usage, /access or I\/O error/);
+  assert.match(usage, /discovery stops with a diagnostic rather than silently falling back to an ancestor/);
+});
+
 test('README documents mandatory approval for untrusted project agents', () => {
   const security = section('Security');
   assert.match(security, /require an interactive approval or an already-trusted Pi project/);
