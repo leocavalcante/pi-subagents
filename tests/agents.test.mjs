@@ -49,6 +49,25 @@ test('inaccessible nested project agent directories stop ancestor fallback', {
   }
 });
 
+test('inaccessible personal agent roots are reported instead of appearing empty', {
+  skip: process.platform === 'win32' ? 'POSIX directory permissions are not portable to Windows' : process.getuid?.() === 0 ? 'root bypasses POSIX directory permissions' : false,
+}, () => {
+  const userRoot = join(sandbox, 'user');
+  agent(userDir, 'hidden', 'name: hidden\ndescription: Hidden personal agent');
+  chmodSync(userRoot, 0);
+
+  try {
+    const result = discoverAgents(cwd, 'user');
+    assert.deepEqual(result.agents, []);
+    assert.deepEqual(result.diagnostics, [{
+      filePath: userDir, source: 'user',
+      message: 'Unable to inspect agent directory safely.',
+    }]);
+  } finally {
+    chmodSync(userRoot, 0o700);
+  }
+});
+
 test('project agent symlinks to non-regular files are rejected without blocking', { skip: process.platform === 'win32' }, () => {
   const fifo = join(projectDir, 'agent-pipe');
   execFileSync('mkfifo', [fifo]);
