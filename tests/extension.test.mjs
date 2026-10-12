@@ -4265,6 +4265,47 @@ test('collapsed rendering bounds long lines, error messages, and tool paths', as
   }
 });
 
+test('collapsed single-task rendering does not scan or escape the full captured output', () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const output = 'x'.repeat(2 * 1024 * 1024);
+  const result = {
+    content: [],
+    details: {
+      mode: 'single', agentScope: 'user', projectAgentsDir: null,
+      results: [{
+        agent: 'worker', agentSource: 'user', task: 'bounded preview', exitCode: 0, stderr: '',
+        messages: [{ role: 'assistant', content: [{ type: 'text', text: output }], stopReason: 'stop' }],
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+      }],
+    },
+  };
+  const splitLengths = [];
+  const escapedLengths = [];
+  const originalSplit = String.prototype.split;
+  const originalReplace = String.prototype.replace;
+  String.prototype.split = function(separator, limit) {
+    if (separator === '\n' && limit === 4) splitLengths.push(String(this).length);
+    return originalSplit.call(this, separator, limit);
+  };
+  String.prototype.replace = function(search, replacement) {
+    if (search instanceof RegExp && search.source.includes('Default_Ignorable_Code_Point')) {
+      escapedLengths.push(String(this).length);
+    }
+    return originalReplace.call(this, search, replacement);
+  };
+  try {
+    definition.renderResult(result, { expanded: false }, theme, {});
+  } finally {
+    String.prototype.split = originalSplit;
+    String.prototype.replace = originalReplace;
+  }
+  assert.ok(splitLengths.length > 0, 'collapsed text still creates a line-bounded preview');
+  assert.ok(splitLengths.every(length => length <= 1024), 'line splitting is limited to the display prefix');
+  assert.ok(escapedLengths.length > 0, 'the bounded preview still escapes invisible characters');
+  assert.ok(escapedLengths.every(length => length <= 1024), 'Unicode display escaping never scans the full capture');
+});
+
 test('finished job records can be forgotten or cleared without canceling active jobs', async () => {
   const active = await launch({ task: 'delay=1500 active record' });
   const finished = await launch({ task: 'finished record' });
