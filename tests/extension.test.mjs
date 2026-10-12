@@ -2520,6 +2520,7 @@ test('agent listing searches names and descriptions after scope precedence with 
     ['lookup-oauth.md', 'lookup-oauth', 'OAuth security reviewer'],
     ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
     ['lookup-db.md', 'lookup-db', 'Database migration helper'],
+    ['lookup-greek.md', 'lookup-greek', 'ΟΣ reviewer'],
     ['lookup-override.md', 'lookup-override', 'Secret token helper'],
   ];
   const userFiles = definitions.map(([filename, name, description]) => {
@@ -2548,6 +2549,10 @@ test('agent listing searches names and descriptions after scope precedence with 
 
     const nameMatch = await invoke('subagent_agents', { query: 'LOOKUP-DB' });
     assert.deepEqual(nameMatch.details.agents.map(agent => agent.name), ['lookup-db']);
+
+    const greekMatch = await invoke('subagent_agents', { query: 'σ' });
+    assert.deepEqual(greekMatch.details.agents.map(agent => agent.name), ['lookup-greek'],
+      'Greek final sigma in stored text should match ordinary sigma in a query');
 
     const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
     const scoped = await invoke('subagent_agents', { agentScope: 'both', query: 'database' }, projectContext);

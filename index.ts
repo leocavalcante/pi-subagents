@@ -148,6 +148,12 @@ function escapeTerminalText(value: string): string {
 	});
 }
 
+function normalizeAgentSearchText(value: string): string {
+	// Unicode lowercasing is context-sensitive for Greek sigma; fold final sigma
+	// back to the ordinary form so a `σ` query also matches text ending in `ς`.
+	return value.toLowerCase().replace(/\u03c2/g, "\u03c3");
+}
+
 function displayUntrustedText(value: string): string {
 	const escaped = escapeTerminalControls(value).replace(/`/g, "\\u0060");
 	// A code span prevents metadata from becoming Markdown/HTML; controls and
@@ -1602,7 +1608,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const exactName = typeof requestedName === "string" ? requestedName : undefined;
 			const query = typeof requestedQuery === "string" ? requestedQuery.trim() : undefined;
-			const normalizedQuery = query?.toLowerCase();
+			const normalizedQuery = query === undefined ? undefined : normalizeAgentSearchText(query);
 			const requestedOffset: unknown = params.offset;
 			const offset = requestedOffset === undefined ? 0 : requestedOffset;
 			if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_AGENT_FILES * 2) {
@@ -1617,8 +1623,8 @@ export default function (pi: ExtensionAPI) {
 			const allAgents = discovery.agents
 				.filter((agent) => exactName === undefined || agent.name === exactName)
 				.filter((agent) => normalizedQuery === undefined ||
-					agent.name.toLowerCase().includes(normalizedQuery) ||
-					agent.description.toLowerCase().includes(normalizedQuery))
+					normalizeAgentSearchText(agent.name).includes(normalizedQuery) ||
+					normalizeAgentSearchText(agent.description).includes(normalizedQuery))
 				.map((agent) => ({
 					name: agent.name,
 					description: agent.description,
