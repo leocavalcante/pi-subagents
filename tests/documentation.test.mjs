@@ -122,8 +122,8 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /paginated in groups of at most 10/);
   assert.match(usage, /pass the returned `nextOffset` to continue/);
   assert.match(usage, /pass its exact, case-sensitive name/);
-  assert.match(usage, /case-insensitive literal substring matching in names, descriptions, and explicitly configured tool allowlists/);
-  assert.match(usage, /Search does not infer runtime-default tools that are not explicitly configured/);
+  assert.match(usage, /case-insensitive literal substring matching in names, descriptions, explicitly configured tool allowlists, model selectors, and thinking levels/);
+  assert.match(usage, /Search does not infer runtime-default tools or inherited model\/thinking settings/);
   assert.match(usage, /Unicode 17\.0 default \(non-Turkic\) full case folding and NFC normalization \(so canonically equivalent composed and decomposed forms match\)/);
   assert.match(usage, /Greek sigma, German sharp s \(`ß`\/`ẞ` → `ss`\), long s, and ligature expansions/);
   assert.match(usage, /`STRASSE` matches `Straße`/);

@@ -2522,7 +2522,7 @@ test('agent listing supports exact-name lookup after scope precedence', async ()
   } finally { rmSync(projectAgent, { force: true }); }
 });
 
-test('agent listing searches names, descriptions, and configured tools after scope precedence with filtered pagination', async () => {
+test('agent listing searches identity, capability, model, and thinking after scope precedence with filtered pagination', async () => {
   const definitions = [
     ['lookup-oauth.md', 'lookup-oauth', 'OAuth security reviewer'],
     ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
@@ -2539,20 +2539,25 @@ test('agent listing searches names, descriptions, and configured tools after sco
     ['lookup-cafe-composed.md', 'lookup-cafe-composed', 'Café tooling'],
     ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
     ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
-    ['lookup-override.md', 'lookup-override', 'Secret token helper', ['custom-shell']],
+    ['lookup-model.md', 'lookup-model', 'Explicit model routing helper', undefined, 'vendor/custom-Reasoner', 'xhigh'],
+    ['lookup-override.md', 'lookup-override', 'Secret token helper', ['custom-shell'], 'vendor/personal-secret', 'low'],
   ];
-  const userFiles = definitions.map(([filename, name, description, configuredTools]) => {
+  const userFiles = definitions.map(([filename, name, description, configuredTools, model, thinking]) => {
     const file = join(sandbox, 'agent/agents', filename);
-    const tools = configuredTools ? `tools: ${JSON.stringify(configuredTools)}\n` : '';
-    writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n${tools}---\nSearch test instructions.\n`);
+    const metadata = [
+      ...(configuredTools ? [`tools: ${JSON.stringify(configuredTools)}`] : []),
+      ...(model ? [`model: ${model}`] : []),
+      ...(thinking ? [`thinking: ${thinking}`] : []),
+    ].join('\n');
+    writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n${metadata ? `${metadata}\n` : ''}---\nSearch test instructions.\n`);
     return file;
   });
   const projectOverride = join(sandbox, 'project/.pi/agents/lookup-override.md');
-  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\n---\nProject override instructions.\n');
+  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\nmodel: vendor/project-model\nthinking: max\n---\nProject override instructions.\n');
   try {
     const toolDescription = tools.get('subagent_agents').definition.description;
-    assert.match(toolDescription, /search names, descriptions, and configured tool allowlists/);
-    assert.match(toolDescription, /runtime-default tools are not inferred/);
+    assert.match(toolDescription, /search names, descriptions, and configured tools, models, and thinking settings/);
+    assert.match(toolDescription, /runtime-default tools and inherited model\/thinking settings are not inferred/);
     const schema = tools.get('subagent_agents').definition.outputSchema;
     const parameters = tools.get('subagent_agents').definition.parameters;
     assert.equal(Value.Check(parameters, { query: '  oAuTh ' }), true);
@@ -2580,6 +2585,34 @@ test('agent listing searches names, descriptions, and configured tools after sco
     }, { ...ctx(), cwd: join(sandbox, 'project') });
     assert.deepEqual(scopedToolMatch.details.agents.map(agent => agent.name), ['lookup-tool-agent'],
       'a project override with a different configured tool list replaces the personal definition before search');
+
+    const modelMatch = await invoke('subagent_agents', { query: 'VENDOR/CUSTOM-REASONER' });
+    assert.equal(Value.Check(schema, modelMatch.structuredContent), true);
+    assert.deepEqual(modelMatch.details.agents.map(agent => agent.name), ['lookup-model']);
+    assert.equal(modelMatch.details.agents[0].model, 'vendor/custom-Reasoner');
+    const thinkingMatch = await invoke('subagent_agents', { query: 'XHIGH' });
+    assert.deepEqual(thinkingMatch.details.agents.map(agent => agent.name), ['lookup-model']);
+    assert.equal(thinkingMatch.details.agents[0].thinking, 'xhigh');
+    assert.equal((await invoke('subagent_agents', { query: 'fake/parent' })).details.totalAgents, 0,
+      'search must not infer the parent model for definitions without an explicit selector');
+    assert.equal((await invoke('subagent_agents', { query: 'max' }, { ...ctx(), thinkingLevel: 'max' })).details.totalAgents, 0,
+      'search must not infer the parent thinking level for definitions without an explicit override');
+    assert.deepEqual((await invoke('subagent_agents', { query: 'vendor/personal-secret' })).details.agents.map(agent => agent.name), ['lookup-override']);
+    const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
+    const shadowedModel = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'vendor/personal-secret',
+    }, projectContext);
+    assert.equal(shadowedModel.details.totalAgents, 0, 'a shadowed personal model selector is not searchable');
+    const projectModel = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'VENDOR/PROJECT-MODEL',
+    }, projectContext);
+    assert.deepEqual(projectModel.details.agents.map(agent => agent.name), ['lookup-override']);
+    assert.equal(projectModel.details.agents[0].model, 'vendor/project-model');
+    const projectThinking = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'MAX',
+    }, projectContext);
+    assert.deepEqual(projectThinking.details.agents.map(agent => agent.name), ['lookup-override'],
+      'a project thinking setting is searchable and replaces the shadowed personal setting');
 
     const greekMatch = await invoke('subagent_agents', { query: 'σ' });
     assert.deepEqual(greekMatch.details.agents.map(agent => agent.name), ['lookup-greek'],
@@ -2629,7 +2662,6 @@ test('agent listing searches names, descriptions, and configured tools after sco
     assert.deepEqual(nameQuery.details.agents.map(agent => agent.name), ['lookup-café-name'],
       'decomposed query text should also match canonically equivalent agent names');
 
-    const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
     const scoped = await invoke('subagent_agents', { agentScope: 'both', query: 'database' }, projectContext);
     assert.equal(scoped.details.totalAgents, 2);
     assert.deepEqual(scoped.details.agents.map(agent => agent.name), ['lookup-db', 'lookup-override']);
