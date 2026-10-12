@@ -31,6 +31,11 @@ test('README documents an available installation method', () => {
   assert.doesNotMatch(installation, /pi install npm:/);
 });
 
+test('npm test uses automatic discovery so Node runner options can be forwarded', () => {
+  assert.equal(packageJson.scripts.test, 'node --test');
+  assert.match(contributing, /`npm test -- --test-name-pattern='agentTags dispatch'`/);
+});
+
 test('npm package includes required runtime support files', () => {
   for (const file of ['windows-supervisor.cs', 'windows-supervisor-invocation.ts', 'temporary-files.ts', 'abort.ts']) {
     assert.ok(packageJson.files.includes(file), `Package files must include ${file}`);
