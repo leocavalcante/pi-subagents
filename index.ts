@@ -134,6 +134,7 @@ function getSubagentNestingDepth(): number {
 	return MAX_SUBAGENT_NESTING_DEPTH;
 }
 const COLLAPSED_ITEM_COUNT = 10;
+const MAX_CHAIN_CALL_PREVIEW_SCAN_CODE_UNITS = 1024;
 const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
@@ -602,6 +603,19 @@ function previewText(text: string): string {
 function previewEscapedText(text: string): string {
 	const bounded = truncateOutput(text, 1024, "\n[Preview truncated. Ctrl+O to expand.]");
 	return previewText(escapeTerminalText(bounded));
+}
+
+/** Omit chain context placeholders from a bounded task prefix for the call preview. */
+function previewChainTask(task: string): string {
+	const truncated = task.length > MAX_CHAIN_CALL_PREVIEW_SCAN_CODE_UNITS;
+	const boundedTask = task.slice(0, MAX_CHAIN_CALL_PREVIEW_SCAN_CODE_UNITS);
+	const cleanTask = boundedTask.replace(/\{previous\}|\{steps\.[^{}]*\}/g, "").trim();
+	const preview = cleanTask.length > 40
+		? `${cleanTask.slice(0, 40)}...`
+		: truncated
+			? `${cleanTask}...`
+			: cleanTask;
+	return escapeTerminalText(preview);
 }
 
 function getFailureReason(result: SingleResult): string {
@@ -2686,9 +2700,7 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("muted", ` [${scope}]`);
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
-					// Clean up {previous} placeholder for display
-					const cleanTask = stringArg(step?.task, "").replace(/\{previous\}|\{steps\.[^{}]*\}/g, "").trim();
-					const preview = escapeTerminalText(cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask);
+					const preview = previewChainTask(stringArg(step?.task, ""));
 					text +=
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +

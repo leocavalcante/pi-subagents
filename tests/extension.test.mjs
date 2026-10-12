@@ -1865,6 +1865,27 @@ test('renderers tolerate partial calls and invalid tool argument types', async (
   assert.ok(definition.renderResult(neighbor, { expanded: false }, theme, {}).render(120).join('\n').includes(neighborPath));
 });
 
+test('chain call previews bound placeholder cleanup to a short task prefix', () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const task = `{previous} ${'x'.repeat(2 * 1024 * 1024)}`;
+  const originalReplace = String.prototype.replace;
+  const replaceInputLengths = [];
+  String.prototype.replace = function(search, replacement) {
+    if (search instanceof RegExp && search.source.includes('steps')) replaceInputLengths.push(this.length);
+    return originalReplace.call(this, search, replacement);
+  };
+  let preview;
+  try {
+    preview = definition.renderCall({ chain: [{ agent: 'worker', task }] }, theme, {}).render(80).join('\n');
+  } finally {
+    String.prototype.replace = originalReplace;
+  }
+  assert.ok(replaceInputLengths.length > 0, 'chain task previews still remove context placeholders');
+  assert.ok(replaceInputLengths.every(length => length <= 1024), 'placeholder cleanup scans only a bounded task prefix');
+  assert.ok(preview.includes(`${'x'.repeat(40)}...`), 'long task previews show an omission marker');
+});
+
 test('fallback tool-call previews bound nested arguments before JSON serialization', async () => {
   const definition = tools.get('subagent').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };
