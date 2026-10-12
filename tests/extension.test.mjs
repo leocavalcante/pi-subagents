@@ -1433,9 +1433,9 @@ test('a deadline after oversized output reports both failure causes', async () =
 });
 
 test('deadlines start after acquiring a slot, not while queued', async () => {
-  const occupying = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=800 occupy' })) });
+  const occupying = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=3000 occupy' })) });
   await waitFor(() => traces().filter(t => t.event === 'start').length === 4);
-  const queued = await launch({ task: 'delay=50 queued deadline', timeoutMs: 500 });
+  const queued = await launch({ task: 'queued deadline', timeoutMs: 2000 });
   await Promise.all([finish(occupying.details.background.id), finish(queued)]);
   assert.equal((await status(queued)).state, 'completed');
   const entries = traces();
