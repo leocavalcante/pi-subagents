@@ -3392,15 +3392,19 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   const mongolianVowelSeparator = String.fromCodePoint(0x180e);
   const languageTag = String.fromCodePoint(0xe0001);
   const hangulFiller = String.fromCodePoint(0x3164);
+  const standaloneTagCharacter = String.fromCodePoint(0xe0061);
+  const englandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
+  const scotlandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0073, 0xe0063, 0xe0074, 0xe007f);
+  const walesFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0077, 0xe006c, 0xe0073, 0xe007f);
   const variationSelector = String.fromCodePoint(0xfe0f);
   const supplementaryVariationSelector = String.fromCodePoint(0xe0100);
   const emojiSequence = `👩${zeroWidthJoiner}💻`;
   const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
-  const hiddenFormatting = `${zeroWidthSpace}${mongolianVowelSeparator}${languageTag}${hangulFiller}`;
-  const hostileName = `safe${hiddenFormatting} ` + `name${wordJoiner} [link](https://example.invalid)`;
+  const hiddenFormatting = `${zeroWidthSpace}${mongolianVowelSeparator}${languageTag}${hangulFiller}${standaloneTagCharacter}`;
+  const hostileName = `safe${hiddenFormatting} ${englandFlag}${scotlandFlag}${walesFlag} ` + `name${wordJoiner} [link](https://example.invalid)`;
   const escape = String.fromCharCode(27);
   const c1 = String.fromCodePoint(0x009b);
-  const hostileDescription = `visible${hiddenFormatting}${wordJoiner} ${emojiSequence} ✈${variationSelector} 木${supplementaryVariationSelector} ${scriptJoiner}${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
+  const hostileDescription = `visible${hiddenFormatting}${wordJoiner} ${emojiSequence} ✈${variationSelector} 木${supplementaryVariationSelector} ${scriptJoiner} ${englandFlag}${scotlandFlag}${walesFlag}${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
   const hostileCwd = `configured${String.fromCharCode(10)}${escape}[31m${String.fromCodePoint(0x202e)}`;
   const metadataFile = join(projectDir, 'metadata.md');
   const hostilePathFile = join(projectDir, `path-${escape}.md`);
@@ -3425,7 +3429,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(text.includes(escape), false);
     assert.equal(text.includes(String.fromCodePoint(0x202e)), false);
     assert.equal(text.includes(c1), false);
-    for (const character of [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, hangulFiller]) {
+    for (const character of [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, hangulFiller, standaloneTagCharacter]) {
       assert.equal(text.includes(character), false, `default-ignorable ${character.codePointAt(0).toString(16)} must be visible`);
     }
     assert.equal(text.split(String.fromCharCode(10)).some(line => line.startsWith('### forged heading')), false);
@@ -3435,6 +3439,10 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.ok(text.includes('u180e'));
     assert.ok(text.includes('u{e0001}'));
     assert.ok(text.includes('u3164'));
+    assert.ok(text.includes('u{e0061}'), 'standalone emoji tag characters remain visible');
+    assert.ok(text.includes(englandFlag), 'England flag emoji tag sequences remain intact');
+    assert.ok(text.includes(scotlandFlag), 'Scotland flag emoji tag sequences remain intact');
+    assert.ok(text.includes(walesFlag), 'Wales flag emoji tag sequences remain intact');
     assert.ok(text.includes(emojiSequence), 'ZWJ emoji sequences remain intact');
     assert.ok(text.includes(`✈${variationSelector}`), 'emoji variation selectors remain intact');
     assert.ok(text.includes(`木${supplementaryVariationSelector}`), 'supplementary variation selectors remain intact');
@@ -3463,7 +3471,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(denied.content[0].text, 'Canceled: project-local agents not approved.');
     assert.equal(confirmation.includes(escape), false);
     assert.equal(confirmation.includes(String.fromCodePoint(0x202e)), false);
-    for (const character of [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, hangulFiller]) {
+    for (const character of [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, hangulFiller, standaloneTagCharacter]) {
       assert.equal(confirmation.includes(character), false);
     }
     assert.equal(confirmation.includes('u200b'), true);
@@ -3471,6 +3479,10 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(confirmation.includes('u180e'), true);
     assert.equal(confirmation.includes('u{e0001}'), true);
     assert.equal(confirmation.includes('u3164'), true);
+    assert.equal(confirmation.includes('u{e0061}'), true);
+    assert.equal(confirmation.includes(englandFlag), true);
+    assert.equal(confirmation.includes(scotlandFlag), true);
+    assert.equal(confirmation.includes(walesFlag), true);
     assert.equal(confirmation.includes(escape), false);
     assert.equal(confirmation.includes(hostileName), false);
     assert.equal(confirmation.includes('Effective child working directories:'), true);
