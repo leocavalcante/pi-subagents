@@ -4,6 +4,29 @@ A Pi extension that delegates tasks to separate Pi processes with isolated conte
 
 Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundled with Pi 1.0.0. Adds session-owned background execution.
 
+## Contents
+
+- [Installation](#installation)
+- [Agent definitions](#agent-definitions)
+- [Usage](#usage)
+  - [Filter by capability tag](#filter-by-capability-tag)
+  - [Filter by multiple capability tags](#filter-by-multiple-capability-tags)
+  - [Dispatch using capability tags](#dispatch-using-capability-tags)
+- [Named chain outputs](#named-chain-outputs)
+- [Model and thinking overrides](#model-and-thinking-overrides)
+- [Tool allowlist overrides](#tool-allowlist-overrides)
+- [Inherited environment filtering](#inherited-environment-filtering)
+- [Batch concurrency](#batch-concurrency)
+- [Task deadlines](#task-deadlines)
+- [Background execution](#background-execution)
+  - [Wait for a background job](#wait-for-a-background-job)
+  - [Read captured job output](#read-captured-job-output)
+- [Usage accounting](#usage-accounting)
+- [Output capture and cleanup](#output-capture-and-cleanup)
+- [Security](#security)
+- [Contributing](#contributing)
+- [Origin and license](#origin-and-license)
+
 ## Installation
 
 Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4 and 1.1.0. Pi provides the runtime dependencies, so no build step is needed.

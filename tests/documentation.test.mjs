@@ -16,6 +16,20 @@ function section(title) {
   return readme.slice(start, next === -1 ? undefined : next);
 }
 
+function githubHeadingSlug(title) {
+  return title.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').trim().replace(/\s+/g, '-');
+}
+
+test('README contents links every section and subsection to its heading', () => {
+  const links = [...section('Contents').matchAll(/^\s*-\s+\[[^\]]+\]\(#([a-z0-9-]+)\)$/gm)]
+    .map(([, anchor]) => anchor);
+  const headings = [...readme.matchAll(/^#{2,3} (.+)$/gm)]
+    .map(([, title]) => title)
+    .filter(title => title !== 'Contents')
+    .map(githubHeadingSlug);
+  assert.deepEqual(links.sort(), headings.sort(), 'Keep the contents links aligned with every README section and subsection');
+});
+
 test('README documents the minimum Node.js version required by the package', () => {
   const engine = packageJson.engines?.node;
   assert.match(engine, /^>=\d+\.\d+\.\d+$/, 'Expected a simple minimum Node.js engine range');
