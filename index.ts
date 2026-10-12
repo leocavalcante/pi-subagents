@@ -140,16 +140,28 @@ const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]/gu;
 const PRESERVED_DISPLAY_CHARACTERS = /^(?:\u200c|\u200d|\p{Variation_Selector})$/u;
+const EMOJI_TAG_FLAG_SEQUENCES = /\u{1f3f4}\u{e0067}\u{e0062}(?:\u{e0065}\u{e006e}\u{e0067}|\u{e0073}\u{e0063}\u{e0074}|\u{e0077}\u{e006c}\u{e0073})\u{e007f}/gu;
 const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
 const MAX_TERMINAL_ESCAPE_EXPANSION = 64 * 1024;
 
-function escapeTerminalControls(value: string): string {
+function escapeDisplaySegment(value: string): string {
 	return value.replace(UNSAFE_DISPLAY_CHARACTERS, (character) => {
 		if (PRESERVED_DISPLAY_CHARACTERS.test(character)) return character;
 		const codePoint = character.codePointAt(0)!;
 		const hex = codePoint.toString(16).padStart(4, "0");
 		return codePoint > 0xffff ? `\\u{${hex}}` : `\\u${hex}`;
 	});
+}
+
+function escapeTerminalControls(value: string): string {
+	let escaped = "";
+	let start = 0;
+	for (const match of value.matchAll(EMOJI_TAG_FLAG_SEQUENCES)) {
+		const matchStart = match.index!;
+		escaped += escapeDisplaySegment(value.slice(start, matchStart)) + match[0];
+		start = matchStart + match[0].length;
+	}
+	return escaped + escapeDisplaySegment(value.slice(start));
 }
 
 function escapeTerminalText(value: string): string {
