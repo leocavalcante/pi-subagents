@@ -2530,6 +2530,11 @@ test('agent listing searches names and descriptions after scope precedence with 
     ['lookup-greek.md', 'lookup-greek', 'ΟΣ reviewer'],
     ['lookup-sharp-s-name.md', 'straße-reviewer', 'German language reviewer'],
     ['lookup-sharp-s-description.md', 'lookup-sharp-s-description', 'Straße compliance reviewer'],
+    ['lookup-long-s.md', 'lookup-long-s', 'ſtraße support reviewer'],
+    ['lookup-long-s-name.md', 'ſupport-reviewer', 'Long-s agent name'],
+    ['lookup-ligature.md', 'lookup-ligature', 'Oﬃce formatting specialist'],
+    ['lookup-beta-symbol.md', 'lookup-beta-symbol', 'ϐeta symbol reference'],
+    ['lookup-micro-sign.md', 'lookup-micro-sign', 'µm conversion guide'],
     ['lookup-cafe-composed.md', 'lookup-cafe-composed', 'Café tooling'],
     ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
     ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
@@ -2577,6 +2582,26 @@ test('agent listing searches names and descriptions after scope precedence with 
     const capitalSharpSMatch = await invoke('subagent_agents', { query: 'STRAẞE COMPLIANCE' });
     assert.deepEqual(capitalSharpSMatch.details.agents.map(agent => agent.name), ['lookup-sharp-s-description'],
       'Capital sharp s in a query should match lowercase sharp s in descriptions');
+
+    const longSMatch = await invoke('subagent_agents', { query: 'STRASSE SUPPORT' });
+    assert.deepEqual(longSMatch.details.agents.map(agent => agent.name), ['lookup-long-s'],
+      'Unicode long s and sharp s should both fold to `s` and `ss`');
+
+    const longSNameMatch = await invoke('subagent_agents', { query: 'SUPPORT-REVIEWER' });
+    assert.deepEqual(longSNameMatch.details.agents.map(agent => agent.name), ['ſupport-reviewer'],
+      'Full case folding should also match names that contain long s');
+
+    const ligatureMatch = await invoke('subagent_agents', { query: 'OFFICE FORMATTING' });
+    assert.deepEqual(ligatureMatch.details.agents.map(agent => agent.name), ['lookup-ligature'],
+      'Unicode presentation ligatures should expand during full case folding');
+
+    const greekSymbolMatch = await invoke('subagent_agents', { query: 'βeta SYMBOL' });
+    assert.deepEqual(greekSymbolMatch.details.agents.map(agent => agent.name), ['lookup-beta-symbol'],
+      'Greek symbol variants should match their standard-letter case folds');
+
+    const microSignMatch = await invoke('subagent_agents', { query: 'μm conversion' });
+    assert.deepEqual(microSignMatch.details.agents.map(agent => agent.name), ['lookup-micro-sign'],
+      'The micro sign should match Greek mu under default Unicode case folding');
 
     const decomposedQuery = await invoke('subagent_agents', { query: 'cafe\u0301 tool' });
     assert.deepEqual(decomposedQuery.details.agents.map(agent => agent.name), ['lookup-cafe-composed'],

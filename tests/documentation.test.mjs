@@ -123,8 +123,8 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /pass the returned `nextOffset` to continue/);
   assert.match(usage, /pass its exact, case-sensitive name/);
   assert.match(usage, /case-insensitive literal substring matching in names and descriptions/);
-  assert.match(usage, /normalizing text to Unicode NFC \(so canonically equivalent composed and decomposed forms match\)/);
-  assert.match(usage, /folding Greek sigma variants and German `ß`\/`ẞ` to `ss`/);
+  assert.match(usage, /Unicode 17\.0 default \(non-Turkic\) full case folding and NFC normalization \(so canonically equivalent composed and decomposed forms match\)/);
+  assert.match(usage, /Greek sigma, German sharp s \(`ß`\/`ẞ` → `ss`\), long s, and ligature expansions/);
   assert.match(usage, /`STRASSE` matches `Straße`/);
   assert.match(usage, /Choose either `name` or `query`, not both/);
   assert.match(usage, /Filtering happens after scope precedence/);
