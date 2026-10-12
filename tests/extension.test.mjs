@@ -1464,7 +1464,9 @@ test('parallel and chain entries override the default per-task deadline', async 
 });
 
 test('explicit cancellation takes precedence over an upcoming deadline', async () => {
-  const id = await launch({ task: 'delay=10000 stubborn canceled deadline', timeoutMs: 1000 });
+  // Leave more than the startup-observation window before the runtime deadline,
+  // so a slow CI runner cannot time out the child before it emits its start trace.
+  const id = await launch({ task: 'delay=10000 stubborn canceled deadline', timeoutMs: 30_000 });
   await waitFor(() => traces().some(t => t.event === 'start'));
   await invoke('subagent_jobs', { action: 'cancel', jobId: id });
   const job = await finish(id);
