@@ -4306,6 +4306,44 @@ test('collapsed single-task rendering does not scan or escape the full captured 
   assert.ok(escapedLengths.every(length => length <= 1024), 'Unicode display escaping never scans the full capture');
 });
 
+test('collapsed rendering retains only the displayed suffix of large message histories', () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const items = Array.from({ length: 1000 }, (_, index) => ({ type: 'text', text: `display-item-${index}` }));
+  const originalPush = Array.prototype.push;
+
+  for (const [mode, limit] of [['single', 10], ['chain', 5], ['parallel', 5]]) {
+    const result = {
+      content: [],
+      details: {
+        mode, agentScope: 'user', projectAgentsDir: null,
+        results: [{
+          agent: 'worker', agentSource: 'user', task: 'bounded display history', exitCode: 0, stderr: '', step: 1,
+          messages: [{ role: 'assistant', content: items, stopReason: 'stop' }],
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+        }],
+      },
+    };
+    let retainedDisplayItems = 0;
+    Array.prototype.push = function(...values) {
+      retainedDisplayItems += values.filter(value => value?.type === 'text' && /^display-item-\d+$/.test(value.text)).length;
+      return originalPush.apply(this, values);
+    };
+    let preview;
+    try {
+      preview = definition.renderResult(result, { expanded: false }, theme, {}).render(80).join('\n');
+    } finally {
+      Array.prototype.push = originalPush;
+    }
+
+    assert.equal(retainedDisplayItems, limit, `${mode} view should allocate only its visible items`);
+    assert.match(preview, new RegExp(`${1000 - limit} earlier items`));
+    assert.match(preview, new RegExp(`display-item-${1000 - limit}`));
+    assert.match(preview, /display-item-999/);
+    assert.doesNotMatch(preview, new RegExp(`display-item-${999 - limit}`));
+  }
+});
+
 test('finished job records can be forgotten or cleared without canceling active jobs', async () => {
   const active = await launch({ task: 'delay=1500 active record' });
   const finished = await launch({ task: 'finished record' });

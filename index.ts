@@ -611,23 +611,35 @@ function boundResultText(result: JobResult): JobResult {
 }
 
 type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
+type DisplayItems = { items: DisplayItem[]; omitted: number };
 
-function getDisplayItems(messages: Message[]): DisplayItem[] {
+/** Collect display items in order, retaining only the newest bounded suffix when requested. */
+function getDisplayItems(messages: Message[], limit?: number): DisplayItems {
 	const items: DisplayItem[] = [];
+	let total = 0;
+	let next = 0;
+	const add = (item: DisplayItem) => {
+		total++;
+		if (limit === undefined || items.length < limit) items.push(item);
+		else {
+			items[next] = item;
+			next = (next + 1) % limit;
+		}
+	};
 	for (const msg of messages) {
 		if (msg.role === "assistant") {
 			for (const part of msg.content) {
-				if (part.type === "text") items.push({ type: "text", text: part.text });
-				else if (part.type === "toolCall")
-					items.push({
-						type: "toolCall",
-						name: part.name,
-						args: part.arguments,
-					});
+				if (part.type === "text") add({ type: "text", text: part.text });
+				else if (part.type === "toolCall") {
+					add({ type: "toolCall", name: part.name, args: part.arguments });
+				}
 			}
 		}
 	}
-	return items;
+	if (limit !== undefined && total > limit && next > 0) {
+		return { items: [...items.slice(next), ...items.slice(0, next)], omitted: total - limit };
+	}
+	return { items, omitted: Math.max(0, total - items.length) };
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
@@ -2709,12 +2721,10 @@ export default function (pi: ExtensionAPI) {
 
 			const mdTheme = getMarkdownTheme();
 
-			const renderDisplayItems = (items: DisplayItem[], limit?: number) => {
-				const toShow = limit ? items.slice(-limit) : items;
-				const skipped = limit && items.length > limit ? items.length - limit : 0;
+			const renderDisplayItems = ({ items, omitted }: DisplayItems) => {
 				let text = "";
-				if (skipped > 0) text += theme.fg("muted", `... ${skipped} earlier items\n`);
-				for (const item of toShow) {
+				if (omitted > 0) text += theme.fg("muted", `... ${omitted} earlier items\n`);
+				for (const item of items) {
 					if (item.type === "text") {
 						const textPreview = expanded ? item.text : previewText(item.text);
 						const preview = escapeTerminalText(textPreview);
@@ -2731,7 +2741,7 @@ export default function (pi: ExtensionAPI) {
 				const isError = isFailedResult(r);
 				const icon =
 					r.exitCode === -1 ? theme.fg("warning", "⏳") : isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-				const displayItems = getDisplayItems(r.messages);
+				const displayItems = getDisplayItems(r.messages, expanded ? undefined : COLLAPSED_ITEM_COUNT);
 
 				if (expanded) {
 					const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
@@ -2746,10 +2756,10 @@ export default function (pi: ExtensionAPI) {
 					container.addChild(new Text(theme.fg("dim", escapeTerminalText(r.task)), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
-					if (displayItems.length === 0 && !finalOutput) {
+					if (displayItems.items.length === 0 && !finalOutput) {
 						container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
 					} else {
-						for (const item of displayItems) {
+						for (const item of displayItems.items) {
 							if (item.type === "toolCall")
 								container.addChild(
 									new Text(theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)), 0, 0),
@@ -2773,10 +2783,10 @@ export default function (pi: ExtensionAPI) {
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (isError) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(getFailureReason(r)))}`)}`;
-				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+				else if (displayItems.items.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
-					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
-					if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+					text += `\n${renderDisplayItems(displayItems)}`;
+					if (displayItems.omitted > 0) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				}
 				const captureNotice = getCaptureNotice(r);
 				if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
@@ -2848,7 +2858,7 @@ export default function (pi: ExtensionAPI) {
 						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${escapeTerminalText(truncateOutput(failure))}`), 0, 0));
 
 						// Show tool calls
-						for (const item of displayItems) {
+						for (const item of displayItems.items) {
 							if (item.type === "toolCall") {
 								container.addChild(
 									new Text(theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)), 0, 0),
@@ -2885,12 +2895,12 @@ export default function (pi: ExtensionAPI) {
 				for (const r of details.results) {
 					const rIcon = r.exitCode === -1 ? theme.fg("warning", "⏳")
 						: isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
-					const displayItems = getDisplayItems(r.messages);
+					const displayItems = getDisplayItems(r.messages, 5);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
 					const failure = getFailureReason(r);
 					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(failure))}`)}`;
-					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
-					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					if (displayItems.items.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+					else text += `\n${renderDisplayItems(displayItems)}`;
 					const captureNotice = getCaptureNotice(r);
 					if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
 				}
@@ -2932,7 +2942,7 @@ export default function (pi: ExtensionAPI) {
 						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${escapeTerminalText(truncateOutput(failure))}`), 0, 0));
 
 						// Show tool calls
-						for (const item of displayItems) {
+						for (const item of displayItems.items) {
 							if (item.type === "toolCall") {
 								container.addChild(
 									new Text(theme.fg("muted", "→ ") + formatToolCall(item.name, item.args, theme.fg.bind(theme)), 0, 0),
@@ -2969,13 +2979,13 @@ export default function (pi: ExtensionAPI) {
 							: isFailedResult(r)
 								? theme.fg("error", "✗")
 								: theme.fg("success", "✓");
-					const displayItems = getDisplayItems(r.messages);
+					const displayItems = getDisplayItems(r.messages, 5);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
 					const failure = getFailureReason(r);
 					if (failure) text += `\n${theme.fg("error", `Error: ${previewText(escapeTerminalText(failure))}`)}`;
-					if (displayItems.length === 0)
+					if (displayItems.items.length === 0)
 						text += `\n${theme.fg("muted", r.exitCode === -1 ? "(running...)" : "(no output)")}`;
-					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					else text += `\n${renderDisplayItems(displayItems)}`;
 					const captureNotice = getCaptureNotice(r);
 					if (captureNotice) text += `\n${theme.fg("warning", captureNotice)}`;
 				}
