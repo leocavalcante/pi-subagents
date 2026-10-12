@@ -2522,11 +2522,12 @@ test('agent listing supports exact-name lookup after scope precedence', async ()
   } finally { rmSync(projectAgent, { force: true }); }
 });
 
-test('agent listing searches names and descriptions after scope precedence with filtered pagination', async () => {
+test('agent listing searches names, descriptions, and configured tools after scope precedence with filtered pagination', async () => {
   const definitions = [
     ['lookup-oauth.md', 'lookup-oauth', 'OAuth security reviewer'],
     ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
     ['lookup-db.md', 'lookup-db', 'Database migration helper'],
+    ['lookup-tool.md', 'lookup-tool-agent', 'Configured transport helper', ['read', 'custom-shell']],
     ['lookup-greek.md', 'lookup-greek', 'ΟΣ reviewer'],
     ['lookup-sharp-s-name.md', 'straße-reviewer', 'German language reviewer'],
     ['lookup-sharp-s-description.md', 'lookup-sharp-s-description', 'Straße compliance reviewer'],
@@ -2538,16 +2539,20 @@ test('agent listing searches names and descriptions after scope precedence with 
     ['lookup-cafe-composed.md', 'lookup-cafe-composed', 'Café tooling'],
     ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
     ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
-    ['lookup-override.md', 'lookup-override', 'Secret token helper'],
+    ['lookup-override.md', 'lookup-override', 'Secret token helper', ['custom-shell']],
   ];
-  const userFiles = definitions.map(([filename, name, description]) => {
+  const userFiles = definitions.map(([filename, name, description, configuredTools]) => {
     const file = join(sandbox, 'agent/agents', filename);
-    writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n---\nSearch test instructions.\n`);
+    const tools = configuredTools ? `tools: ${JSON.stringify(configuredTools)}\n` : '';
+    writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n${tools}---\nSearch test instructions.\n`);
     return file;
   });
   const projectOverride = join(sandbox, 'project/.pi/agents/lookup-override.md');
-  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\n---\nProject override instructions.\n');
+  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\n---\nProject override instructions.\n');
   try {
+    const toolDescription = tools.get('subagent_agents').definition.description;
+    assert.match(toolDescription, /search names, descriptions, and configured tool allowlists/);
+    assert.match(toolDescription, /runtime-default tools are not inferred/);
     const schema = tools.get('subagent_agents').definition.outputSchema;
     const parameters = tools.get('subagent_agents').definition.parameters;
     assert.equal(Value.Check(parameters, { query: '  oAuTh ' }), true);
@@ -2566,6 +2571,15 @@ test('agent listing searches names and descriptions after scope precedence with 
 
     const nameMatch = await invoke('subagent_agents', { query: 'LOOKUP-DB' });
     assert.deepEqual(nameMatch.details.agents.map(agent => agent.name), ['lookup-db']);
+
+    const configuredToolMatch = await invoke('subagent_agents', { query: 'CUSTOM-SHELL' });
+    assert.deepEqual(configuredToolMatch.details.agents.map(agent => agent.name), ['lookup-override', 'lookup-tool-agent']);
+    assert.deepEqual(configuredToolMatch.details.agents[1].tools, ['read', 'custom-shell']);
+    const scopedToolMatch = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'CUSTOM-SHELL',
+    }, { ...ctx(), cwd: join(sandbox, 'project') });
+    assert.deepEqual(scopedToolMatch.details.agents.map(agent => agent.name), ['lookup-tool-agent'],
+      'a project override with a different configured tool list replaces the personal definition before search');
 
     const greekMatch = await invoke('subagent_agents', { query: 'σ' });
     assert.deepEqual(greekMatch.details.agents.map(agent => agent.name), ['lookup-greek'],
