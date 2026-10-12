@@ -32,6 +32,26 @@ test('bounded substitution counts UTF-8 bytes and retains literal one-pass behav
   assert.throws(() => substituteChainContextBounded('x', '', new Map(), -1), /byte limit/);
 });
 
+test('bounded substitution matches exact UTF-8 budgets across adjacent and empty replacements', () => {
+  const cases = [
+    ['café/{previous}/😀/{steps.review}/終', '東京', new Map([['review', '💻 done']])],
+    ['{steps.first}{steps.second}{previous}', 'Z', new Map([['first', '東'], ['second', '🛰️']])],
+    ['α{steps.empty}{previous}終', '', new Map([['empty', '']])],
+    ['😀{steps.repeat}{steps.repeat}é', '', new Map([['repeat', '終']])],
+    ['{steps.payload}|{previous}', "$'€", new Map([['payload', '{previous} $& 😀']])],
+  ];
+
+  for (const [template, previous, outputs] of cases) {
+    const expanded = substituteChainContext(template, previous, outputs);
+    const requiredBytes = Buffer.byteLength(expanded, 'utf8');
+    for (let maxBytes = 0; maxBytes <= requiredBytes + 1; maxBytes++) {
+      const actual = substituteChainContextBounded(template, previous, outputs, maxBytes);
+      assert.equal(actual, maxBytes >= requiredBytes ? expanded : undefined,
+        `template ${JSON.stringify(template)} at ${maxBytes} of ${requiredBytes} bytes`);
+    }
+  }
+});
+
 test('oversized repeated context is rejected without materializing the expanded string', () => {
   const template = '{steps.large}'.repeat(100_000);
   const largeOutput = 'x'.repeat(4 * 1024 * 1024);
