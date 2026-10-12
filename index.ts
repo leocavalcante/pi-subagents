@@ -172,6 +172,17 @@ function previewAgentName(value: string): string {
 	return escapeTerminalControls(truncateOutput(value, MAX_AGENT_NAME_BYTES, "..."));
 }
 
+function previewAgentSelector(value: unknown): string {
+	if (!isToolParameterObject(value)) return previewAgentName("...");
+	if (typeof value.agent === "string") return previewAgentName(value.agent);
+	if (Array.isArray(value.agentTags)) {
+		const tags = value.agentTags.slice(0, MAX_AGENT_TAG_COUNT)
+			.map((tag) => escapeTerminalControls(truncateOutput(stringArg(tag, "?"), MAX_AGENT_TAG_BYTES, "..."))).join(",");
+		return `tags:[${tags}${value.agentTags.length > MAX_AGENT_TAG_COUNT ? ",…" : ""}]`;
+	}
+	return previewAgentName("...");
+}
+
 function taskByteLength(task: string): number {
 	// UTF-8 bytes are never fewer than UTF-16 code units. Avoid scanning an
 	// arbitrarily large tool argument when its length already exceeds the cap.
@@ -1307,10 +1318,17 @@ const WorkingDirectory = Type.String({
 	description: `Non-empty working directory for the child process. Precedence: entry, top-level call, agent default, then parent session directory. Relative paths resolve from the parent session's working directory. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
 });
 
-const TASK_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "agent", "task", "timeoutMs", "cwd"] as const;
-const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "id", "agent", "task", "timeoutMs", "cwd"] as const;
+const AgentTagsSelectorSchema = Type.Array(Type.String({ pattern: AGENT_TAG_INPUT_PATTERN,
+	minLength: 1, maxLength: MAX_AGENT_TAG_BYTES }), {
+	minItems: 1,
+	maxItems: MAX_AGENT_TAG_COUNT,
+	description: `Select an agent carrying every listed exact capability tag. Duplicate labels are ignored after lowercase normalization; maximum ${MAX_AGENT_TAG_COUNT} labels and ${MAX_AGENT_TAG_LIST_BYTES} bytes total. Dispatch requires exactly one matching agent; ambiguous matches fail without launching any agent.`,
+});
+
+const TASK_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
+const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "id", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
 const SUBAGENT_TOOL_KEYS = [
-	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "task", "tasks", "chain",
+	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "agentTags", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd",
 ] as const;
 const AGENT_TOOL_KEYS = ["agentScope", "name", "query", "tag", "tags", "offset", "limit"] as const;
@@ -1318,7 +1336,8 @@ const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limi
 
 const TaskItem = Type.Object({
 	...DispatchOptions,
-	agent: AgentNameSchema,
+	agent: Type.Optional(AgentNameSchema),
+	agentTags: Type.Optional(AgentTagsSelectorSchema),
 	task: taskTextSchema("Task to delegate to the agent"),
 	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
@@ -1328,7 +1347,8 @@ const ChainItem = Type.Object({
 	...DispatchOptions,
 	id: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64,
 		description: "Optional unique step ID. Later tasks reference this output with {steps.ID}." })),
-	agent: AgentNameSchema,
+	agent: Type.Optional(AgentNameSchema),
+	agentTags: Type.Optional(AgentTagsSelectorSchema),
 	task: taskTextSchema("Task with {previous} for the preceding output or {steps.ID} for an earlier named step"),
 	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
@@ -1350,6 +1370,7 @@ const SubagentParams = Type.Object({
 	notify: Type.Optional(Type.Boolean({ default: true,
 		description: "Background only: send an automatic completion follow-up. Set false for silent jobs inspected with subagent_jobs. Default: true." })),
 	agent: Type.Optional(AgentNameSchema),
+	agentTags: Type.Optional(AgentTagsSelectorSchema),
 	task: Type.Optional(taskTextSchema("Task to delegate (for single mode)")),
 	tasks: Type.Optional(
 		Type.Array(TaskItem, {
@@ -1532,7 +1553,7 @@ export default function (pi: ExtensionAPI) {
 			"Set name to look up one exact, case-sensitive definition, tag to filter by one exact, case-insensitive capability label, tags to require every listed exact label, or query to search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
 			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with name, tag, or tags filters.`,
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
-			"Tags are bounded lowercase discovery labels and do not configure child execution.",
+			"Tags are bounded lowercase discovery labels; subagent can dispatch through agentTags when the all-tags match is unique. Tags do not configure child execution settings.",
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes. Structured paths and cwd metadata are limited to ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; diagnostic messages are limited to ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes. Longer values are marked as truncated.`,
 			`Reports invalid and duplicate definitions and agent-directory inspection failures. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
@@ -1920,7 +1941,7 @@ export default function (pi: ExtensionAPI) {
 			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded. On Windows, first-use supervisor compilation also happens before the deadline and has no independent timeout; canceling a caller detaches it but does not stop the shared compile.",
 			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
 			`Extension-mediated nested subagent calls are limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive delegation.`,
-			"Set model, thinking, or tools to override agent configuration. Use null to ignore an agent's configured model, thinking, or tool allowlist. unsetEnv removes additional inherited environment variables from child processes; agent, batch, and entry lists combine additively. Parallel/chain entries override batch defaults for model, thinking, and tools.",
+			"Select an agent by exact name or by agentTags when exactly one in-scope agent matches every tag; ambiguous tag matches fail rather than choosing arbitrarily. Use the same selector per parallel task or chain step. Set model, thinking, or tools to override agent configuration. Use null to ignore an agent's configured model, thinking, or tool allowlist. unsetEnv removes additional inherited environment variables from child processes; agent, batch, and entry lists combine additively. Parallel/chain entries override batch defaults for model, thinking, and tools.",
 			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
 			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project"). Untrusted projects require UI approval or Pi project trust; tool arguments cannot bypass this.`,
@@ -1955,7 +1976,7 @@ export default function (pi: ExtensionAPI) {
 
 			const hasChain = params.chain !== undefined;
 			const hasTasks = params.tasks !== undefined;
-			const hasSingle = params.agent !== undefined || params.task !== undefined;
+			const hasSingle = params.agent !== undefined || params.agentTags !== undefined || params.task !== undefined;
 			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 			const concurrency = Number.isInteger(params.concurrency) && params.concurrency! >= 1 && params.concurrency! <= MAX_CONCURRENCY
 				? params.concurrency! : MAX_CONCURRENCY;
@@ -2030,38 +2051,38 @@ export default function (pi: ExtensionAPI) {
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
-			const requested = hasChain ? params.chain! : hasTasks ? params.tasks! : [{ agent: params.agent!, task: params.task! }];
-			if (!requested.length || requested.some((item) =>
-				typeof item?.agent !== "string" || typeof item?.task !== "string")) {
+			const requestedInputs = hasChain ? params.chain! : hasTasks ? params.tasks! : [{
+				agent: params.agent, agentTags: params.agentTags, task: params.task, cwd: params.cwd,
+				timeoutMs: params.timeoutMs, model: params.model, thinking: params.thinking,
+				tools: params.tools, unsetEnv: params.unsetEnv,
+			}];
+			if (!requestedInputs.length || requestedInputs.some((item) => typeof item?.task !== "string")) {
 				return {
-					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
+					content: [{ type: "text", text: "Provide exactly one agent or agentTags selector and a non-empty task for each requested task." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
 			const itemKeys = hasChain ? CHAIN_ITEM_KEYS : TASK_ITEM_KEYS;
-			if (requested.some((item) => hasUnexpectedToolParameters(item, itemKeys))) {
+			if (requestedInputs.some((item) => hasUnexpectedToolParameters(item, itemKeys))) {
 				return {
 					content: [{ type: "text", text: `Unsupported parameters were provided to a ${hasChain ? "chain step" : "task"}.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
 			let submittedTaskBytes = 0;
-			for (const item of requested) {
-				if (!isSafeAgentName(item.agent)) return {
-					content: [{ type: "text", text: `Agent name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, contain no terminal or bidirectional controls, and be well-formed Unicode.` }],
-					details: makeDetails(mode)([]), isError: true,
-				};
-				if (item.task.length <= MAX_TASK_BYTES && !isWellFormedUnicode(item.task)) return {
+			for (const item of requestedInputs) {
+				const task = item.task as string;
+				if (task.length <= MAX_TASK_BYTES && !isWellFormedUnicode(task)) return {
 					content: [{ type: "text", text: "Task must contain well-formed Unicode." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
-				const bytes = taskByteLength(item.task);
+				const bytes = taskByteLength(task);
 				if (bytes > MAX_TASK_BYTES) return {
 					content: [{ type: "text", text: taskSizeError() }],
 					details: makeDetails(mode)([]), isError: true,
 				};
-				if (!item.task.trim()) return {
-					content: [{ type: "text", text: "Provide a non-empty agent and task for each requested task." }],
+				if (!task.trim()) return {
+					content: [{ type: "text", text: "Provide exactly one agent or agentTags selector and a non-empty task for each requested task." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 				if (bytes > MAX_DISPATCH_TASK_BYTES - submittedTaskBytes) return {
@@ -2070,6 +2091,56 @@ export default function (pi: ExtensionAPI) {
 				};
 				submittedTaskBytes += bytes;
 			}
+			const selectedAgents: AgentConfig[] = [];
+			for (const item of requestedInputs) {
+				const inputAgent: unknown = item.agent;
+				const inputAgentTags: unknown = (item as { agentTags?: unknown }).agentTags;
+				if ((inputAgent !== undefined ? 1 : 0) + (inputAgentTags !== undefined ? 1 : 0) !== 1) return {
+					content: [{ type: "text", text: "Provide exactly one of agent or agentTags for each requested task." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				let selectedAgent: AgentConfig | undefined;
+				if (inputAgent !== undefined) {
+					if (typeof inputAgent !== "string" || !isSafeAgentName(inputAgent)) return {
+						content: [{ type: "text", text: `Agent name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, contain no terminal or bidirectional controls, and be well-formed Unicode.` }],
+						details: makeDetails(mode)([]), isError: true,
+					};
+					selectedAgent = agents.find((agent) => agent.name === inputAgent);
+					if (!selectedAgent) {
+						const available = agents.map((agent) => displayUntrustedText(agent.name)).join(", ") || "none";
+						return {
+							content: [{ type: "text", text: `Unknown agent: ${displayUntrustedText(inputAgent)}. Available agents: ${available}.` }],
+							details: makeDetails(mode)([]), isError: true,
+						};
+					}
+				} else {
+					let requiredTags: string[] | undefined;
+					try { requiredTags = parseAgentTags(inputAgentTags); }
+					catch {
+						return {
+							content: [{ type: "text", text: `agentTags must be an array of 1-${MAX_AGENT_TAG_COUNT} valid ASCII labels totaling at most ${MAX_AGENT_TAG_LIST_BYTES} bytes.` }],
+							details: makeDetails(mode)([]), isError: true,
+						};
+					}
+					if (!requiredTags?.length) return {
+						content: [{ type: "text", text: "agentTags must contain at least one capability label." }],
+						details: makeDetails(mode)([]), isError: true,
+					};
+					const matches = agents.filter((agent) => requiredTags!.every((tag) => agent.tags?.includes(tag) ?? false));
+					const tagLabel = requiredTags.map((tag) => `"${tag}"`).join(", ");
+					if (matches.length === 0) return {
+						content: [{ type: "text", text: `No in-scope agent has all capability tags ${tagLabel}.` }],
+						details: makeDetails(mode)([]), isError: true,
+					};
+					if (matches.length > 1) return {
+						content: [{ type: "text", text: `agentTags ${tagLabel} are ambiguous; matching agents: ${matches.map((agent) => displayUntrustedText(agent.name)).join(", ")}. Add tags or provide an exact agent name.` }],
+						details: makeDetails(mode)([]), isError: true,
+					};
+					selectedAgent = matches[0];
+				}
+				selectedAgents.push(selectedAgent);
+			}
+			const requested = requestedInputs.map((item, index) => ({ ...item, agent: selectedAgents[index].name }));
 			const referenceError = params.chain ? validateChainReferences(params.chain) : undefined;
 			if (referenceError) return {
 				content: [{ type: "text", text: referenceError }],
@@ -2154,21 +2225,6 @@ export default function (pi: ExtensionAPI) {
 					isError: true,
 				};
 			}
-			{
-				const unknown = requested.find((r) => !agents.some((a) => a.name === r.agent));
-				if (unknown)
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Unknown agent: ${displayUntrustedText(unknown.agent)}. Available agents: ${agents.map((a) => displayUntrustedText(a.name)).join(", ") || "none"}.`,
-							},
-						],
-						details: makeDetails(mode)([]),
-						isError: true,
-					};
-			}
-
 			let effectiveUnsetEnv: string[][];
 			try {
 				effectiveUnsetEnv = requested.map((item, index) => {
@@ -2195,10 +2251,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (agentScope === "project" || agentScope === "both") {
-				const requestedAgentNames = new Set<string>();
-				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
-				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
-				if (params.agent) requestedAgentNames.add(params.agent);
+				const requestedAgentNames = new Set(requested.map((item) => item.agent));
 
 				const projectAgentsRequested = Array.from(requestedAgentNames)
 					.map((name) => agents.find((a) => a.name === name))
@@ -2346,7 +2399,7 @@ export default function (pi: ExtensionAPI) {
 							pool,
 							dispatchDefaults,
 							agents,
-							step.agent,
+							requested[i].agent,
 							taskWithContext,
 							step.cwd ?? params.cwd,
 							mergeDispatchOverrides(callOverrides, taskOverrides[i]),
@@ -2371,7 +2424,7 @@ export default function (pi: ExtensionAPI) {
 								content: [
 									{
 										type: "text",
-										text: `Chain stopped at step ${i + 1} (${displayUntrustedText(step.agent)}): ${errorMsg}`,
+										text: `Chain stopped at step ${i + 1} (${displayUntrustedText(requested[i].agent)}): ${errorMsg}`,
 									},
 								],
 								details: makeDetails("chain")(results),
@@ -2399,7 +2452,7 @@ export default function (pi: ExtensionAPI) {
 					// Initialize placeholder results
 					for (let i = 0; i < params.tasks.length; i++) {
 						allResults[i] = {
-							agent: params.tasks[i].agent,
+							agent: requested[i].agent,
 							agentSource: "unknown",
 							task: params.tasks[i].task,
 							exitCode: -1, // -1 = running or waiting for a process slot
@@ -2442,7 +2495,7 @@ export default function (pi: ExtensionAPI) {
 							pool,
 							dispatchDefaults,
 							agents,
-							t.agent,
+							requested[index].agent,
 							t.task,
 							t.cwd ?? params.cwd,
 							mergeDispatchOverrides(callOverrides, taskOverrides[index]),
@@ -2488,13 +2541,13 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
-				if (params.agent && params.task) {
+				if (requested.length === 1 && params.task) {
 					const result = await runSingleAgent(
 						defaultCwd,
 						pool,
 						dispatchDefaults,
 						agents,
-						params.agent,
+						requested[0].agent,
 						params.task,
 						params.cwd,
 						callOverrides,
@@ -2545,8 +2598,8 @@ export default function (pi: ExtensionAPI) {
 			signal?.throwIfAborted();
 			const label =
 				mode === "single"
-					? params.agent!
-					: `${mode}: ${(hasChain ? params.chain! : params.tasks!).map((t) => t.agent).join(", ")}`;
+					? requested[0].agent
+					: `${mode}: ${requested.map((item) => item.agent).join(", ")}`;
 			const job = jobs.start(label, async (jobSignal, update) => boundResultText(
 				reportUsage(await run(jobSignal, (partial) => update(boundResultText(partial)))),
 			), { notify: params.notify });
@@ -2583,7 +2636,7 @@ export default function (pi: ExtensionAPI) {
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
-						theme.fg("accent", previewAgentName(stringArg(step?.agent))) +
+						theme.fg("accent", previewAgentSelector(step)) +
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
@@ -2597,12 +2650,12 @@ export default function (pi: ExtensionAPI) {
 				for (const t of args.tasks.slice(0, 3)) {
 					const task = stringArg(t?.task, "");
 					const preview = escapeTerminalText(task.length > 40 ? `${task.slice(0, 40)}...` : task);
-					text += `\n  ${theme.fg("accent", previewAgentName(stringArg(t?.agent)))}${theme.fg("dim", ` ${preview}`)}`;
+					text += `\n  ${theme.fg("accent", previewAgentSelector(t))}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
-			const agentName = previewAgentName(stringArg(args.agent));
+			const agentName = previewAgentSelector(args);
 			const task = stringArg(args.task);
 			const preview = escapeTerminalText(task.length > 60 ? `${task.slice(0, 60)}...` : task);
 			let text =

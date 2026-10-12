@@ -66,7 +66,7 @@ cwd: packages/app
 unsetEnv: [AWS_SECRET_ACCESS_KEY, PRIVATE_TOKEN]
 ```
 
-Tags are ASCII slugs using letters, digits, dots, underscores, or hyphens, beginning with a letter or digit; input is normalized to lowercase. Tags are for discovery only, limited to 32 labels of at most 64 bytes each and 2 KiB total, and searchable with `subagent_agents`. They do not change child execution.
+Tags are ASCII slugs using letters, digits, dots, underscores, or hyphens, beginning with a letter or digit; input is normalized to lowercase. Tags are discovery labels, limited to 32 labels of at most 64 bytes each and 2 KiB total, and searchable with `subagent_agents`. Dispatch can also use them to select an agent with `agentTags`; this does not change the agent's execution settings.
 
 An agent with no `model` configured—or with an empty or whitespace-only `model` value—inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
 
@@ -118,6 +118,16 @@ To find agents that have every requested exact tag, pass `tags` as a non-empty a
 
 All tag filters run after scope precedence and before pagination. Continue with the returned `nextOffset`, keeping the same `agentScope` and `tags`. The `tags` filter cannot be combined with `name`, `query`, or the single-tag `tag` filter.
 
+### Dispatch using capability tags
+
+Instead of copying an exact name from discovery results, pass `agentTags` with the `subagent` tool. It uses the same case-insensitive all-tags intersection; duplicates are ignored. The selector must match exactly one in-scope agent. No match or an ambiguous match is reported without launching a child; add tags to disambiguate or pass `agent` explicitly. Scope precedence is applied first, and normal project-agent trust approval still applies to the selected definition.
+
+```json
+{ "agentTags": ["security", "code-review"], "task": "Review the authentication code without changing files." }
+```
+
+Parallel task entries and chain steps can each use `agentTags` instead of `agent`, so a batch can mix exact names and unique capability selectors.
+
 Ask Pi to delegate:
 
 ```text
@@ -126,13 +136,13 @@ Run two workers in parallel: one to inspect authentication, one to inspect tests
 Use a chain: worker reviews the code, then worker evaluates the findings.
 ```
 
-The `subagent` tool accepts exactly one mode. Empty arrays, blank tasks, partial single-task parameters, and unknown agents are rejected before any child starts:
+The `subagent` tool accepts exactly one mode. Select each task's agent with either an exact `agent` name or `agentTags`, an array of exact capability labels that must all match. Selection applies after scope precedence and dispatch requires exactly one matching definition: no match or multiple matches fail before any child starts. Project-agent trust approval still applies to the resolved definition. Empty arrays, blank tasks, partial single-task parameters, and unknown agents are rejected before any child starts:
 
 | Mode | Parameters | Execution |
 | --- | --- | --- |
-| Single | `{ agent, task }` | One task |
-| Parallel | `{ tasks: [{ agent, task }, ...] }` | Up to 8 tasks, up to 4 concurrent |
-| Chain | `{ chain: [{ agent, task, id? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
+| Single | `{ agent, task }` or `{ agentTags, task }` | One task |
+| Parallel | `{ tasks: [{ agent or agentTags, task }, ...] }` | Up to 8 tasks, up to 4 concurrent |
+| Chain | `{ chain: [{ agent or agentTags, task, id? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
 
 At the first chain step, `{previous}` is an empty string. A first task containing only that placeholder is rejected before approval or launch. If a later substitution makes the task blank, the chain stops at that step without starting another child.
 

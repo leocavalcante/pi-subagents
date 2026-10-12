@@ -1822,6 +1822,11 @@ test('renderers tolerate partial calls and invalid tool argument types', async (
   assert.ok(invalidNamePreview.includes('u001b'));
   const hugeNamePreview = definition.renderCall({ agent: 'x'.repeat(1024 * 1024), task: 'preview' }, theme, {}).render(80);
   assert.ok(Buffer.byteLength(hugeNamePreview.join(String.fromCharCode(10))) < 512);
+  const tagPreview = definition.renderCall({ agentTags: ['security', 'code-review'], task: 'preview' }, theme, {}).render(80).join('\n');
+  assert.ok(tagPreview.includes('tags:[security,code-review]'));
+  const hostileTagPreview = definition.renderCall({ agentTags: [`unsafe${rawEscape}[31m`], task: 'preview' }, theme, {}).render(80).join('\n');
+  assert.equal(hostileTagPreview.includes(rawEscape), false);
+  assert.ok(hostileTagPreview.includes('u001b'));
   const result = await invoke('subagent', { agent: 'worker', task: 'odd-tool-args' });
   for (const expanded of [false, true]) assert.doesNotThrow(() => definition.renderResult(result, { expanded }, theme, {}).render(80));
   const original = result.details.results[0];
@@ -2591,7 +2596,8 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     const toolDescription = tools.get('subagent_agents').definition.description;
     assert.match(toolDescription, /search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
     assert.match(toolDescription, /tag to filter by one exact, case-insensitive capability label, tags to require every listed exact label/);
-    assert.match(toolDescription, /Tags are bounded lowercase discovery labels and do not configure child execution/);
+    assert.match(toolDescription, /Tags are bounded lowercase discovery labels; subagent can dispatch through agentTags when the all-tags match is unique/);
+    assert.match(toolDescription, /Tags do not configure child execution settings/);
     assert.match(toolDescription, /definition filenames \(not parent directories\)/);
     assert.match(toolDescription, /cwd paths/);
     assert.match(toolDescription, /decimal timeoutMs values \(milliseconds\)/);
@@ -2837,6 +2843,104 @@ test('agent listing searches identity, capabilities, source filenames, and confi
   } finally {
     for (const file of userFiles) rmSync(file, { force: true });
     rmSync(projectOverride, { force: true });
+  }
+});
+
+test('agentTags dispatch selects uniquely in single, parallel, and chain modes before launch', async () => {
+  const definitions = [
+    ['dispatch-security.md', 'dispatch-security', ['security']],
+    ['dispatch-review.md', 'dispatch-review', ['code-review']],
+    ['dispatch-both.md', 'dispatch-both', ['security', 'code-review']],
+    ['dispatch-triage.md', 'dispatch-triage', ['security', 'incident-response']],
+  ].map(([filename, name, tags]) => {
+    const file = join(sandbox, 'agent/agents', filename);
+    writeFileSync(file, `---\nname: ${name}\ndescription: Capability dispatch fixture\ntags: ${JSON.stringify(tags)}\n---\nInstructions.\n`);
+    return file;
+  });
+  const personalScope = join(sandbox, 'agent/agents/dispatch-scope.md');
+  const projectScope = join(sandbox, 'project/.pi/agents/dispatch-scope.md');
+  writeFileSync(personalScope, '---\nname: dispatch-scope\ndescription: Personal shadow\ntags: [personal-route]\n---\nPersonal instructions.\n');
+  writeFileSync(projectScope, '---\nname: dispatch-scope\ndescription: Project override\ntags: [project-route]\n---\nProject instructions.\n');
+  try {
+    const schema = tools.get('subagent').definition.parameters;
+    assert.equal(Value.Check(schema, { agentTags: ['SECURITY'], task: 'schema single' }), true);
+    assert.equal(Value.Check(schema, { tasks: [{ agentTags: ['security'], task: 'schema parallel' }] }), true);
+    assert.equal(Value.Check(schema, { chain: [{ agentTags: ['security'], task: 'schema chain' }] }), true);
+
+    const single = await invoke('subagent', {
+      agentTags: ['SECURITY', 'CODE-REVIEW', 'security'], task: 'single via capability tags',
+    });
+    assert.equal(single.isError, undefined);
+    assert.equal(single.details.results[0].agent, 'dispatch-both');
+
+    const beforeRejected = traces().length;
+    const ambiguous = await invoke('subagent', { agentTags: ['security'], task: 'ambiguous tags must not start' });
+    assert.equal(ambiguous.isError, true);
+    assert.match(ambiguous.content[0].text, /ambiguous/);
+    assert.match(ambiguous.content[0].text, /dispatch-security/);
+    assert.match(ambiguous.content[0].text, /dispatch-both/);
+    const unmatched = await invoke('subagent', { agentTags: ['unavailable'], task: 'missing tags must not start' });
+    assert.equal(unmatched.isError, true);
+    assert.match(unmatched.content[0].text, /No in-scope agent/);
+    for (const params of [
+      { task: 'selector missing' },
+      { agent: 'worker', agentTags: ['security'], task: 'selectors conflict' },
+      { agentTags: [], task: 'empty selector' },
+      { agentTags: ['not a label'], task: 'invalid selector' },
+      { tasks: [{ task: 'parallel selector missing' }] },
+      { chain: [{ agent: 'worker', agentTags: ['security'], task: 'chain selectors conflict' }] },
+      { tasks: [
+        { agentTags: ['security', 'code-review'], task: 'valid selector before invalid' },
+        { agentTags: ['unavailable'], task: 'unmatched later selector' },
+      ] },
+      { chain: [
+        { agentTags: ['security', 'code-review'], task: 'valid chain selector before invalid' },
+        { agentTags: ['security'], task: 'ambiguous later selector' },
+      ] },
+    ]) {
+      const invalid = await invoke('subagent', params);
+      assert.equal(invalid.isError, true);
+    }
+    assert.equal(traces().length, beforeRejected, 'no-match, ambiguous, and malformed selectors must fail before starting children');
+
+    const parallel = await invoke('subagent', { tasks: [
+      { agentTags: ['security', 'code-review'], task: 'parallel tag selector' },
+      { agent: 'worker', task: 'parallel exact selector' },
+    ] });
+    assert.equal(parallel.isError, false);
+    assert.deepEqual(parallel.details.results.map(result => result.agent), ['dispatch-both', 'worker']);
+
+    const chain = await invoke('subagent', { chain: [
+      { agentTags: ['security', 'code-review'], task: 'chain tag selector', id: 'selected' },
+      { agent: 'worker', task: 'chain exact selector after {steps.selected}' },
+    ] });
+    assert.equal(chain.isError, undefined);
+    assert.deepEqual(chain.details.results.map(result => result.agent), ['dispatch-both', 'worker']);
+    assert.match(chain.details.results[1].task, /chain tag selector/);
+
+    const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
+    const personalTagAfterOverride = await invoke('subagent', {
+      agentScope: 'both', agentTags: ['personal-route'], task: 'shadowed personal tag',
+    }, projectContext);
+    assert.equal(personalTagAfterOverride.isError, true);
+    assert.match(personalTagAfterOverride.content[0].text, /No in-scope agent/);
+    const projectTagWithoutTrust = await invoke('subagent', {
+      agentScope: 'both', agentTags: ['project-route'], task: 'project tag requires trust',
+    }, projectContext);
+    assert.equal(projectTagWithoutTrust.isError, true);
+    assert.match(projectTagWithoutTrust.content[0].text, /Cannot run project-local agents/);
+
+    let approval = '';
+    const approvedContext = { ...projectContext, hasUI: true,
+      ui: { confirm: async (_title, body) => { approval = body; return true; } } };
+    const projectDispatch = await invoke('subagent', {
+      agentScope: 'both', agentTags: ['project-route'], task: 'approved project tag dispatch',
+    }, approvedContext);
+    assert.equal(projectDispatch.isError, undefined);
+    assert.equal(projectDispatch.details.results[0].agent, 'dispatch-scope');
+    assert.match(approval, /dispatch-scope/);
+  } finally {
+    for (const file of [...definitions, personalScope, projectScope]) rmSync(file, { force: true });
   }
 });
 

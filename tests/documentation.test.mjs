@@ -121,7 +121,7 @@ test('README documents bounded agent descriptions and discovery tags', () => {
   assert.match(agents, /optional discovery `tags`/);
   assert.match(agents, /Tags are ASCII slugs using letters, digits, dots, underscores, or hyphens, beginning with a letter or digit; input is normalized to lowercase/);
   assert.match(agents, /limited to 32 labels of at most 64 bytes each and 2 KiB total/);
-  assert.match(agents, /They do not change child execution/);
+  assert.match(agents, /Dispatch can also use them to select an agent with `agentTags`; this does not change the agent's execution settings/);
 });
 
 test('README documents the agent configuration exposed by discovery', () => {
@@ -144,6 +144,11 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /every listed tag must match/);
   assert.match(usage, /Neither tag filter can be combined with `name` or `query`/);
   assert.match(usage, /Filtering happens after scope precedence/);
+  assert.match(usage, /### Dispatch using capability tags/);
+  assert.match(usage, /The selector must match exactly one in-scope agent/);
+  assert.match(usage, /Project-agent trust approval still applies to the resolved definition/);
+  assert.match(usage, /\{ "agentTags": \["security", "code-review"\], "task": "Review the authentication code without changing files\." \}/);
+  assert.match(usage, /Parallel task entries and chain steps can each use `agentTags` instead of `agent`/);
   assert.match(usage, /Structured paths and `cwd` values are capped at 4 KiB and diagnostic messages at 512 UTF-8 bytes/);
   assert.match(usage, /These listing-only limits do not change the paths used to launch agents/);
 });
