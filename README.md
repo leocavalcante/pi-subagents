@@ -36,7 +36,19 @@ Install the extension from GitHub and reload Pi:
 pi install git:github.com/leocavalcante/pi-subagents
 ```
 
-Save a personal agent definition as `~/.pi/agent/agents/reviewer.md`:
+Create the personal agent directory if it does not already exist. On macOS/Linux, run:
+
+```sh
+mkdir -p ~/.pi/agent/agents
+```
+
+In Windows PowerShell, run:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Join-Path $HOME ".pi/agent/agents") | Out-Null
+```
+
+Then save a personal agent definition as `~/.pi/agent/agents/reviewer.md`:
 
 ```markdown
 ---
