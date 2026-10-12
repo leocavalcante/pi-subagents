@@ -138,13 +138,18 @@ const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
-const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u200b\u200e\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/g;
+const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]/gu;
+const PRESERVED_DISPLAY_CHARACTERS = /^(?:\u200c|\u200d|\p{Variation_Selector})$/u;
 const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
 const MAX_TERMINAL_ESCAPE_EXPANSION = 64 * 1024;
 
 function escapeTerminalControls(value: string): string {
-	return value.replace(UNSAFE_DISPLAY_CHARACTERS,
-		(character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+	return value.replace(UNSAFE_DISPLAY_CHARACTERS, (character) => {
+		if (PRESERVED_DISPLAY_CHARACTERS.test(character)) return character;
+		const codePoint = character.codePointAt(0)!;
+		const hex = codePoint.toString(16).padStart(4, "0");
+		return codePoint > 0xffff ? `\\u{${hex}}` : `\\u${hex}`;
+	});
 }
 
 function escapeTerminalText(value: string): string {
