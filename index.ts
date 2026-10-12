@@ -58,6 +58,11 @@ import {
 	THINKING_LEVELS,
 } from "./agents.ts";
 import {
+	MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES,
+	MAX_AGENT_LISTING_PATH_BYTES,
+	truncateAgentListingText,
+} from "./agent-listing.ts";
+import {
 	JobManager,
 	ProcessPool,
 	ProcessPoolCapacityError,
@@ -1527,7 +1532,7 @@ export default function (pi: ExtensionAPI) {
 			"Set name to look up one exact, case-sensitive definition, or query to search names and descriptions after scope precedence is applied.",
 			`Search queries use NFC-normalized, case-insensitive literal substring matching (including Greek sigma folding), are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes, and cannot be combined with exact name lookup.`,
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
-			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
+			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes. Structured paths and cwd metadata are limited to ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; diagnostic messages are limited to ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes. Longer values are marked as truncated.`,
 			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
 		].join(" "),
 		parameters: Type.Object({
@@ -1548,7 +1553,8 @@ export default function (pi: ExtensionAPI) {
 				description: Type.String({ minLength: 1, maxLength: MAX_AGENT_DESCRIPTION_BYTES,
 					description: `At most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.` }),
 				source: StringEnum(["user", "project"] as const),
-				filePath: Type.String(),
+				filePath: Type.String({ maxLength: MAX_AGENT_LISTING_PATH_BYTES,
+					description: `At most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; longer paths are marked as truncated.` }),
 				model: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
 					description: `At most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` })),
 				thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
@@ -1562,18 +1568,21 @@ export default function (pi: ExtensionAPI) {
 					description: `Inherited child environment variable names to remove; values are never listed. Maximum ${MAX_AGENT_UNSET_ENV_COUNT} names and ${MAX_AGENT_UNSET_ENV_BYTES} bytes.`,
 				})),
 				timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_MS })),
-				cwd: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_WORKING_DIRECTORY_LENGTH,
-					description: `Agent default child working directory, relative to the parent session unless absolute; at most ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.` })),
+				cwd: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_AGENT_LISTING_PATH_BYTES,
+					description: `Agent default child working directory, relative to the parent session unless absolute; at most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes in listing output. Longer paths are marked as truncated.` })),
 			}, { additionalProperties: false }), { maxItems: MAX_AGENT_LISTING_PAGE_SIZE }),
 			offset: Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2 }),
 			limit: Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE }),
 			totalAgents: Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2 }),
 			nextOffset: Type.Union([Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2 }), Type.Null()]),
-			projectAgentsDir: Type.Union([Type.String(), Type.Null()]),
+			projectAgentsDir: Type.Union([Type.String({ maxLength: MAX_AGENT_LISTING_PATH_BYTES,
+				description: `At most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; longer paths are marked as truncated.` }), Type.Null()]),
 			diagnostics: Type.Array(Type.Object({
-				filePath: Type.String(),
+				filePath: Type.String({ maxLength: MAX_AGENT_LISTING_PATH_BYTES,
+					description: `At most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; longer paths are marked as truncated.` }),
 				source: StringEnum(["user", "project"] as const),
-				message: Type.String(),
+				message: Type.String({ maxLength: MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES,
+					description: `At most ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes; longer messages are marked as truncated.` }),
 			}, { additionalProperties: false }), { maxItems: MAX_AGENT_DIAGNOSTICS }),
 		}, { additionalProperties: false }),
 		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -1630,16 +1639,24 @@ export default function (pi: ExtensionAPI) {
 					name: agent.name,
 					description: agent.description,
 					source: agent.source,
-					filePath: agent.filePath,
+					filePath: truncateAgentListingText(agent.filePath, MAX_AGENT_LISTING_PATH_BYTES),
 					...(agent.model !== undefined ? { model: agent.model } : {}),
 					...(agent.thinking !== undefined ? { thinking: agent.thinking } : {}),
 					...(agent.tools !== undefined ? { tools: agent.tools } : {}),
 					...(agent.unsetEnv !== undefined ? { unsetEnv: agent.unsetEnv } : {}),
 					...(agent.timeoutMs !== undefined ? { timeoutMs: agent.timeoutMs } : {}),
-					...(agent.cwd !== undefined ? { cwd: agent.cwd } : {}),
+					...(agent.cwd !== undefined ? { cwd: truncateAgentListingText(agent.cwd, MAX_AGENT_LISTING_PATH_BYTES) } : {}),
 				}));
 			const pageAgents = allAgents.slice(offset, offset + limit);
 			const nextOffset = offset + pageAgents.length < allAgents.length ? offset + pageAgents.length : null;
+			const projectAgentsDir = discovery.projectAgentsDir === null
+				? null
+				: truncateAgentListingText(discovery.projectAgentsDir, MAX_AGENT_LISTING_PATH_BYTES);
+			const boundedDiagnostics = discovery.diagnostics.map((diagnostic) => ({
+				...diagnostic,
+				filePath: truncateAgentListingText(diagnostic.filePath, MAX_AGENT_LISTING_PATH_BYTES),
+				message: truncateAgentListingText(diagnostic.message, MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES),
+			}));
 			const listing = pageAgents.map((a) => {
 				const config = [
 					a.model && `model=${displayUntrustedText(a.model)}`,
@@ -1652,7 +1669,7 @@ export default function (pi: ExtensionAPI) {
 				const line = `${displayUntrustedText(a.name)} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
 				return truncateOutput(line, MAX_AGENT_LISTING_LINE_BYTES, "...");
 			}).join("\n");
-			const warnings = discovery.diagnostics
+			const warnings = boundedDiagnostics
 				.map((diagnostic) => `${displayUntrustedText(diagnostic.filePath)}: ${displayUntrustedText(diagnostic.message)}`)
 				.map((line) => truncateOutput(line, MAX_AGENT_DIAGNOSTIC_LINE_BYTES, "..."))
 				.join("\n");
@@ -1668,8 +1685,8 @@ export default function (pi: ExtensionAPI) {
 					: `No agents at offset ${offset}; ${totalAgents} total.`;
 			const details = {
 				agentScope, agents: pageAgents, offset, limit, totalAgents, nextOffset,
-				projectAgentsDir: discovery.projectAgentsDir,
-				diagnostics: discovery.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+				projectAgentsDir,
+				diagnostics: boundedDiagnostics,
 			};
 			return {
 				content: [{
