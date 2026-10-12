@@ -31,8 +31,9 @@ test('README documents an available installation method', () => {
   assert.doesNotMatch(installation, /pi install npm:/);
 });
 
-test('npm test uses automatic discovery so Node runner options can be forwarded', () => {
+test('npm test uses automatic discovery so Node runner options and file paths can be forwarded', () => {
   assert.equal(packageJson.scripts.test, 'node --test');
+  assert.match(contributing, /`npm test -- tests\/paging\.test\.mjs`/);
   assert.match(contributing, /`npm test -- --test-name-pattern='agentTags dispatch'`/);
 });
 
