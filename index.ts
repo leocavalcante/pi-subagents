@@ -584,9 +584,12 @@ function truncateOutput(output: string, budget = MODEL_TEXT_CAP,
 }
 
 function previewText(text: string): string {
-	const lines = text.split("\n", 4);
 	const notice = "\n[Preview truncated. Ctrl+O to expand.]";
-	const preview = lines.length > 3 ? lines.slice(0, 3).join("\n") + notice : text;
+	// Bound line scanning before splitting: a single enormous line still only
+	// needs a bounded prefix because it will be clipped to the same byte budget.
+	const bounded = truncateOutput(text, 1024, notice);
+	const lines = bounded.split("\n", 4);
+	const preview = lines.length > 3 ? lines.slice(0, 3).join("\n") + notice : bounded;
 	return truncateOutput(preview, 1024, notice);
 }
 
@@ -2729,9 +2732,9 @@ export default function (pi: ExtensionAPI) {
 				const icon =
 					r.exitCode === -1 ? theme.fg("warning", "⏳") : isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
-				const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
 
 				if (expanded) {
+					const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
 					const container = new Container();
 					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
