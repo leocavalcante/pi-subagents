@@ -2843,6 +2843,23 @@ test('agent listing rejects invalid search queries before discovery output or ch
   assert.equal(traces().length, 0);
 });
 
+test('agent listing keeps capability tags visible before long fields are clipped', async () => {
+  const file = join(sandbox, 'agent/agents/tagged-long-tools.md');
+  const longTool = 'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES);
+  writeFileSync(file, `---\nname: tagged-long-tools\ndescription: Agent with long tool metadata\ntools: ${JSON.stringify([longTool])}\ntags: [security]\n---\nPrompt.\n`);
+  try {
+    const listed = await invoke('subagent_agents', { name: 'tagged-long-tools' });
+    assert.equal(listed.details.agents[0].tools[0], longTool);
+    assert.deepEqual(listed.details.agents[0].tags, ['security']);
+    assert.match(listed.content[0].text, /`tagged-long-tools` \[tags=security\] \(user\):/);
+    assert.ok(listed.content[0].text.indexOf('tags=security') < listed.content[0].text.indexOf('tools='),
+      'long tool metadata must follow the high-value discovery tags');
+    assert.ok(Buffer.byteLength(listed.content[0].text, 'utf8') <= 50 * 1024);
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
 test('agent listing rejects invalid exact tag filters before discovery output or child launch', async () => {
   const parameters = tools.get('subagent_agents').definition.parameters;
   const outputSchema = tools.get('subagent_agents').definition.outputSchema;
