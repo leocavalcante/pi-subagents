@@ -3828,11 +3828,12 @@ test('finished registry output is byte-bounded while completion delivery retains
 });
 
 test('finished registry accounting includes model metadata after its source message is evicted', async () => {
-  const modelBytes = 7 * 1024 * 1024;
+  const taskCount = 8;
+  const modelBytes = 33 * 1024 * 1024 / taskCount;
   const launched = await invoke('subagent', {
     background: true,
     notify: false,
-    tasks: Array.from({ length: 5 }, () => ({ agent: 'worker', task: 'unretained-model' })),
+    tasks: Array.from({ length: taskCount }, () => ({ agent: 'worker', task: 'unretained-model' })),
   }, { ...ctx(), model: undefined });
   const id = launched.details.background.id;
   const sawUnretainedModel = await waitFor(async () => {
@@ -3840,7 +3841,7 @@ test('finished registry accounting includes model metadata after its source mess
     return job.latest?.details?.results.some(task => task.model?.length === modelBytes &&
       task.capture?.messagesDropped > 0 && task.capture.retainedMessageBytes < 1024 * 1024) ?? false;
   });
-  assert.equal(sawUnretainedModel, true, 'The large source record is absent from history while its model metadata remains');
+  assert.equal(sawUnretainedModel, true, 'The oversized source record is absent from history while its model metadata remains');
   const job = await finish(id);
   assert.equal(job.state, 'completed');
   assert.equal(job.outputEvicted, true, 'Retained model metadata over the shared budget must evict the silent result');
