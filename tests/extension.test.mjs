@@ -2589,6 +2589,7 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     assert.match(toolDescription, /cwd paths/);
     assert.match(toolDescription, /decimal timeoutMs values \(milliseconds\)/);
     assert.match(toolDescription, /unsetEnv variable names/);
+    assert.match(toolDescription, /Reports invalid and duplicate definitions and agent-directory inspection failures/);
     assert.match(toolDescription, /runtime-default tools, inherited cwd paths and model\/thinking settings, and unspecified deadlines are not inferred/);
     assert.match(toolDescription, /environment variable values are never searched/);
     const schema = tools.get('subagent_agents').definition.outputSchema;
