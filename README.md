@@ -453,7 +453,7 @@ Agent system prompts are written briefly to a temporary UTF-8 file so the child 
 
 Only enable project-local agents in repositories you trust. Untrusted project agents require an interactive approval or an already-trusted Pi project; headless sessions fail closed for untrusted project agents. Approval cannot be disabled through a tool argument.
 
-The foreground subagent result renderer escapes terminal control characters in child output and tool-call previews before displaying them; captured messages and structured details remain unchanged. The background completion-message renderer also escapes child output and failure details for TUI display, while preserving the raw follow-up content and structured details. The `subagent_jobs` call and result renderers likewise escape untrusted job IDs, captured output, and failure text only for display; model-facing content and job details remain unchanged.
+The foreground subagent result renderer escapes terminal control characters and invisible Unicode formatting characters in child output and tool-call previews before displaying them, while preserving valid emoji and script-joining sequences; captured messages and structured details remain unchanged. The background completion-message renderer also escapes child output and failure details for TUI display, while preserving the raw follow-up content and structured details. The `subagent_jobs` call and result renderers likewise escape untrusted job IDs, captured output, and failure text only for display; model-facing content and job details remain unchanged.
 
 Authenticate on each machine with Pi's `/login`. Do not put credentials, sessions, or machine-local Pi state in this repository. To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
 

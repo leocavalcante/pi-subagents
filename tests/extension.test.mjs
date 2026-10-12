@@ -67,6 +67,32 @@ const invoke = (name, params, context = ctx(), signal) => tools.get(name).defini
 const launch = async params => (await invoke('subagent', { background: true, agent: 'worker', task: 'delay=150', ...params })).details.background.id;
 const status = async id => (await invoke('subagent_jobs', { action: 'status', jobId: id })).details;
 const traces = () => readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+const terminalDisplayUnicode = (() => {
+  const zeroWidthSpace = String.fromCodePoint(0x200b);
+  const wordJoiner = String.fromCodePoint(0x2060);
+  const mongolianVowelSeparator = String.fromCodePoint(0x180e);
+  const languageTag = String.fromCodePoint(0xe0001);
+  const standaloneTagCharacter = String.fromCodePoint(0xe0061);
+  const zeroWidthJoiner = String.fromCodePoint(0x200d);
+  const zeroWidthNonJoiner = String.fromCodePoint(0x200c);
+  const variationSelector = String.fromCodePoint(0xfe0f);
+  const englandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
+  const emojiSequence = `👩${zeroWidthJoiner}💻`;
+  const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
+  return {
+    hidden: [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, standaloneTagCharacter],
+    visible: ['\\u200b', '\\u2060', '\\u180e', '\\u{e0001}', '\\u{e0061}'],
+    preserved: [englandFlag, emojiSequence, scriptJoiner, `✈${variationSelector}`],
+    text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter} ${englandFlag} ${emojiSequence} ${scriptJoiner} ✈${variationSelector}`,
+  };
+})();
+const assertTerminalDisplayUnicode = rendered => {
+  for (const character of terminalDisplayUnicode.hidden) {
+    assert.equal(rendered.includes(character), false, `default-ignorable ${character.codePointAt(0).toString(16)} must be visible`);
+  }
+  for (const visible of terminalDisplayUnicode.visible) assert.ok(rendered.includes(visible), `${visible} should reveal hidden formatting`);
+  for (const preserved of terminalDisplayUnicode.preserved) assert.ok(rendered.includes(preserved), 'valid emoji and script sequences remain intact');
+};
 const waitFor = async (predicate, timeoutMs = 15000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { const result = await predicate(); if (result) return result; await sleep(10); }
@@ -274,7 +300,7 @@ test('background completion rendering escapes terminal controls without changing
   assert.equal(messages.length, 1);
 
   const followUp = messages[0].message;
-  const hostile = `terminal ${String.fromCharCode(27)}]52;c;pi-subagents-test${String.fromCharCode(7)} ${String.fromCharCode(27)}[2J${String.fromCharCode(0x9b)}2J\nnext line`;
+  const hostile = `terminal ${String.fromCharCode(27)}]52;c;pi-subagents-test${String.fromCharCode(7)} ${String.fromCharCode(27)}[2J${String.fromCharCode(0x9b)}2J ${terminalDisplayUnicode.text}\nnext line`;
   assert.ok(followUp.content.includes(hostile), 'the model-facing follow-up keeps the original child output');
   assert.equal(followUp.details.latest.details.results[0].messages.at(-1).content[0].text, hostile,
     'structured child output remains unchanged');
@@ -290,6 +316,7 @@ test('background completion rendering escapes terminal controls without changing
   assert.equal(rendered.includes(String.fromCharCode(0x9b)), false, 'C1 controls must not reach the terminal');
   assert.ok(rendered.includes('\\u001b]52;c;pi-subagents-test\\u0007'));
   assert.ok(rendered.includes('\\u009b2J'));
+  assertTerminalDisplayUnicode(rendered);
   assert.ok(rendered.includes('next line'));
 });
 
@@ -1885,7 +1912,7 @@ test('subagent renderers escape untrusted terminal controls without changing cap
   const esc = String.fromCharCode(27);
   const c1Csi = String.fromCharCode(0x9b);
   const bell = String.fromCharCode(7);
-  const hostile = `terminal ${esc}]52;c;pi-subagents-test${bell} ${esc}[2J${c1Csi}2J\nnext line`;
+  const hostile = `terminal ${esc}]52;c;pi-subagents-test${bell} ${esc}[2J${c1Csi}2J ${terminalDisplayUnicode.text}\nnext line`;
   const render = (result, expanded) => definition.renderResult(result, { expanded }, theme, {}).render(100).join('\n');
 
   const output = await invoke('subagent', { agent: 'worker', task: 'terminal-control-text' });
@@ -1897,6 +1924,7 @@ test('subagent renderers escape untrusted terminal controls without changing cap
     assert.equal(rendered.includes(c1Csi), false, `C1 controls must not reach the terminal (expanded=${expanded})`);
     assert.ok(rendered.includes('\\u001b]52;c;pi-subagents-test\\u0007'));
     assert.ok(rendered.includes('\\u009b2J'));
+    assertTerminalDisplayUnicode(rendered);
     assert.ok(rendered.includes('next line'));
   }
 
@@ -1932,7 +1960,7 @@ test('subagent_jobs renderers escape terminal controls without changing job outp
   const theme = { fg: (_color, text) => text, bold: text => text };
   const esc = String.fromCharCode(27);
   const c1Csi = String.fromCharCode(0x9b);
-  const hostile = `terminal ${esc}]52;c;pi-subagents-test${String.fromCharCode(7)} ${esc}[2J${c1Csi}2J\nnext line`;
+  const hostile = `terminal ${esc}]52;c;pi-subagents-test${String.fromCharCode(7)} ${esc}[2J${c1Csi}2J ${terminalDisplayUnicode.text}\nnext line`;
   const id = await launch({ task: 'terminal-control-text', notify: false });
   await finish(id);
 
@@ -1953,6 +1981,7 @@ test('subagent_jobs renderers escape terminal controls without changing job outp
       assert.equal(rendered.includes(String.fromCharCode(7)), false, `BEL must not reach the terminal (expanded=${expanded})`);
       assert.ok(rendered.includes('\\u001b]52;c;pi-subagents-test\\u0007'));
       assert.ok(rendered.includes('\\u009b2J'));
+      assertTerminalDisplayUnicode(rendered);
     }
   }
 
@@ -1966,18 +1995,21 @@ test('subagent_jobs renderers escape terminal controls without changing job outp
   assert.ok(renderedCall.includes('step review\\u001b[2J'));
 });
 
-test('terminal display escaping bounds expansion for control-heavy tool output', () => {
+test('terminal display escaping bounds expansion for control- and format-heavy tool output', () => {
   initTheme('dark', false);
   const definition = tools.get('subagent_jobs').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };
   const esc = String.fromCharCode(27);
-  const hostile = `${esc}[2J`.repeat(40_000);
+  const languageTag = terminalDisplayUnicode.hidden[3];
+  const hostile = `${esc}[2J${languageTag}`.repeat(40_000);
   const rendered = definition.renderResult(
     { content: [{ type: 'text', text: hostile }] }, { expanded: true }, theme, { isError: false },
   ).render(80).join('\n');
 
   assert.equal(rendered.includes(`${esc}[2J`), false, 'hostile cursor controls must be escaped');
+  assert.equal(rendered.includes(languageTag), false, 'invisible formatting characters must be escaped');
   assert.ok(rendered.includes('\\u001b[2J'), 'escaped control sequences remain readable');
+  assert.ok(rendered.includes('\\u{e0001}'), 'escaped supplementary characters remain readable');
   assert.ok(rendered.length <= hostile.length + 128 * 1024,
     `renderer added excessive output (${rendered.length} characters for ${hostile.length} input characters)`);
 });
@@ -4568,7 +4600,8 @@ test('background output can page captured stderr without changing the default re
   assert.equal(resultPage.structuredContent.output.stream, 'result');
   assert.equal(resultPage.structuredContent.output.text, 'result: stderr-output');
 
-  let offset = 0, stderr = '', controlPage;
+  let offset = 0, stderr = '', controlPage, invisiblePage;
+  const zeroWidthSpace = terminalDisplayUnicode.hidden[0];
   do {
     const page = await invoke('subagent_jobs', { action: 'output', jobId: id, stream: 'stderr', offset, limit: 7 });
     assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, page.structuredContent), true);
@@ -4577,13 +4610,14 @@ test('background output can page captured stderr without changing the default re
     assert.equal(output.stderrTruncated, false);
     assert.ok(Buffer.byteLength(output.text) <= 7);
     if (output.text.includes(String.fromCharCode(27))) controlPage = page;
+    if (output.text.includes(zeroWidthSpace)) invisiblePage = page;
     stderr += output.text;
     if (output.nextOffset === null) break;
     offset = output.nextOffset;
   } while (true);
 
   const esc = String.fromCharCode(27), bell = String.fromCharCode(7), c1 = String.fromCharCode(0x9b);
-  const expected = `warning: café 🛰️\nterminal ${esc}]52;c;pi-subagents-test${bell} ${esc}[2J${c1}2J\nnext line`;
+  const expected = `warning: café 🛰️\nterminal ${esc}]52;c;pi-subagents-test${bell} ${esc}[2J${c1}2J ${terminalDisplayUnicode.text}\nnext line`;
   assert.equal(stderr, expected, 'UTF-8 stderr pages reconstruct the original captured stream');
   assert.ok(controlPage, 'The hostile stderr controls were present in a paginated response');
   const definition = tools.get('subagent_jobs').definition;
@@ -4592,6 +4626,10 @@ test('background output can page captured stderr without changing the default re
   assert.equal(rendered.includes(esc), false, 'stderr terminal controls must be escaped for display');
   assert.equal(rendered.includes(bell), false);
   assert.equal(rendered.includes(c1), false);
+  assert.ok(invisiblePage, 'The captured stderr included invisible Unicode formatting');
+  const renderedInvisiblePage = definition.renderResult(invisiblePage, { expanded: true }, theme, { isError: false }).render(100).join('\n');
+  assert.equal(renderedInvisiblePage.includes(zeroWidthSpace), false);
+  assert.ok(renderedInvisiblePage.includes('\\u200b'), 'stderr formatting characters are visible in page previews');
   const renderedCall = definition.renderCall({ action: 'output', jobId: id, stream: 'stderr' }, theme, {}).render(100).join('\n');
   assert.match(renderedCall, /stderr/, 'The TUI call preview identifies the selected output stream');
 });
