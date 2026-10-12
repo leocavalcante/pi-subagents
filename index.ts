@@ -1681,16 +1681,16 @@ export default function (pi: ExtensionAPI) {
 				message: truncateAgentListingText(diagnostic.message, MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES),
 			}));
 			const listing = pageAgents.map((a) => {
+				const tagLabel = a.tags !== undefined ? ` [tags=${a.tags.length ? a.tags.join(",") : "none"}]` : "";
 				const config = [
 					a.model && `model=${displayUntrustedText(a.model)}`,
 					a.thinking && `thinking=${a.thinking}`,
 					a.tools && `tools=${displayUntrustedText(a.tools.length ? a.tools.join(",") : "none")}`,
-					a.tags && `tags=${a.tags.length ? a.tags.join(",") : "none"}`,
 					a.unsetEnv && `unsetEnv=${displayUntrustedText(a.unsetEnv.length ? a.unsetEnv.join(",") : "none")}`,
 					a.timeoutMs !== undefined && `timeoutMs=${a.timeoutMs}`,
 					a.cwd !== undefined && `cwd=${displayUntrustedText(a.cwd)}`,
 				].filter(Boolean).join("; ");
-				const line = `${displayUntrustedText(a.name)} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
+				const line = `${displayUntrustedText(a.name)}${tagLabel} (${a.source}): ${displayUntrustedText(a.description)}${config ? ` [${config}]` : ""}\n  ${displayUntrustedText(a.filePath)}`;
 				return truncateOutput(line, MAX_AGENT_LISTING_LINE_BYTES, "...");
 			}).join("\n");
 			const warnings = boundedDiagnostics
