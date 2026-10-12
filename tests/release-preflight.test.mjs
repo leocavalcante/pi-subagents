@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { verifyStableRelease } from '../.github/scripts/check-release-package.mjs';
+import { inspectNpm, verifyStableRelease } from '../.github/scripts/check-release-package.mjs';
 
 const packageJson = { name: '@leocavalcante/pi-subagents', version: '0.1.0' };
 const publishWorkflow = readFileSync(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8');
@@ -34,6 +34,39 @@ test('release workflow gates publishing on preflight and matrix tests while test
   assert.match(workflow,
     /^  publish:\n    needs: \[preflight, test\]\n    if: github\.event\.release\.prerelease == false$/m,
     'stable publishing must require both successful preflight and matrix tests');
+});
+
+test('npm inspection uses an explicit bounded registry request', () => {
+  let invocation;
+  const status = inspectNpm(packageJson.name, (...args) => {
+    invocation = args;
+    return { status: 0, stderr: '' };
+  });
+
+  assert.equal(status, 'available');
+  assert.deepEqual(invocation, [
+    'npm', [
+      'view', packageJson.name, 'version', '--json',
+      '--registry=https://registry.npmjs.org',
+      '--fetch-retries=0',
+      '--fetch-timeout=15000',
+    ], { encoding: 'utf8' },
+  ]);
+});
+
+test('npm inspection distinguishes missing packages from unavailable registry states', () => {
+  for (const stderr of ['npm error E404: Not Found', '404 Not Found']) {
+    assert.equal(inspectNpm(packageJson.name, () => ({ status: 1, stderr })), 'missing');
+  }
+  for (const result of [
+    { status: 1, stderr: 'npm error E401: Unauthorized' },
+    { status: 1, stderr: '' },
+    { status: null, error: new Error('spawn failed') },
+    { status: 0, error: new Error('spawn failed') },
+  ]) {
+    assert.equal(inspectNpm(packageJson.name, () => result), 'unavailable');
+  }
+  assert.equal(inspectNpm(packageJson.name, () => { throw new Error('spawn failed'); }), 'unavailable');
 });
 
 test('release preflight validates stable version tags before querying npm', () => {
