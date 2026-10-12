@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { after, beforeEach, test } from 'node:test';
-import { linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { jiti } from './pi-runtime.mjs';
@@ -23,6 +23,30 @@ after(() => {
   if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
   rmSync(sandbox, { recursive: true, force: true });
+});
+
+test('inaccessible nested project agent directories stop ancestor fallback', {
+  skip: process.platform === 'win32' ? 'POSIX directory permissions are not portable to Windows' : process.getuid?.() === 0 ? 'root bypasses POSIX directory permissions' : false,
+}, () => {
+  const nestedPiDir = join(cwd, '.pi');
+  const nestedAgentDir = join(nestedPiDir, 'agents');
+  mkdirSync(nestedAgentDir, { recursive: true });
+  agent(projectDir, 'outer-only', 'name: outer-only\ndescription: Outer project agent');
+  agent(nestedAgentDir, 'nested-agent', 'name: nested-agent\ndescription: Nested project agent');
+  chmodSync(nestedPiDir, 0);
+
+  try {
+    const result = discoverAgents(cwd, 'project');
+    assert.deepEqual(result.agents, []);
+    assert.equal(result.projectAgentsDir, null);
+    assert.deepEqual(result.diagnostics, [{
+      filePath: nestedAgentDir, source: 'project',
+      message: 'Unable to inspect project agent directory safely.',
+    }]);
+  } finally {
+    chmodSync(nestedPiDir, 0o700);
+    rmSync(nestedPiDir, { recursive: true, force: true });
+  }
 });
 
 test('project agent symlinks to non-regular files are rejected without blocking', { skip: process.platform === 'win32' }, () => {

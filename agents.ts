@@ -444,19 +444,21 @@ function loadAgentsFromDir(
 	return agents;
 }
 
-function isDirectory(p: string): boolean {
-	try {
-		return fs.statSync(p).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-function findNearestProjectAgentsDir(cwd: string): { dir: string; root: string } | null {
+function findNearestProjectAgentsDir(cwd: string, diagnostics: AgentDiagnostic[]): { dir: string; root: string } | null {
 	let currentDir = path.resolve(cwd);
 	while (true) {
 		const candidate = path.join(currentDir, CONFIG_DIR_NAME, "agents");
-		if (isDirectory(candidate)) return { dir: candidate, root: currentDir };
+		try {
+			if (fs.statSync(candidate).isDirectory()) return { dir: candidate, root: currentDir };
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR") {
+				// If this nearer location cannot be inspected, falling back to an
+				// ancestor could silently select a different project's definitions.
+				addDiagnostic(diagnostics, candidate, "project", "Unable to inspect project agent directory safely.");
+				return null;
+			}
+		}
 
 		const parentDir = path.dirname(currentDir);
 		if (parentDir === currentDir) return null;
@@ -466,10 +468,9 @@ function findNearestProjectAgentsDir(cwd: string): { dir: string; root: string }
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
-	const projectLocation = findNearestProjectAgentsDir(cwd);
-	const projectAgentsDir = projectLocation?.dir ?? null;
-
 	const diagnostics: AgentDiagnostic[] = [];
+	const projectLocation = findNearestProjectAgentsDir(cwd, diagnostics);
+	const projectAgentsDir = projectLocation?.dir ?? null;
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user", diagnostics);
 	const projectAgents = scope === "user" || !projectLocation
 		? [] : loadAgentsFromDir(projectLocation.dir, "project", diagnostics, projectLocation.root);
