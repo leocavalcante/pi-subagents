@@ -92,7 +92,7 @@ import {
 	substituteChainContext,
 	substituteChainContextBounded,
 } from "./chain.ts";
-import { isWellFormedUnicode } from "./unicode.ts";
+import { caseFoldUnicode, isWellFormedUnicode } from "./unicode.ts";
 import { ProgressUpdateLimiter } from "./progress.ts";
 import { waitForSharedOperation, type SharedAbortableOperationState } from "./abort.ts";
 import { buildWindowsSupervisorInvocation } from "./windows-supervisor-invocation.ts";
@@ -151,16 +151,6 @@ function escapeTerminalText(value: string): string {
 		expandedBy += 5;
 		return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
 	});
-}
-
-function normalizeAgentSearchText(value: string): string {
-	// Normalize around lowercasing so canonically equivalent composed/decomposed
-	// text matches. Unicode lowercasing is context-sensitive for Greek sigma, so
-	// fold final sigma back to the ordinary form. JavaScript lowercasing is not
-	// full case folding, so also expand German sharp s to match `ss` spellings.
-	return value.normalize("NFC").toLowerCase().normalize("NFC")
-		.replace(/\u03c2/g, "\u03c3")
-		.replace(/\u00df/g, "ss");
 }
 
 function displayUntrustedText(value: string): string {
@@ -1533,7 +1523,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
 			"Set name to look up one exact, case-sensitive definition, or query to search names and descriptions after scope precedence is applied.",
-			`Search queries use NFC-normalized, case-insensitive literal substring matching (including Greek sigma folding and German ß/ẞ-to-ss folding), are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes, and cannot be combined with exact name lookup.`,
+			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds), are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes, and cannot be combined with exact name lookup.`,
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes. Structured paths and cwd metadata are limited to ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; diagnostic messages are limited to ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes. Longer values are marked as truncated.`,
 			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
@@ -1543,7 +1533,7 @@ export default function (pi: ExtensionAPI) {
 			name: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_NAME_BYTES,
 				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with query.` })),
 			query: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_SEARCH_QUERY_BYTES,
-				description: `Case-insensitive literal substring search in NFC-normalized agent names and descriptions, including Greek sigma and German ß/ẞ-to-ss folding (maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with name.` })),
+				description: `NFC-normalized literal substring search with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with name.` })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
 				description: "Zero-based offset into the locale-independent agent-name ordering, after any name or query filter. Default: 0." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE,
@@ -1621,7 +1611,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const exactName = typeof requestedName === "string" ? requestedName : undefined;
 			const query = typeof requestedQuery === "string" ? requestedQuery.trim() : undefined;
-			const normalizedQuery = query === undefined ? undefined : normalizeAgentSearchText(query);
+			const normalizedQuery = query === undefined ? undefined : caseFoldUnicode(query);
 			const requestedOffset: unknown = params.offset;
 			const offset = requestedOffset === undefined ? 0 : requestedOffset;
 			if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_AGENT_FILES * 2) {
@@ -1636,8 +1626,8 @@ export default function (pi: ExtensionAPI) {
 			const allAgents = discovery.agents
 				.filter((agent) => exactName === undefined || agent.name === exactName)
 				.filter((agent) => normalizedQuery === undefined ||
-					normalizeAgentSearchText(agent.name).includes(normalizedQuery) ||
-					normalizeAgentSearchText(agent.description).includes(normalizedQuery))
+					caseFoldUnicode(agent.name).includes(normalizedQuery) ||
+					caseFoldUnicode(agent.description).includes(normalizedQuery))
 				.map((agent) => ({
 					name: agent.name,
 					description: agent.description,
