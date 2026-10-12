@@ -1522,8 +1522,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent agents",
 		description: [
 			"List available subagents, descriptions, configuration, and source paths without running them.",
-			"Set name to look up one exact, case-sensitive definition, or query to search names, descriptions, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
-			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with exact name lookup.`,
+			"Set name to look up one exact, case-sensitive definition, or query to search names, descriptions, source filenames, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
+			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, definition filenames (not parent directories), explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with exact name lookup.`,
 			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
 			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes. Structured paths and cwd metadata are limited to ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; diagnostic messages are limited to ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes. Longer values are marked as truncated.`,
 			`Reports invalid and duplicate definitions. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
@@ -1533,7 +1533,7 @@ export default function (pi: ExtensionAPI) {
 			name: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_NAME_BYTES,
 				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with query.` })),
 			query: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_SEARCH_QUERY_BYTES,
-				description: `NFC-normalized literal substring search in names, descriptions, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred; environment variable values are never searched; cannot be combined with name.` })),
+				description: `NFC-normalized literal substring search in names, descriptions, definition filenames (not parent directories), explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred; environment variable values are never searched; cannot be combined with name.` })),
 			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
 				description: "Zero-based offset into the locale-independent agent-name ordering, after any name or query filter. Default: 0." })),
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_LISTING_PAGE_SIZE,
@@ -1628,6 +1628,7 @@ export default function (pi: ExtensionAPI) {
 				.filter((agent) => normalizedQuery === undefined ||
 					caseFoldUnicode(agent.name).includes(normalizedQuery) ||
 					caseFoldUnicode(agent.description).includes(normalizedQuery) ||
+					caseFoldUnicode(path.basename(agent.filePath)).includes(normalizedQuery) ||
 					(agent.tools?.some((tool) => caseFoldUnicode(tool).includes(normalizedQuery)) ?? false) ||
 					(agent.cwd !== undefined && caseFoldUnicode(agent.cwd).includes(normalizedQuery)) ||
 					(agent.unsetEnv?.some((name) => caseFoldUnicode(name).includes(normalizedQuery)) ?? false) ||
