@@ -4306,6 +4306,42 @@ test('collapsed single-task rendering does not scan or escape the full captured 
   assert.ok(escapedLengths.every(length => length <= 1024), 'Unicode display escaping never scans the full capture');
 });
 
+test('collapsed failure previews bound text before terminal escaping', () => {
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const failure = 'x'.repeat(2 * 1024 * 1024);
+  const result = {
+    content: [],
+    details: {
+      mode: 'single', agentScope: 'user', projectAgentsDir: null,
+      results: [{
+        agent: 'worker', agentSource: 'user', task: 'bounded failure preview', exitCode: 1, stderr: '',
+        errorMessage: failure, messages: [],
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+      }],
+    },
+  };
+  const originalReplace = String.prototype.replace;
+  const escapedLengths = [];
+  String.prototype.replace = function(search, replacement) {
+    if (search instanceof RegExp && search.source.includes('Default_Ignorable_Code_Point')) {
+      escapedLengths.push(String(this).length);
+    }
+    return originalReplace.call(this, search, replacement);
+  };
+  let preview;
+  try {
+    preview = definition.renderResult(result, { expanded: false }, theme, {}).render(80).join('\n');
+  } finally {
+    String.prototype.replace = originalReplace;
+  }
+
+  assert.ok(escapedLengths.length > 0, 'error previews still sanitize terminal-sensitive text');
+  assert.ok(escapedLengths.every(length => length <= 1024), 'large error strings are bounded before display escaping');
+  assert.match(preview, /Preview truncated/);
+  assert.equal(result.details.results[0].errorMessage, failure, 'rendering must not modify captured error details');
+});
+
 test('collapsed rendering retains only the displayed suffix of large message histories', () => {
   const definition = tools.get('subagent').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };
