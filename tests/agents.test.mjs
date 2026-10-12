@@ -179,6 +179,18 @@ test('malformed YAML and invalid definitions do not break discovery', () => {
   assert.ok(result.diagnostics.every(d => d.source === 'user' && d.filePath && d.message));
 });
 
+test('malformed YAML diagnostics never echo private frontmatter content', () => {
+  const secret = 'PRIVATE_AGENT_FRONTMATTER_SECRET';
+  writeFileSync(join(userDir, 'private-malformed.md'),
+    `---\nname: [${secret}\ndescription: Private malformed metadata\n---\nInstructions.`);
+
+  const result = discoverAgents(cwd, 'user');
+  assert.deepEqual(result.agents, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.equal(result.diagnostics[0].message, 'Invalid YAML frontmatter.');
+  assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
 test('agent definitions with invalid UTF-8 are rejected without exposing prompt bytes', () => {
   const privatePrompt = 'PRIVATE_INVALID_UTF8_PROMPT';
   writeFileSync(join(userDir, 'bad-utf8.md'), Buffer.concat([
