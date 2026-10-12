@@ -232,7 +232,15 @@ function loadAgentsFromDir(
 		}
 	}
 
-	if (!fs.existsSync(dir)) {
+	try {
+		if (!fs.statSync(dir).isDirectory()) {
+			addDiagnostic(diagnostics, dir, source, "Unable to read agent directory.");
+			return agents;
+		}
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ENOTDIR") return agents;
+		addDiagnostic(diagnostics, dir, source, "Unable to inspect agent directory safely.");
 		return agents;
 	}
 
