@@ -2546,11 +2546,12 @@ test('agent listing supports exact-name lookup after scope precedence', async ()
   } finally { rmSync(projectAgent, { force: true }); }
 });
 
-test('agent listing searches identity, capabilities, and configured defaults after scope precedence with filtered pagination', async () => {
+test('agent listing searches identity, capabilities, source filenames, and configured defaults after scope precedence with filtered pagination', async () => {
   const definitions = [
     ['lookup-oauth.md', 'lookup-oauth', 'OAuth security reviewer'],
     ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
     ['lookup-db.md', 'lookup-db', 'Database migration helper'],
+    ['source-label-only.md', 'lookup-filename-only', 'Plain description'],
     ['lookup-tool.md', 'lookup-tool-agent', 'Configured transport helper', ['read', 'custom-shell']],
     ['lookup-greek.md', 'lookup-greek', 'ΟΣ reviewer'],
     ['lookup-sharp-s-name.md', 'straße-reviewer', 'German language reviewer'],
@@ -2583,7 +2584,8 @@ test('agent listing searches identity, capabilities, and configured defaults aft
   writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\nmodel: vendor/project-model\nthinking: max\nunsetEnv: [GITHUB_TOKEN]\ncwd: /work/project-runtime\ntimeoutMs: 654000\n---\nProject override instructions.\n');
   try {
     const toolDescription = tools.get('subagent_agents').definition.description;
-    assert.match(toolDescription, /search names, descriptions, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
+    assert.match(toolDescription, /search names, descriptions, source filenames, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
+    assert.match(toolDescription, /definition filenames \(not parent directories\)/);
     assert.match(toolDescription, /cwd paths/);
     assert.match(toolDescription, /decimal timeoutMs values \(milliseconds\)/);
     assert.match(toolDescription, /unsetEnv variable names/);
@@ -2607,6 +2609,14 @@ test('agent listing searches identity, capabilities, and configured defaults aft
 
     const nameMatch = await invoke('subagent_agents', { query: 'LOOKUP-DB' });
     assert.deepEqual(nameMatch.details.agents.map(agent => agent.name), ['lookup-db']);
+
+    const filenameMatch = await invoke('subagent_agents', { query: 'SOURCE-LABEL' });
+    assert.deepEqual(filenameMatch.details.agents.map(agent => agent.name), ['lookup-filename-only']);
+    assert.equal(filenameMatch.details.totalAgents, 1,
+      'source filenames are searchable even when their labels are absent from frontmatter');
+    const parentDirectoryOnly = await invoke('subagent_agents', { query: 'pi-subagents-test-' });
+    assert.equal(parentDirectoryOnly.details.totalAgents, 0,
+      'source search matches only the definition basename, not local directory components');
 
     const configuredToolMatch = await invoke('subagent_agents', { query: 'CUSTOM-SHELL' });
     assert.deepEqual(configuredToolMatch.details.agents.map(agent => agent.name), ['lookup-override', 'lookup-tool-agent']);

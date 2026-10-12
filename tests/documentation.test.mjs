@@ -122,7 +122,7 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /paginated in groups of at most 10/);
   assert.match(usage, /pass the returned `nextOffset` to continue/);
   assert.match(usage, /pass its exact, case-sensitive name/);
-  assert.match(usage, /case-insensitive literal substring matching in names, descriptions, explicitly configured tool allowlists, `cwd` paths, `unsetEnv` environment-variable names, `timeoutMs` values \(as decimal milliseconds\), model selectors, and thinking levels/);
+  assert.match(usage, /case-insensitive literal substring matching in names, descriptions, definition filenames \(not parent directories\), explicitly configured tool allowlists, `cwd` paths, `unsetEnv` environment-variable names, `timeoutMs` values \(as decimal milliseconds\), model selectors, and thinking levels/);
   assert.match(usage, /Search does not infer runtime-default tools, the parent-session `cwd`, inherited model\/thinking settings, or unspecified deadlines; timeout values are matched as decimal milliseconds/);
   assert.match(usage, /It only searches the names of filtered environment variables, never their values/);
   assert.match(usage, /Unicode 17\.0 default \(non-Turkic\) full case folding and NFC normalization \(so canonically equivalent composed and decomposed forms match\)/);
