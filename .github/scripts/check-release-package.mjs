@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 const PACKAGE_JSON = new URL("../../package.json", import.meta.url);
 const NPM_REGISTRY = "https://registry.npmjs.org";
 
-function inspectNpm(specifier) {
+export function inspectNpm(specifier, run = spawnSync) {
 	try {
-		const result = spawnSync("npm", [
+		const result = run("npm", [
 			"view", specifier, "version", "--json",
 			`--registry=${NPM_REGISTRY}`,
 			"--fetch-retries=0",
