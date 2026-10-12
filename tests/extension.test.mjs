@@ -2528,6 +2528,8 @@ test('agent listing searches names and descriptions after scope precedence with 
     ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
     ['lookup-db.md', 'lookup-db', 'Database migration helper'],
     ['lookup-greek.md', 'lookup-greek', 'ΟΣ reviewer'],
+    ['lookup-sharp-s-name.md', 'straße-reviewer', 'German language reviewer'],
+    ['lookup-sharp-s-description.md', 'lookup-sharp-s-description', 'Straße compliance reviewer'],
     ['lookup-cafe-composed.md', 'lookup-cafe-composed', 'Café tooling'],
     ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
     ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
@@ -2563,6 +2565,18 @@ test('agent listing searches names and descriptions after scope precedence with 
     const greekMatch = await invoke('subagent_agents', { query: 'σ' });
     assert.deepEqual(greekMatch.details.agents.map(agent => agent.name), ['lookup-greek'],
       'Greek final sigma in stored text should match ordinary sigma in a query');
+
+    const sharpSNameMatch = await invoke('subagent_agents', { query: 'STRASSE-REVIEWER' });
+    assert.deepEqual(sharpSNameMatch.details.agents.map(agent => agent.name), ['straße-reviewer'],
+      'German sharp s in agent names should match `ss` in the query');
+
+    const sharpSDescriptionMatch = await invoke('subagent_agents', { query: 'STRASSE COMPLIANCE' });
+    assert.deepEqual(sharpSDescriptionMatch.details.agents.map(agent => agent.name), ['lookup-sharp-s-description'],
+      'German sharp s in descriptions should match `ss` in the query');
+
+    const capitalSharpSMatch = await invoke('subagent_agents', { query: 'STRAẞE COMPLIANCE' });
+    assert.deepEqual(capitalSharpSMatch.details.agents.map(agent => agent.name), ['lookup-sharp-s-description'],
+      'Capital sharp s in a query should match lowercase sharp s in descriptions');
 
     const decomposedQuery = await invoke('subagent_agents', { query: 'cafe\u0301 tool' });
     assert.deepEqual(decomposedQuery.details.agents.map(agent => agent.name), ['lookup-cafe-composed'],
