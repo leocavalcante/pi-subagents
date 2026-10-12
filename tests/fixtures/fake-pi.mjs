@@ -50,7 +50,8 @@ const toolUseEvent = { type: 'message_end', message: {
   stopReason: 'toolUse', usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } },
 } };
 if (task === 'unretained-model') {
-  const model = 'm'.repeat(7 * 1024 * 1024);
+  // Eight parallel model fields exceed the 32 MiB result cap without large concurrent child records.
+  const model = 'm'.repeat(33 * 1024 * 1024 / 8);
   const largeModelEvent = { type: 'message_end', message: { role: 'assistant', content: [], model, stopReason: 'toolUse' } };
   const finalEvent = { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'model metadata retained' }], stopReason: 'stop' } };
   await write(process.stdout, JSON.stringify(largeModelEvent) + '\n');
