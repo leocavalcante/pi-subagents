@@ -113,21 +113,25 @@ test('README distinguishes absent personal agent directories from inspection fai
   assert.match(agents, /A missing personal-agent directory is treated as empty; permission and other inspection failures are reported as diagnostics rather than silently appearing empty/);
 });
 
-test('README documents bounded agent descriptions', () => {
+test('README documents bounded agent descriptions and discovery tags', () => {
   const agents = section('Agent definitions');
   assert.match(agents, /Descriptions are limited to 1 KiB of UTF-8 text/);
   assert.match(agents, /definition files must be valid UTF-8/);
   assert.match(agents, /metadata escapes that produce unpaired UTF-16 surrogates are rejected/);
+  assert.match(agents, /optional discovery `tags`/);
+  assert.match(agents, /Tags are ASCII slugs using letters, digits, dots, underscores, or hyphens, beginning with a letter or digit; input is normalized to lowercase/);
+  assert.match(agents, /limited to 32 labels of at most 64 bytes each and 2 KiB total/);
+  assert.match(agents, /They do not change child execution/);
 });
 
 test('README documents the agent configuration exposed by discovery', () => {
   const usage = section('Usage');
-  assert.match(usage, /model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults/);
+  assert.match(usage, /tags, source paths, model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults/);
   assert.match(usage, /configured timeout, working-directory and filtered-environment defaults/);
   assert.match(usage, /paginated in groups of at most 10/);
   assert.match(usage, /pass the returned `nextOffset` to continue/);
   assert.match(usage, /pass its exact, case-sensitive name/);
-  assert.match(usage, /case-insensitive literal substring matching in names, descriptions, definition filenames \(not parent directories\), explicitly configured tool allowlists, `cwd` paths, `unsetEnv` environment-variable names, `timeoutMs` values \(as decimal milliseconds\), model selectors, and thinking levels/);
+  assert.match(usage, /case-insensitive literal substring matching in names, descriptions, definition filenames \(not parent directories\), tags, explicitly configured tool allowlists, `cwd` paths, `unsetEnv` environment-variable names, `timeoutMs` values \(as decimal milliseconds\), model selectors, and thinking levels/);
   assert.match(usage, /Search does not infer runtime-default tools, the parent-session `cwd`, inherited model\/thinking settings, or unspecified deadlines; timeout values are matched as decimal milliseconds/);
   assert.match(usage, /It only searches the names of filtered environment variables, never their values/);
   assert.match(usage, /Unicode 17\.0 default \(non-Turkic\) full case folding and NFC normalization \(so canonically equivalent composed and decomposed forms match\)/);

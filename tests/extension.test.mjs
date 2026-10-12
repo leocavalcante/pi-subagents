@@ -23,6 +23,8 @@ const {
   MAX_AGENT_SEARCH_QUERY_BYTES,
   MAX_AGENT_TOOL_COUNT,
   MAX_AGENT_TOOL_LIST_BYTES,
+  MAX_AGENT_TAG_BYTES,
+  MAX_AGENT_TAG_COUNT,
   MAX_MODEL_SELECTOR_BYTES,
   MAX_TIMEOUT_MS,
   MAX_WORKING_DIRECTORY_LENGTH,
@@ -2576,15 +2578,18 @@ test('agent listing searches identity, capabilities, source filenames, and confi
       ...(unsetEnv ? [`unsetEnv: ${JSON.stringify(unsetEnv)}`] : []),
       ...(cwd ? [`cwd: ${JSON.stringify(cwd)}`] : []),
       ...(timeoutMs ? [`timeoutMs: ${timeoutMs}`] : []),
+      ...(name === 'lookup-oauth' ? [`tags: ${JSON.stringify(['Incident-Response', 'documentation'])}`] : []),
+      ...(name === 'lookup-override' ? [`tags: ${JSON.stringify(['personal-sensitive'])}`] : []),
     ].join('\n');
     writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n${metadata ? `${metadata}\n` : ''}---\nSearch test instructions.\n`);
     return file;
   });
   const projectOverride = join(sandbox, 'project/.pi/agents/lookup-override.md');
-  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\nmodel: vendor/project-model\nthinking: max\nunsetEnv: [GITHUB_TOKEN]\ncwd: /work/project-runtime\ntimeoutMs: 654000\n---\nProject override instructions.\n');
+  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\ntags: [project-review]\nmodel: vendor/project-model\nthinking: max\nunsetEnv: [GITHUB_TOKEN]\ncwd: /work/project-runtime\ntimeoutMs: 654000\n---\nProject override instructions.\n');
   try {
     const toolDescription = tools.get('subagent_agents').definition.description;
-    assert.match(toolDescription, /search names, descriptions, source filenames, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
+    assert.match(toolDescription, /search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
+    assert.match(toolDescription, /Tags are bounded lowercase discovery labels and do not configure child execution/);
     assert.match(toolDescription, /definition filenames \(not parent directories\)/);
     assert.match(toolDescription, /cwd paths/);
     assert.match(toolDescription, /decimal timeoutMs values \(milliseconds\)/);
@@ -2619,6 +2624,12 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     assert.equal(parentDirectoryOnly.details.totalAgents, 0,
       'source search matches only the definition basename, not local directory components');
 
+    const tagMatch = await invoke('subagent_agents', { query: 'INCIDENT-RESPONSE' });
+    assert.equal(Value.Check(schema, tagMatch.structuredContent), true);
+    assert.deepEqual(tagMatch.details.agents.map(agent => agent.name), ['lookup-oauth']);
+    assert.deepEqual(tagMatch.details.agents[0].tags, ['incident-response', 'documentation']);
+    assert.match(tagMatch.content[0].text, /tags=incident-response,documentation/);
+
     const configuredToolMatch = await invoke('subagent_agents', { query: 'CUSTOM-SHELL' });
     assert.deepEqual(configuredToolMatch.details.agents.map(agent => agent.name), ['lookup-override', 'lookup-tool-agent']);
     assert.deepEqual(configuredToolMatch.details.agents[1].tools, ['read', 'custom-shell']);
@@ -2652,6 +2663,18 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     assert.deepEqual(timeoutMatch.details.agents.map(agent => agent.name), ['lookup-override']);
     assert.equal(timeoutMatch.details.agents[0].timeoutMs, 456000);
     const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
+    const shadowedPersonalTag = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'personal-sensitive',
+    }, projectContext);
+    assert.equal(shadowedPersonalTag.details.totalAgents, 0,
+      'a shadowed personal tag is not searchable');
+    const projectTag = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'PROJECT-REVIEW',
+    }, projectContext);
+    assert.deepEqual(projectTag.details.agents.map(agent => agent.name), ['lookup-override']);
+    assert.deepEqual(projectTag.details.agents[0].tags, ['project-review'],
+      'project tags replace the personal tags before discovery search');
+
     const shadowedModel = await invoke('subagent_agents', {
       agentScope: 'both', query: 'vendor/personal-secret',
     }, projectContext);
@@ -3011,6 +3034,10 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
   assertRejected(candidate => { agent(candidate).tools = Array.from({ length: MAX_AGENT_TOOL_COUNT + 1 }, (_, index) => `tool-${index}`); }, 'oversized tool arrays must be rejected');
   assertRejected(candidate => { agent(candidate).tools = ['x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)]; }, 'oversized tool entries must be rejected');
   assertRejected(candidate => { agent(candidate).tools = ['read', 'read']; }, 'duplicate tool entries must be rejected');
+  assertRejected(candidate => { agent(candidate).tags = Array.from({ length: MAX_AGENT_TAG_COUNT + 1 }, (_, index) => `tag-${index}`); }, 'too many tags must be rejected');
+  assertRejected(candidate => { agent(candidate).tags = ['Invalid Tag']; }, 'invalid tags must be rejected');
+  assertRejected(candidate => { agent(candidate).tags = ['tag\n']; }, 'tags must reject trailing line terminators');
+  assertRejected(candidate => { agent(candidate).tags = ['review', 'review']; }, 'duplicate tags must be rejected');
   assertRejected(candidate => { agent(candidate).cwd = ''; }, 'empty working-directory defaults must be rejected');
   assertRejected(candidate => { agent(candidate).cwd = 'x'.repeat(MAX_AGENT_LISTING_PATH_BYTES + 1); }, 'oversized listed working directories must be rejected');
   assertRejected(candidate => { agent(candidate).filePath = 'x'.repeat(MAX_AGENT_LISTING_PATH_BYTES + 1); }, 'oversized agent paths must be rejected');
@@ -3027,6 +3054,7 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
     description: 'd'.repeat(MAX_AGENT_DESCRIPTION_BYTES),
     model: 'm'.repeat(MAX_MODEL_SELECTOR_BYTES),
     tools: Array.from({ length: MAX_AGENT_TOOL_COUNT }, (_, index) => `tool-${index}`),
+    tags: Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) => `tag-${index}`),
     cwd: 'c'.repeat(MAX_AGENT_LISTING_PATH_BYTES),
   });
   assert.equal(Value.Check(schema, atLimits), true, 'metadata at configured limits remains valid');
@@ -3040,6 +3068,9 @@ test('agent listing output schema enforces metadata bounds and exact fields', as
   const maxToolEntry = structuredClone(listing);
   agent(maxToolEntry).tools = ['t'.repeat(MAX_AGENT_TOOL_LIST_BYTES)];
   assert.equal(Value.Check(schema, maxToolEntry), true, 'tool entries at the configured byte limit remain valid');
+  const maxTagEntry = structuredClone(listing);
+  agent(maxTagEntry).tags = ['x'.repeat(MAX_AGENT_TAG_BYTES)];
+  assert.equal(Value.Check(schema, maxTagEntry), true, 'tag entries at the configured byte limit remain valid');
 });
 
 test('agent listing output schema caps agent and diagnostic collection sizes', async () => {

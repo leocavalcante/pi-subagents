@@ -54,16 +54,19 @@ description: General-purpose worker
 Complete the delegated task. Report the changes made and checks run.
 ```
 
-An agent can set `model`, `thinking`, `tools`, a default `timeoutMs`, a default working directory with `cwd`, and inherited environment variables to remove with `unsetEnv` in its frontmatter. Agent `cwd` paths resolve relative to the parent session's working directory, not the definition file. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
+An agent can set `model`, `thinking`, `tools`, optional discovery `tags`, a default `timeoutMs`, a default working directory with `cwd`, and inherited environment variables to remove with `unsetEnv` in its frontmatter. Agent `cwd` paths resolve relative to the parent session's working directory, not the definition file. Model selectors are limited to 512 UTF-8 bytes and reject control characters so they remain safe to pass as child-process arguments:
 
 ```yaml
 model: anthropic/claude-sonnet-4-5
 thinking: high
 tools: [read, bash]
 timeoutMs: 120000
+tags: [security, code-review]
 cwd: packages/app
 unsetEnv: [AWS_SECRET_ACCESS_KEY, PRIVATE_TOKEN]
 ```
+
+Tags are ASCII slugs using letters, digits, dots, underscores, or hyphens, beginning with a letter or digit; input is normalized to lowercase. Tags are for discovery only, limited to 32 labels of at most 64 bytes each and 2 KiB total, and searchable with `subagent_agents`. They do not change child execution.
 
 An agent with no `model` configured—or with an empty or whitespace-only `model` value—inherits the parent's active model and thinking level. An explicit `thinking` overrides the inherited level or the level in a model suffix. Valid levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; Pi clamps them to the model's capabilities.
 
@@ -77,7 +80,7 @@ Agent discovery is bounded for both personal and project directories: it scans a
 
 ## Usage
 
-Use `subagent_agents` to list agent descriptions, source paths, model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults, and invalid definitions without running an agent:
+Use `subagent_agents` to list agent descriptions, tags, source paths, model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults, and invalid definitions without running an agent:
 
 ```json
 {}
@@ -89,7 +92,7 @@ The default scope is `"user"`. To include project definitions:
 { "agentScope": "both" }
 ```
 
-Results are sorted by name and paginated in groups of at most 10. The response includes `offset`, `limit`, `totalAgents`, and `nextOffset`; pass the returned `nextOffset` to continue, keeping the same scope and filter. For example, use `{ "agentScope": "both", "offset": 10 }` for the next default-sized page. You may request a smaller `limit` from 1 to 10. To inspect one known definition without paging through earlier results, pass its exact, case-sensitive name, such as `{ "agentScope": "both", "name": "worker" }`. To search agent definitions by text, pass `query`, such as `{ "query": "authentication" }`; it performs case-insensitive literal substring matching in names, descriptions, definition filenames (not parent directories), explicitly configured tool allowlists, `cwd` paths, `unsetEnv` environment-variable names, `timeoutMs` values (as decimal milliseconds), model selectors, and thinking levels using Unicode 17.0 default (non-Turkic) full case folding and NFC normalization (so canonically equivalent composed and decomposed forms match). This includes Greek sigma, German sharp s (`ß`/`ẞ` → `ss`), long s, and ligature expansions; for example, `STRASSE` matches `Straße`. Queries are trimmed and limited to 256 UTF-8 bytes. Search does not infer runtime-default tools, the parent-session `cwd`, inherited model/thinking settings, or unspecified deadlines; timeout values are matched as decimal milliseconds. It only searches the names of filtered environment variables, never their values. Choose either `name` or `query`, not both. Filtering happens after scope precedence, so a project definition overrides a same-named personal definition when using `both`; pagination totals then describe only the matching definitions. Display rows are clipped to keep responses bounded. Structured paths and `cwd` values are capped at 4 KiB and diagnostic messages at 512 UTF-8 bytes; longer values are marked as truncated. These listing-only limits do not change the paths used to launch agents. Each page reports discovery diagnostics and excludes system prompt bodies. Project lookup starts at the parent session's working directory and checks ancestors for the nearest `.pi/agents` directory. Missing and non-directory candidates are skipped; if a nearer candidate cannot be inspected because of an access or I/O error, discovery stops with a diagnostic rather than silently falling back to an ancestor. A task's or agent's `cwd` changes where its child runs, not which definitions are loaded.
+Results are sorted by name and paginated in groups of at most 10. The response includes `offset`, `limit`, `totalAgents`, and `nextOffset`; pass the returned `nextOffset` to continue, keeping the same scope and filter. For example, use `{ "agentScope": "both", "offset": 10 }` for the next default-sized page. You may request a smaller `limit` from 1 to 10. To inspect one known definition without paging through earlier results, pass its exact, case-sensitive name, such as `{ "agentScope": "both", "name": "worker" }`. To search agent definitions by text, pass `query`, such as `{ "query": "authentication" }`; it performs case-insensitive literal substring matching in names, descriptions, definition filenames (not parent directories), tags, explicitly configured tool allowlists, `cwd` paths, `unsetEnv` environment-variable names, `timeoutMs` values (as decimal milliseconds), model selectors, and thinking levels using Unicode 17.0 default (non-Turkic) full case folding and NFC normalization (so canonically equivalent composed and decomposed forms match). This includes Greek sigma, German sharp s (`ß`/`ẞ` → `ss`), long s, and ligature expansions; for example, `STRASSE` matches `Straße`. Queries are trimmed and limited to 256 UTF-8 bytes. Search does not infer runtime-default tools, the parent-session `cwd`, inherited model/thinking settings, or unspecified deadlines; timeout values are matched as decimal milliseconds. It only searches the names of filtered environment variables, never their values. Choose either `name` or `query`, not both. Filtering happens after scope precedence, so a project definition overrides a same-named personal definition when using `both`; pagination totals then describe only the matching definitions. Display rows are clipped to keep responses bounded. Structured paths and `cwd` values are capped at 4 KiB and diagnostic messages at 512 UTF-8 bytes; longer values are marked as truncated. These listing-only limits do not change the paths used to launch agents. Each page reports discovery diagnostics and excludes system prompt bodies. Project lookup starts at the parent session's working directory and checks ancestors for the nearest `.pi/agents` directory. Missing and non-directory candidates are skipped; if a nearer candidate cannot be inspected because of an access or I/O error, discovery stops with a diagnostic rather than silently falling back to an ancestor. A task's or agent's `cwd` changes where its child runs, not which definitions are loaded.
 
 Ask Pi to delegate:
 
