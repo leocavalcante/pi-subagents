@@ -141,7 +141,7 @@ const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]/gu;
 const PRESERVED_DISPLAY_CHARACTERS = /^(?:\u200c|\u200d|\p{Variation_Selector})$/u;
 const EMOJI_TAG_FLAG_SEQUENCES = /\u{1f3f4}\u{e0067}\u{e0062}(?:\u{e0065}\u{e006e}\u{e0067}|\u{e0073}\u{e0063}\u{e0074}|\u{e0077}\u{e006c}\u{e0073})\u{e007f}/gu;
-const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/g;
+const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff\p{Default_Ignorable_Code_Point}]/gu;
 const MAX_TERMINAL_ESCAPE_EXPANSION = 64 * 1024;
 
 function escapeDisplaySegment(value: string): string {
@@ -166,15 +166,29 @@ function escapeTerminalControls(value: string): string {
 
 function escapeTerminalText(value: string): string {
 	// Keep newlines and tabs for ordinary text/Markdown layout, but make terminal
-	// escape bytes and other non-printing controls visible before TUI rendering.
-	// Bound expansion so control-heavy child output cannot multiply retained text.
+	// escape bytes and invisible formatting characters visible before TUI rendering.
+	// Preserve valid emoji tag flags, script joiners, and variation selectors.
+	// Bound expansion so hostile child output cannot multiply retained text.
 	let expandedBy = 0;
-	return value.replace(UNSAFE_TERMINAL_TEXT_CHARACTERS, (character) => {
-		// Every match is one UTF-16 code unit; the visible escape adds five.
-		if (expandedBy + 5 > MAX_TERMINAL_ESCAPE_EXPANSION) return "?";
-		expandedBy += 5;
-		return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+	const escapeSegment = (segment: string) => segment.replace(UNSAFE_TERMINAL_TEXT_CHARACTERS, (character) => {
+		if (PRESERVED_DISPLAY_CHARACTERS.test(character)) return character;
+		const codePoint = character.codePointAt(0)!;
+		const hex = codePoint.toString(16).padStart(4, "0");
+		const escaped = codePoint > 0xffff ? `\\u{${hex}}` : `\\u${hex}`;
+		const expansion = escaped.length - character.length;
+		if (expandedBy + expansion > MAX_TERMINAL_ESCAPE_EXPANSION) return "?";
+		expandedBy += expansion;
+		return escaped;
 	});
+
+	let escaped = "";
+	let start = 0;
+	for (const match of value.matchAll(EMOJI_TAG_FLAG_SEQUENCES)) {
+		const matchStart = match.index!;
+		escaped += escapeSegment(value.slice(start, matchStart)) + match[0];
+		start = matchStart + match[0].length;
+	}
+	return escaped + escapeSegment(value.slice(start));
 }
 
 function displayUntrustedText(value: string): string {

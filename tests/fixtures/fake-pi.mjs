@@ -3,7 +3,17 @@ import { spawn } from 'node:child_process';
 const args = process.argv.slice(2);
 const task = readFileSync(0, 'utf8').replace(/^Task: /, '');
 const flag = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined;
-const terminalControlText = `terminal ${String.fromCharCode(27)}]52;c;pi-subagents-test${String.fromCharCode(7)} ${String.fromCharCode(27)}[2J${String.fromCharCode(0x9b)}2J\nnext line`;
+const zeroWidthSpace = String.fromCodePoint(0x200b);
+const wordJoiner = String.fromCodePoint(0x2060);
+const mongolianVowelSeparator = String.fromCodePoint(0x180e);
+const languageTag = String.fromCodePoint(0xe0001);
+const standaloneTagCharacter = String.fromCodePoint(0xe0061);
+const zeroWidthJoiner = String.fromCodePoint(0x200d);
+const zeroWidthNonJoiner = String.fromCodePoint(0x200c);
+const variationSelector = String.fromCodePoint(0xfe0f);
+const englandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
+const preservedUnicode = `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter} ${englandFlag} 👩${zeroWidthJoiner}💻 می${zeroWidthNonJoiner}توان ✈${variationSelector}`;
+const terminalControlText = `terminal ${String.fromCharCode(27)}]52;c;pi-subagents-test${String.fromCharCode(7)} ${String.fromCharCode(27)}[2J${String.fromCharCode(0x9b)}2J ${preservedUnicode}\nnext line`;
 const trace = entry => {
   const safeEntry = { ...entry };
   if (typeof safeEntry.task === 'string' && safeEntry.task.length > 512 &&
