@@ -2882,6 +2882,13 @@ test('agentTags dispatch selects uniquely in single, parallel, and chain modes b
     const unmatched = await invoke('subagent', { agentTags: ['unavailable'], task: 'missing tags must not start' });
     assert.equal(unmatched.isError, true);
     assert.match(unmatched.content[0].text, /No in-scope agent/);
+    const oversizedTags = Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) =>
+      `${String(index).padStart(2, '0')}${'x'.repeat(MAX_AGENT_TAG_BYTES - 2)}`);
+    assert.equal(Value.Check(schema, { agentTags: oversizedTags, task: 'oversized selector' }), true,
+      'the schema bounds each label and item count, while aggregate UTF-8 size is validated at runtime');
+    const oversizedSelector = await invoke('subagent', { agentTags: oversizedTags, task: 'oversized selector must not start' });
+    assert.equal(oversizedSelector.isError, true);
+    assert.match(oversizedSelector.content[0].text, /agentTags must be an array of 1-32 valid ASCII labels totaling at most/);
     for (const params of [
       { task: 'selector missing' },
       { agent: 'worker', agentTags: ['security'], task: 'selectors conflict' },
