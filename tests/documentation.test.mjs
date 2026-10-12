@@ -30,6 +30,15 @@ test('README contents links every section and subsection to its heading', () => 
   assert.deepEqual(links.sort(), headings.sort(), 'Keep the contents links aligned with every README section and subsection');
 });
 
+test('README quick start connects installation, agent setup, and a first delegation', () => {
+  const quickStart = section('Quick start');
+  assert.ok(quickStart.includes('pi install git:github.com/leocavalcante/pi-subagents'));
+  assert.ok(quickStart.includes('~/.pi/agent/agents/reviewer.md'));
+  assert.match(quickStart, /name: reviewer/);
+  assert.match(quickStart, /Use reviewer to review the authentication code/);
+  assert.match(quickStart, /local installs and Windows setup/);
+});
+
 test('README documents the minimum Node.js version required by the package', () => {
   const engine = packageJson.engines?.node;
   assert.match(engine, /^>=\d+\.\d+\.\d+$/, 'Expected a simple minimum Node.js engine range');

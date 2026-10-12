@@ -6,6 +6,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 
 ## Contents
 
+- [Quick start](#quick-start)
 - [Installation](#installation)
 - [Agent definitions](#agent-definitions)
 - [Usage](#usage)
@@ -26,6 +27,32 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 - [Security](#security)
 - [Contributing](#contributing)
 - [Origin and license](#origin-and-license)
+
+## Quick start
+
+Install the extension from GitHub and reload Pi:
+
+```sh
+pi install git:github.com/leocavalcante/pi-subagents
+```
+
+Save a personal agent definition as `~/.pi/agent/agents/reviewer.md`:
+
+```markdown
+---
+name: reviewer
+description: Review code and report actionable findings
+---
+Review the requested code without changing files. Report findings with file and line references.
+```
+
+Then ask Pi to delegate a task:
+
+```text
+Use reviewer to review the authentication code for security issues. Do not modify files.
+```
+
+See [Installation](#installation) for local installs and Windows setup, and [Agent definitions](#agent-definitions) for project agents and optional settings.
 
 ## Installation
 
