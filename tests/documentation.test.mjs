@@ -33,6 +33,9 @@ test('README contents links every section and subsection to its heading', () => 
 test('README quick start connects installation, agent setup, and a first delegation', () => {
   const quickStart = section('Quick start');
   assert.ok(quickStart.includes('pi install git:github.com/leocavalcante/pi-subagents'));
+  assert.ok(quickStart.includes('enter `/reload`'));
+  assert.ok(quickStart.indexOf('pi install git:github.com/leocavalcante/pi-subagents') < quickStart.indexOf('enter `/reload`'));
+  assert.ok(quickStart.indexOf('enter `/reload`') < quickStart.indexOf('~/.pi/agent/agents/reviewer.md'));
   assert.ok(quickStart.includes('~/.pi/agent/agents/reviewer.md'));
   assert.match(quickStart, /mkdir -p ~\/.pi\/agent\/agents/);
   assert.match(quickStart, /New-Item -ItemType Directory -Force -Path \(Join-Path \$HOME "\.pi\/agent\/agents"\)/);

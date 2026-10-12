@@ -36,6 +36,8 @@ Install the extension from GitHub and reload Pi:
 pi install git:github.com/leocavalcante/pi-subagents
 ```
 
+If Pi is already running, enter `/reload` so it loads the newly installed extension.
+
 Create the personal agent directory if it does not already exist. On macOS/Linux, run:
 
 ```sh
