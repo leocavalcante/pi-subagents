@@ -2578,6 +2578,7 @@ test('agent listing searches identity, capabilities, source filenames, and confi
       ...(unsetEnv ? [`unsetEnv: ${JSON.stringify(unsetEnv)}`] : []),
       ...(cwd ? [`cwd: ${JSON.stringify(cwd)}`] : []),
       ...(timeoutMs ? [`timeoutMs: ${timeoutMs}`] : []),
+      ...(name === 'lookup-docs' ? [`tags: ${JSON.stringify(['Documentation'])}`] : []),
       ...(name === 'lookup-oauth' ? [`tags: ${JSON.stringify(['Incident-Response', 'documentation'])}`] : []),
       ...(name === 'lookup-override' ? [`tags: ${JSON.stringify(['personal-sensitive'])}`] : []),
     ].join('\n');
@@ -2589,6 +2590,7 @@ test('agent listing searches identity, capabilities, source filenames, and confi
   try {
     const toolDescription = tools.get('subagent_agents').definition.description;
     assert.match(toolDescription, /search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
+    assert.match(toolDescription, /tag to filter by one exact, case-insensitive capability label/);
     assert.match(toolDescription, /Tags are bounded lowercase discovery labels and do not configure child execution/);
     assert.match(toolDescription, /definition filenames \(not parent directories\)/);
     assert.match(toolDescription, /cwd paths/);
@@ -2630,6 +2632,23 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     assert.deepEqual(tagMatch.details.agents[0].tags, ['incident-response', 'documentation']);
     assert.match(tagMatch.content[0].text, /tags=incident-response,documentation/);
 
+    assert.equal(Value.Check(parameters, { tag: 'DOCUMENTATION', limit: 1 }), true);
+    const documentationFirst = await invoke('subagent_agents', { tag: 'DOCUMENTATION', limit: 1 });
+    assert.equal(documentationFirst.details.totalAgents, 2);
+    assert.deepEqual(documentationFirst.details.agents.map(agent => agent.name), ['lookup-docs']);
+    assert.equal(documentationFirst.details.nextOffset, 1);
+    assert.match(documentationFirst.content[0].text, /Results for tag "documentation": Agents 1-1 of 2/);
+    const documentationSecond = await invoke('subagent_agents', {
+      tag: 'documentation', offset: documentationFirst.details.nextOffset, limit: 1,
+    });
+    assert.deepEqual(documentationSecond.details.agents.map(agent => agent.name), ['lookup-oauth']);
+    assert.equal(documentationSecond.details.totalAgents, 2);
+    assert.equal(documentationSecond.details.nextOffset, null);
+    const partialTag = await invoke('subagent_agents', { tag: 'doc' });
+    assert.equal(partialTag.details.totalAgents, 0, 'tag filters match complete labels, not substrings');
+    const descriptionOnlyTag = await invoke('subagent_agents', { tag: 'oauth' });
+    assert.equal(descriptionOnlyTag.details.totalAgents, 0, 'tag filters ignore matching descriptions and other metadata');
+
     const configuredToolMatch = await invoke('subagent_agents', { query: 'CUSTOM-SHELL' });
     assert.deepEqual(configuredToolMatch.details.agents.map(agent => agent.name), ['lookup-override', 'lookup-tool-agent']);
     assert.deepEqual(configuredToolMatch.details.agents[1].tools, ['read', 'custom-shell']);
@@ -2668,6 +2687,15 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     }, projectContext);
     assert.equal(shadowedPersonalTag.details.totalAgents, 0,
       'a shadowed personal tag is not searchable');
+    const shadowedExactPersonalTag = await invoke('subagent_agents', {
+      agentScope: 'both', tag: 'PERSONAL-SENSITIVE',
+    }, projectContext);
+    assert.equal(shadowedExactPersonalTag.details.totalAgents, 0,
+      'exact tag filters do not match a shadowed personal definition');
+    const exactProjectTag = await invoke('subagent_agents', {
+      agentScope: 'both', tag: 'PROJECT-REVIEW',
+    }, projectContext);
+    assert.deepEqual(exactProjectTag.details.agents.map(agent => agent.name), ['lookup-override']);
     const projectTag = await invoke('subagent_agents', {
       agentScope: 'both', query: 'PROJECT-REVIEW',
     }, projectContext);
@@ -2806,8 +2834,28 @@ test('agent listing rejects invalid search queries before discovery output or ch
   }
   const combined = await invoke('subagent_agents', { name: 'worker', query: 'worker' });
   assert.equal(combined.isError, true);
-  assert.match(combined.content[0].text, /name and query cannot be combined/);
+  assert.match(combined.content[0].text, /name, query, and tag filters cannot be combined/);
   assert.equal(Value.Check(outputSchema, combined.structuredContent), true);
+  const tagAndQuery = await invoke('subagent_agents', { tag: 'security', query: 'review' });
+  assert.equal(tagAndQuery.isError, true);
+  assert.match(tagAndQuery.content[0].text, /name, query, and tag filters cannot be combined/);
+  assert.equal(Value.Check(outputSchema, tagAndQuery.structuredContent), true);
+  assert.equal(traces().length, 0);
+});
+
+test('agent listing rejects invalid exact tag filters before discovery output or child launch', async () => {
+  const parameters = tools.get('subagent_agents').definition.parameters;
+  const outputSchema = tools.get('subagent_agents').definition.outputSchema;
+  for (const tag of ['', 'tag name', 'unicode-é', '-leading', 'x'.repeat(MAX_AGENT_TAG_BYTES + 1), 'tag\n']) {
+    assert.equal(Value.Check(parameters, { tag }), false);
+  }
+  for (const tag of [null, 'Invalid Tag', 'tag\n', 'x'.repeat(MAX_AGENT_TAG_BYTES + 1)]) {
+    const result = await invoke('subagent_agents', { tag });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /tag must be a valid ASCII label/);
+    assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+    assert.equal(result.details.totalAgents, 0);
+  }
   assert.equal(traces().length, 0);
 });
 
