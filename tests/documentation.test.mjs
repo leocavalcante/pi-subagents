@@ -34,6 +34,9 @@ test('README quick start connects installation, agent setup, and a first delegat
   const quickStart = section('Quick start');
   assert.ok(quickStart.includes('pi install git:github.com/leocavalcante/pi-subagents'));
   assert.ok(quickStart.includes('~/.pi/agent/agents/reviewer.md'));
+  assert.match(quickStart, /mkdir -p ~\/.pi\/agent\/agents/);
+  assert.match(quickStart, /New-Item -ItemType Directory -Force -Path \(Join-Path \$HOME "\.pi\/agent\/agents"\)/);
+  assert.match(quickStart, /Create the personal agent directory if it does not already exist/);
   assert.match(quickStart, /name: reviewer/);
   assert.match(quickStart, /Use reviewer to review the authentication code/);
   assert.match(quickStart, /local installs and Windows setup/);
