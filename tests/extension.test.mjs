@@ -2546,7 +2546,7 @@ test('agent listing supports exact-name lookup after scope precedence', async ()
   } finally { rmSync(projectAgent, { force: true }); }
 });
 
-test('agent listing searches identity, capability, model, and thinking after scope precedence with filtered pagination', async () => {
+test('agent listing searches identity, capability, model, thinking, and environment filters after scope precedence with filtered pagination', async () => {
   const definitions = [
     ['lookup-oauth.md', 'lookup-oauth', 'OAuth security reviewer'],
     ['lookup-docs.md', 'lookup-docs', 'OAuth documentation writer'],
@@ -2564,24 +2564,27 @@ test('agent listing searches identity, capability, model, and thinking after sco
     ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
     ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
     ['lookup-model.md', 'lookup-model', 'Explicit model routing helper', undefined, 'vendor/custom-Reasoner', 'xhigh'],
-    ['lookup-override.md', 'lookup-override', 'Secret token helper', ['custom-shell'], 'vendor/personal-secret', 'low'],
+    ['lookup-override.md', 'lookup-override', 'Secret token helper', ['custom-shell'], 'vendor/personal-secret', 'low', ['AWS_SECRET_ACCESS_KEY']],
   ];
-  const userFiles = definitions.map(([filename, name, description, configuredTools, model, thinking]) => {
+  const userFiles = definitions.map(([filename, name, description, configuredTools, model, thinking, unsetEnv]) => {
     const file = join(sandbox, 'agent/agents', filename);
     const metadata = [
       ...(configuredTools ? [`tools: ${JSON.stringify(configuredTools)}`] : []),
       ...(model ? [`model: ${model}`] : []),
       ...(thinking ? [`thinking: ${thinking}`] : []),
+      ...(unsetEnv ? [`unsetEnv: ${JSON.stringify(unsetEnv)}`] : []),
     ].join('\n');
     writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n${metadata ? `${metadata}\n` : ''}---\nSearch test instructions.\n`);
     return file;
   });
   const projectOverride = join(sandbox, 'project/.pi/agents/lookup-override.md');
-  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\nmodel: vendor/project-model\nthinking: max\n---\nProject override instructions.\n');
+  writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\nmodel: vendor/project-model\nthinking: max\nunsetEnv: [GITHUB_TOKEN]\n---\nProject override instructions.\n');
   try {
     const toolDescription = tools.get('subagent_agents').definition.description;
-    assert.match(toolDescription, /search names, descriptions, and configured tools, models, and thinking settings/);
+    assert.match(toolDescription, /search names, descriptions, and configured tools, environment filters, models, and thinking settings/);
+    assert.match(toolDescription, /unsetEnv variable names/);
     assert.match(toolDescription, /runtime-default tools and inherited model\/thinking settings are not inferred/);
+    assert.match(toolDescription, /environment variable values are never searched/);
     const schema = tools.get('subagent_agents').definition.outputSchema;
     const parameters = tools.get('subagent_agents').definition.parameters;
     assert.equal(Value.Check(parameters, { query: '  oAuTh ' }), true);
@@ -2622,6 +2625,9 @@ test('agent listing searches identity, capability, model, and thinking after sco
     assert.equal((await invoke('subagent_agents', { query: 'max' }, { ...ctx(), thinkingLevel: 'max' })).details.totalAgents, 0,
       'search must not infer the parent thinking level for definitions without an explicit override');
     assert.deepEqual((await invoke('subagent_agents', { query: 'vendor/personal-secret' })).details.agents.map(agent => agent.name), ['lookup-override']);
+    const unsetEnvMatch = await invoke('subagent_agents', { query: 'aws_secret_access_key' });
+    assert.deepEqual(unsetEnvMatch.details.agents.map(agent => agent.name), ['lookup-override']);
+    assert.deepEqual(unsetEnvMatch.details.agents[0].unsetEnv, ['AWS_SECRET_ACCESS_KEY']);
     const projectContext = { ...ctx(), cwd: join(sandbox, 'project') };
     const shadowedModel = await invoke('subagent_agents', {
       agentScope: 'both', query: 'vendor/personal-secret',
@@ -2637,6 +2643,17 @@ test('agent listing searches identity, capability, model, and thinking after sco
     }, projectContext);
     assert.deepEqual(projectThinking.details.agents.map(agent => agent.name), ['lookup-override'],
       'a project thinking setting is searchable and replaces the shadowed personal setting');
+    const shadowedUnsetEnv = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'AWS_SECRET_ACCESS_KEY',
+    }, projectContext);
+    assert.equal(shadowedUnsetEnv.details.totalAgents, 0,
+      'a shadowed personal environment filter is not searchable');
+    const projectUnsetEnv = await invoke('subagent_agents', {
+      agentScope: 'both', query: 'github_token',
+    }, projectContext);
+    assert.deepEqual(projectUnsetEnv.details.agents.map(agent => agent.name), ['lookup-override']);
+    assert.deepEqual(projectUnsetEnv.details.agents[0].unsetEnv, ['GITHUB_TOKEN'],
+      'a project environment filter replaces the shadowed personal setting before search');
 
     const greekMatch = await invoke('subagent_agents', { query: 'σ' });
     assert.deepEqual(greekMatch.details.agents.map(agent => agent.name), ['lookup-greek'],
