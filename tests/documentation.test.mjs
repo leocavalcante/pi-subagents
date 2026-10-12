@@ -137,22 +137,28 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /Unicode 17\.0 default \(non-Turkic\) full case folding and NFC normalization \(so canonically equivalent composed and decomposed forms match\)/);
   assert.match(usage, /Greek sigma, German sharp s \(`ß`\/`ẞ` → `ss`\), long s, and ligature expansions/);
   assert.match(usage, /`STRASSE` matches `Straße`/);
-  assert.match(usage, /Choose one of `name`, `query`, or `tag`/);
+  assert.match(usage, /Choose one of `name`, `query`, `tag`, or `tags`/);
   assert.match(usage, /To return agents with one exact tag, pass `tag`/);
   assert.match(usage, /tag matching is case-insensitive, matches a complete label, and normalizes input to lowercase/);
-  assert.match(usage, /A tag filter cannot be combined with `name` or `query`/);
+  assert.match(usage, /To require several exact tags at once, pass `tags`/);
+  assert.match(usage, /every listed tag must match/);
+  assert.match(usage, /Neither tag filter can be combined with `name` or `query`/);
   assert.match(usage, /Filtering happens after scope precedence/);
   assert.match(usage, /Structured paths and `cwd` values are capped at 4 KiB and diagnostic messages at 512 UTF-8 bytes/);
   assert.match(usage, /These listing-only limits do not change the paths used to launch agents/);
 });
 
-test('README gives a concrete exact-tag discovery and pagination example', () => {
+test('README gives concrete exact- and multi-tag discovery examples', () => {
   const usage = section('Usage');
   assert.match(usage, /### Filter by capability tag/);
   assert.match(usage, /\{ "agentScope": "both", "tag": "security" \}/);
   assert.match(usage, /matching is case-insensitive/);
   assert.match(usage, /continue with the returned `nextOffset`, keeping the same scope and tag/);
   assert.match(usage, /\{ "agentScope": "both", "tag": "security", "offset": 10 \}/);
+  assert.match(usage, /### Filter by multiple capability tags/);
+  assert.match(usage, /\{ "agentScope": "both", "tags": \["security", "code-review"\] \}/);
+  assert.match(usage, /every requested exact tag/);
+  assert.match(usage, /keeping the same `agentScope` and `tags`/);
 });
 
 test('README documents agent timeout and environment-removal defaults and precedence', () => {

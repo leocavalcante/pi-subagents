@@ -2578,8 +2578,8 @@ test('agent listing searches identity, capabilities, source filenames, and confi
       ...(unsetEnv ? [`unsetEnv: ${JSON.stringify(unsetEnv)}`] : []),
       ...(cwd ? [`cwd: ${JSON.stringify(cwd)}`] : []),
       ...(timeoutMs ? [`timeoutMs: ${timeoutMs}`] : []),
-      ...(name === 'lookup-docs' ? [`tags: ${JSON.stringify(['Documentation'])}`] : []),
-      ...(name === 'lookup-oauth' ? [`tags: ${JSON.stringify(['Incident-Response', 'documentation'])}`] : []),
+      ...(name === 'lookup-docs' ? [`tags: ${JSON.stringify(['Documentation', 'Security'])}`] : []),
+      ...(name === 'lookup-oauth' ? [`tags: ${JSON.stringify(['Incident-Response', 'documentation', 'SECURITY'])}`] : []),
       ...(name === 'lookup-override' ? [`tags: ${JSON.stringify(['personal-sensitive'])}`] : []),
     ].join('\n');
     writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n${metadata ? `${metadata}\n` : ''}---\nSearch test instructions.\n`);
@@ -2590,7 +2590,7 @@ test('agent listing searches identity, capabilities, source filenames, and confi
   try {
     const toolDescription = tools.get('subagent_agents').definition.description;
     assert.match(toolDescription, /search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
-    assert.match(toolDescription, /tag to filter by one exact, case-insensitive capability label/);
+    assert.match(toolDescription, /tag to filter by one exact, case-insensitive capability label, tags to require every listed exact label/);
     assert.match(toolDescription, /Tags are bounded lowercase discovery labels and do not configure child execution/);
     assert.match(toolDescription, /definition filenames \(not parent directories\)/);
     assert.match(toolDescription, /cwd paths/);
@@ -2629,8 +2629,8 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     const tagMatch = await invoke('subagent_agents', { query: 'INCIDENT-RESPONSE' });
     assert.equal(Value.Check(schema, tagMatch.structuredContent), true);
     assert.deepEqual(tagMatch.details.agents.map(agent => agent.name), ['lookup-oauth']);
-    assert.deepEqual(tagMatch.details.agents[0].tags, ['incident-response', 'documentation']);
-    assert.match(tagMatch.content[0].text, /tags=incident-response,documentation/);
+    assert.deepEqual(tagMatch.details.agents[0].tags, ['incident-response', 'documentation', 'security']);
+    assert.match(tagMatch.content[0].text, /tags=incident-response,documentation,security/);
 
     assert.equal(Value.Check(parameters, { tag: 'DOCUMENTATION', limit: 1 }), true);
     const documentationFirst = await invoke('subagent_agents', { tag: 'DOCUMENTATION', limit: 1 });
@@ -2648,6 +2648,25 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     assert.equal(partialTag.details.totalAgents, 0, 'tag filters match complete labels, not substrings');
     const descriptionOnlyTag = await invoke('subagent_agents', { tag: 'oauth' });
     assert.equal(descriptionOnlyTag.details.totalAgents, 0, 'tag filters ignore matching descriptions and other metadata');
+
+    assert.equal(Value.Check(parameters, { tags: ['SECURITY', 'DOCUMENTATION', 'security'], limit: 1 }), true);
+    const matchingTagsFirst = await invoke('subagent_agents', {
+      tags: ['SECURITY', 'DOCUMENTATION', 'security'], limit: 1,
+    });
+    assert.equal(matchingTagsFirst.details.totalAgents, 2);
+    assert.deepEqual(matchingTagsFirst.details.agents.map(agent => agent.name), ['lookup-docs']);
+    assert.equal(matchingTagsFirst.details.nextOffset, 1);
+    assert.match(matchingTagsFirst.content[0].text, /Results with all tags "security", "documentation": Agents 1-1 of 2/);
+    const matchingTagsSecond = await invoke('subagent_agents', {
+      tags: ['documentation', 'security'], offset: matchingTagsFirst.details.nextOffset, limit: 1,
+    });
+    assert.deepEqual(matchingTagsSecond.details.agents.map(agent => agent.name), ['lookup-oauth']);
+    assert.equal(matchingTagsSecond.details.totalAgents, 2);
+    assert.equal(matchingTagsSecond.details.nextOffset, null);
+    const tagIntersection = await invoke('subagent_agents', { tags: ['incident-response', 'security'] });
+    assert.deepEqual(tagIntersection.details.agents.map(agent => agent.name), ['lookup-oauth']);
+    assert.equal((await invoke('subagent_agents', { tags: ['security', 'code-review'] })).details.totalAgents, 0,
+      'multi-tag filtering requires every exact label, not any one label');
 
     const configuredToolMatch = await invoke('subagent_agents', { query: 'CUSTOM-SHELL' });
     assert.deepEqual(configuredToolMatch.details.agents.map(agent => agent.name), ['lookup-override', 'lookup-tool-agent']);
@@ -2702,6 +2721,13 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     assert.deepEqual(projectTag.details.agents.map(agent => agent.name), ['lookup-override']);
     assert.deepEqual(projectTag.details.agents[0].tags, ['project-review'],
       'project tags replace the personal tags before discovery search');
+    assert.equal((await invoke('subagent_agents', {
+      agentScope: 'both', tags: ['personal-sensitive'],
+    }, projectContext)).details.totalAgents, 0,
+    'multi-tag filters must not match shadowed personal tags');
+    assert.deepEqual((await invoke('subagent_agents', {
+      agentScope: 'both', tags: ['PROJECT-REVIEW'],
+    }, projectContext)).details.agents.map(agent => agent.name), ['lookup-override']);
 
     const shadowedModel = await invoke('subagent_agents', {
       agentScope: 'both', query: 'vendor/personal-secret',
@@ -2834,12 +2860,35 @@ test('agent listing rejects invalid search queries before discovery output or ch
   }
   const combined = await invoke('subagent_agents', { name: 'worker', query: 'worker' });
   assert.equal(combined.isError, true);
-  assert.match(combined.content[0].text, /name, query, and tag filters cannot be combined/);
+  assert.match(combined.content[0].text, /name, query, tag, and tags filters cannot be combined/);
   assert.equal(Value.Check(outputSchema, combined.structuredContent), true);
   const tagAndQuery = await invoke('subagent_agents', { tag: 'security', query: 'review' });
   assert.equal(tagAndQuery.isError, true);
-  assert.match(tagAndQuery.content[0].text, /name, query, and tag filters cannot be combined/);
+  assert.match(tagAndQuery.content[0].text, /name, query, tag, and tags filters cannot be combined/);
   assert.equal(Value.Check(outputSchema, tagAndQuery.structuredContent), true);
+  for (const tags of [[], 'security', null, [''], ['security', 'bad tag'], ['unicode-é'], ['-leading'],
+    ['x'.repeat(MAX_AGENT_TAG_BYTES + 1)],
+    Array.from({ length: MAX_AGENT_TAG_COUNT + 1 }, (_, index) => `tag${index}`)]) {
+    const result = await invoke('subagent_agents', { tags });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /tags must (?:be|contain)/);
+    assert.equal(Value.Check(outputSchema, result.structuredContent), true);
+    assert.equal(result.details.totalAgents, 0);
+  }
+  const oversizedAggregate = Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) =>
+    `${String(index).padStart(2, '0')}${'x'.repeat(MAX_AGENT_TAG_BYTES - 2)}`);
+  assert.equal(Value.Check(parameters, { tags: oversizedAggregate }), true,
+    'the schema leaves aggregate UTF-8 validation to the runtime');
+  const oversizedTags = await invoke('subagent_agents', { tags: oversizedAggregate });
+  assert.equal(oversizedTags.isError, true);
+  assert.match(oversizedTags.content[0].text, /tags must be an array of 1-32 valid ASCII labels/);
+  assert.equal(Value.Check(outputSchema, oversizedTags.structuredContent), true);
+  const tagsAndQuery = await invoke('subagent_agents', { tags: ['security'], query: 'review' });
+  assert.equal(tagsAndQuery.isError, true);
+  assert.match(tagsAndQuery.content[0].text, /name, query, tag, and tags filters cannot be combined/);
+  const tagsAndTag = await invoke('subagent_agents', { tags: ['security'], tag: 'security' });
+  assert.equal(tagsAndTag.isError, true);
+  assert.match(tagsAndTag.content[0].text, /name, query, tag, and tags filters cannot be combined/);
   assert.equal(traces().length, 0);
 });
 
