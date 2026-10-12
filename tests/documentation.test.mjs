@@ -60,6 +60,27 @@ test('README documents an available installation method', () => {
   assert.doesNotMatch(installation, /pi install npm:/);
 });
 
+test('CI preserves the required Node, runner, Pi, and Node.js type coverage', () => {
+  const workflow = testWorkflow.replace(/\r\n/g, '\n');
+  assert.match(workflow, /os: \[ubuntu-latest, ubuntu-26\.04, macos-latest, windows-latest\]/,
+    'keep the temporary Ubuntu 26 row and existing platform coverage until migration is confirmed');
+  assert.match(workflow, /node: \[22, 24, 26\]/);
+  assert.ok(workflow.includes(`node: "${packageJson.engines.node.slice(2)}"`),
+    'test the declared minimum Node.js version explicitly');
+  assert.equal(packageJson.devDependencies['@types/node'], '22.20.5',
+    'keep type checking aligned with the pinned Node.js 22 declarations');
+  assert.equal(packageJson.devDependencies['@earendil-works/pi-coding-agent'], '1.1.0',
+    'the default CI run must test the current supported Pi runtime');
+
+  const baseTest = workflow.indexOf('      - run: npm test');
+  const legacyInstall = workflow.indexOf('Install Pi 1.0.4 for compatibility checks');
+  const legacyCheck = workflow.indexOf('Check against Pi 1.0.4');
+  const legacyTest = workflow.indexOf('Test against Pi 1.0.4');
+  assert.ok(baseTest >= 0 && baseTest < legacyInstall && legacyInstall < legacyCheck && legacyCheck < legacyTest,
+    'test the pinned current Pi runtime before swapping in Pi 1.0.4 for compatibility');
+  assert.match(contributing, /with Node\.js 22, 24, and 26 against Pi 1\.0\.4 and 1\.1\.0/);
+});
+
 test('npm test uses automatic discovery so Node runner options and file paths can be forwarded', () => {
   assert.equal(packageJson.scripts.test, 'node --test');
   assert.match(contributing, /`npm test -- tests\/paging\.test\.mjs`/);
