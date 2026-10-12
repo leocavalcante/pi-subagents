@@ -106,26 +106,50 @@ test('subagent tool description warns that first-use Windows compilation is not 
 });
 
 test('background returns before completion, retains progress, and sends a follow-up', async () => {
-  const started = Date.now();
-  const id = await launch({ task: 'delay=400 main' });
-  assert.ok(Date.now() - started < 300);
-  assert.equal((await status(id)).state, 'running');
-  assert.equal(messages.length, 0);
-  // The first Windows launch lazily compiles the supervisor before Pi can emit progress.
-  const firstUpdate = await waitFor(async () => {
-    const job = await status(id);
-    return job.latest ? { latest: job.latest } : job.finishedAt ? { finished: job } : undefined;
-  }, process.platform === 'win32' ? 60_000 : 15_000);
-  assert.ok(firstUpdate.latest, `Background job finished before progress: ${firstUpdate.finished?.state ?? 'unknown'}${firstUpdate.finished?.error ? ` (${firstUpdate.finished.error})` : ''}`);
-  assert.match(firstUpdate.latest.content[0].text, /progress/);
-  const result = await finish(id);
-  assert.equal(result.state, 'completed');
-  assert.equal(messages.length, 1);
-  assert.match(messages[0].message.content, /result: delay=400 main/);
-  assert.deepEqual(messages[0].options, { deliverAs: 'followUp', triggerTurn: true });
-  const child = traces().find(t => t.event === 'start');
-  assert.equal(child.model, 'fake/parent');
-  assert.equal(child.thinking, 'high');
+  const releaseFile = join(sandbox, 'background-handoff.release');
+  const task = `process-budget-barrier:${releaseFile}|delay=2000 main`;
+  rmSync(releaseFile, { force: true });
+  let id;
+  let launchTimer;
+  const launchResult = launch({ task }).then(id => ({ id }), error => ({ error }));
+  try {
+    const outcome = await Promise.race([
+      launchResult,
+      new Promise(resolve => { launchTimer = setTimeout(() => resolve(undefined), 15_000); }),
+    ]);
+    assert.ok(outcome, 'Background invocation should return while its child is held at the test barrier');
+    if (outcome.error) throw outcome.error;
+    id = outcome.id;
+    await waitFor(() => traces().some(entry => entry.event === 'start' && entry.task === task),
+      process.platform === 'win32' ? 60_000 : 15_000);
+    assert.equal((await status(id)).state, 'running');
+    assert.equal(messages.length, 0);
+    writeFileSync(releaseFile, 'release');
+
+    // The first Windows launch lazily compiles the supervisor before Pi can emit progress.
+    const firstUpdate = await waitFor(async () => {
+      const job = await status(id);
+      return job.latest ? { latest: job.latest } : job.finishedAt ? { finished: job } : undefined;
+    }, process.platform === 'win32' ? 60_000 : 15_000);
+    assert.ok(firstUpdate.latest, `Background job finished before progress: ${firstUpdate.finished?.state ?? 'unknown'}${firstUpdate.finished?.error ? ` (${firstUpdate.finished.error})` : ''}`);
+    assert.match(firstUpdate.latest.content[0].text, /progress/);
+    const result = await finish(id);
+    assert.equal(result.state, 'completed');
+    assert.equal(messages.length, 1);
+    assert.match(messages[0].message.content, /result: process-budget-barrier:.*\|delay=2000 main/);
+    assert.deepEqual(messages[0].options, { deliverAs: 'followUp', triggerTurn: true });
+    const child = traces().find(t => t.event === 'start');
+    assert.equal(child.model, 'fake/parent');
+    assert.equal(child.thinking, 'high');
+  } finally {
+    clearTimeout(launchTimer);
+    // Releasing in finally prevents a failed assertion from stranding the child process.
+    writeFileSync(releaseFile, 'release');
+    const outcome = await launchResult;
+    if (id === undefined && outcome.id) id = outcome.id;
+    if (id !== undefined) await finish(id);
+    rmSync(releaseFile, { force: true });
+  }
 });
 
 test('foreground cancellation just after child close does not report a completed result', async t => {
