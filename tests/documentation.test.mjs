@@ -146,6 +146,15 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /These listing-only limits do not change the paths used to launch agents/);
 });
 
+test('README gives a concrete exact-tag discovery and pagination example', () => {
+  const usage = section('Usage');
+  assert.match(usage, /### Filter by capability tag/);
+  assert.match(usage, /\{ "agentScope": "both", "tag": "security" \}/);
+  assert.match(usage, /matching is case-insensitive/);
+  assert.match(usage, /continue with the returned `nextOffset`, keeping the same scope and tag/);
+  assert.match(usage, /\{ "agentScope": "both", "tag": "security", "offset": 10 \}/);
+});
+
 test('README documents agent timeout and environment-removal defaults and precedence', () => {
   const agents = section('Agent definitions');
   const usage = section('Usage');
