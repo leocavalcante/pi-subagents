@@ -108,6 +108,11 @@ test('CONTRIBUTING explains how Windows process containment is validated', () =>
   assert.match(contributing, /POSIX process-group cleanup on both Linux and macOS/);
 });
 
+test('README distinguishes absent personal agent directories from inspection failures', () => {
+  const agents = section('Agent definitions');
+  assert.match(agents, /A missing personal-agent directory is treated as empty; permission and other inspection failures are reported as diagnostics rather than silently appearing empty/);
+});
+
 test('README documents bounded agent descriptions', () => {
   const agents = section('Agent definitions');
   assert.match(agents, /Descriptions are limited to 1 KiB of UTF-8 text/);
