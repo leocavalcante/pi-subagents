@@ -33,7 +33,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 Install the published npm package and reload Pi:
 
 ```sh
-pi install npm:@leocavalcante/pi-subagents@0.1.2
+pi install npm:@leocavalcante/pi-subagents@0.1.3
 ```
 
 If Pi is already running, enter `/reload` so it loads the newly installed extension.
@@ -82,10 +82,10 @@ npm install --global @earendil-works/pi-coding-agent@1.1.0 @earendil-works/pi-co
 
 Alternatively, use Pi 1.2.0. Pi provides the runtime dependencies, so no build step is needed.
 
-The npm package is published as version `0.1.2`. Install that version with:
+The npm package is published as version `0.1.3`. Install that version with:
 
 ```sh
-pi install npm:@leocavalcante/pi-subagents@0.1.2
+pi install npm:@leocavalcante/pi-subagents@0.1.3
 ```
 
 To install unreleased changes from the current GitHub `main` branch instead, use:
