@@ -91,7 +91,19 @@ test('CI preserves the required Node, runner, Pi, and Node.js type coverage', ()
   const legacyTest = workflow.indexOf('Test against Pi 1.0.4');
   assert.ok(baseTest >= 0 && baseTest < legacyInstall && legacyInstall < legacyCheck && legacyCheck < legacyTest,
     'test the pinned current Pi runtime before swapping in Pi 1.0.4 for compatibility');
+  const latestJobStart = workflow.indexOf('\n  latest-pi:');
+  assert.ok(latestJobStart >= 0, 'keep Pi 1.2.0 in a separate job');
+  const latestJob = workflow.slice(latestJobStart);
+  const latestInstall = latestJob.indexOf('Install Pi 1.2.0 with its dependency closure');
+  const latestCheck = latestJob.indexOf('Check against Pi 1.2.0');
+  const latestTest = latestJob.indexOf('Test against Pi 1.2.0');
+  assert.ok(latestInstall >= 0 && latestInstall < latestCheck && latestCheck < latestTest,
+    'test Pi 1.2.0 with its dependency closure in a dedicated job');
+  assert.ok(latestJob.includes('@earendil-works/pi-coding-agent@1.2.0'));
+  assert.ok(latestJob.includes('node-version: "22.19.0"'),
+    'run the current Pi runtime on its declared minimum Node.js version');
   assert.match(contributing, /with Node\.js 22, 24, and 26 against Pi 1\.0\.4 and 1\.1\.0/);
+  assert.match(contributing, /separate Ubuntu\/Node\.js 22\.19\.0 job also runs the type check and tests with Pi 1\.2\.0/);
 });
 
 test('npm test uses automatic discovery so Node runner options and file paths can be forwarded', () => {
