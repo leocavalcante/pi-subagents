@@ -17,7 +17,7 @@ function boundedDiagnostic(text: string, limit = MAX_DIAGNOSTIC_BYTES): string {
 	// A short UTF-16 prefix is sufficient for the byte cap. Avoid encoding an
 	// arbitrarily large thrown message just to keep its first few characters.
 	const bytes = Buffer.from(text.slice(0, limit + 1), "utf8");
-	if (text.length <= limit && bytes.length <= limit) return text;
+	if (text.length <= limit && bytes.length <= limit) return bytes.toString("utf8");
 	const notice = "\n[diagnostic truncated]";
 	let end = limit - Buffer.byteLength(notice);
 	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
