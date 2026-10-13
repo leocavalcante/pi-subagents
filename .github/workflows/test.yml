@@ -91,7 +91,7 @@ jobs:
           mapfile -t dev_dependencies < <(node -e '
             const dependencies = require("./package.json").devDependencies;
             for (const [name, version] of Object.entries(dependencies)) {
-              if (name !== "@earendil-works/pi-coding-agent") console.log(`${name}@${version}`);
+              if (name !== "@earendil-works/pi-coding-agent") console.log(name + "@" + version);
             }
           ')
           npm install --prefix "$prefix" --ignore-scripts --no-audit --no-fund --save-exact \
