@@ -1854,6 +1854,16 @@ test('renderers tolerate partial calls and invalid tool argument types', async (
   const invalidNamePreview = invalidNameCall.render(80).join(String.fromCharCode(10));
   assert.equal(invalidNamePreview.includes(rawEscape), false);
   assert.ok(invalidNamePreview.includes('u001b'));
+  const malformedTask = `preview${String.fromCharCode(0xd800)}`;
+  const malformedPreview = definition.renderCall({ agent: 'worker', task: malformedTask }, theme, {}).render(80).join('\n');
+  assert.equal(malformedPreview.isWellFormed(), true, 'call previews must not expose ill-formed UTF-16');
+  assert.ok(malformedPreview.includes('\\ud800'), 'lone high surrogates are made visible in preview text');
+  const malformedName = `worker${String.fromCharCode(0xdc00)}`;
+  const malformedNamePreview = definition.renderCall({ agent: malformedName, task: 'preview' }, theme, {}).render(80).join('\n');
+  assert.equal(malformedNamePreview.isWellFormed(), true, 'agent selectors must not expose ill-formed UTF-16');
+  assert.ok(malformedNamePreview.includes('\\udc00'), 'lone low surrogates are made visible in selectors');
+  const validPairPreview = definition.renderCall({ agent: 'worker', task: 'preview 😀' }, theme, {}).render(80).join('\n');
+  assert.ok(validPairPreview.includes('preview 😀'), 'valid surrogate pairs remain intact');
   const hugeNamePreview = definition.renderCall({ agent: 'x'.repeat(1024 * 1024), task: 'preview' }, theme, {}).render(80);
   assert.ok(Buffer.byteLength(hugeNamePreview.join(String.fromCharCode(10))) < 512);
   const tagPreview = definition.renderCall({ agentTags: ['security', 'code-review'], task: 'preview' }, theme, {}).render(80).join('\n');

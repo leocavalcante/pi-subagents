@@ -139,13 +139,14 @@ const MODEL_TEXT_CAP = 50 * 1024;
 const MAX_TASK_BYTES = 4 * 1024 * 1024;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
-const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]/gu;
+// With Unicode regex mode, these ranges match lone surrogates without splitting valid pairs.
+const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|[\uDC00-\uDFFF]/gu;
 const PRESERVED_DISPLAY_CHARACTERS = /^(?:\u200c|\u200d)$/u;
 const JOINER_SEQUENCE_BOUNDARY = /^[\s\u0000-\u001f\u007f-\u009f\u200c\u200d]$/u;
 const EMOJI_OR_IDEOGRAPH_VARIATION_BASE = /^(?:\p{Emoji}|\p{Unified_Ideograph})$/u;
 const IDEOGRAPHIC_VARIATION_BASE = /^\p{Unified_Ideograph}$/u;
 const EMOJI_TAG_FLAG_SEQUENCES = /\u{1f3f4}\u{e0067}\u{e0062}(?:\u{e0065}\u{e006e}\u{e0067}|\u{e0073}\u{e0063}\u{e0074}|\u{e0077}\u{e006c}\u{e0073})\u{e007f}/gu;
-const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff\p{Default_Ignorable_Code_Point}]/gu;
+const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff\p{Default_Ignorable_Code_Point}]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|[\uDC00-\uDFFF]/gu;
 const MAX_TERMINAL_ESCAPE_EXPANSION = 64 * 1024;
 
 function preserveDisplayCharacter(character: string, value: string, index: number): boolean {
