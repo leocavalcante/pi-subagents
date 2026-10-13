@@ -1612,6 +1612,15 @@ const CASE_FOLDING = new Map<number, string>([
  * Turkic-specific mappings are intentionally excluded; the generated table contains Unicode C and F mappings.
  */
 export function caseFoldUnicode(value: string): string {
+	let isAscii = true;
+	for (let index = 0; index < value.length; index++) {
+		if (value.charCodeAt(index) > 0x7f) {
+			isAscii = false;
+			break;
+		}
+	}
+	// ASCII full case folding is exactly ASCII lowercasing; skip Unicode normalization entirely.
+	if (isAscii) return value.toLowerCase();
 	let folded = "";
 	for (const character of normalizeUnicode17NFD(value)) {
 		folded += CASE_FOLDING.get(character.codePointAt(0)!) ?? character;
