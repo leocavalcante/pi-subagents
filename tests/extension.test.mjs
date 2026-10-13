@@ -3259,6 +3259,17 @@ test('agent timeout defaults apply in every dispatch mode and yield to call over
   } finally { rmSync(file); rmSync(invalidFile); }
 });
 
+test('bounded agent-listing text normalizes lone surrogates on the fast path', () => {
+  for (const [value, expected] of [
+    ['\uD800', '\uFFFD'],
+    ['\uDC00', '\uFFFD'],
+    ['before\uD800after', 'before\uFFFDafter'],
+    ['\uD800\uDC00', '𐀀'],
+  ]) {
+    assert.equal(truncateAgentListingText(value, 512), expected);
+  }
+});
+
 test('structured agent listing strings are UTF-8 bounded and mark truncation', async () => {
   for (const [limit, label] of [
     [MAX_AGENT_LISTING_PATH_BYTES, 'path'],

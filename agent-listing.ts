@@ -1,3 +1,5 @@
+import { isWellFormedUnicode } from "./unicode.ts";
+
 /** Output bounds for structured agent-discovery metadata. */
 export const MAX_AGENT_LISTING_PATH_BYTES = 4 * 1024;
 export const MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES = 512;
@@ -10,7 +12,9 @@ export function truncateAgentListingText(value: string, maxBytes: number): strin
 		throw new RangeError("Agent listing text limit is too small.");
 	}
 	// Avoid scanning or encoding an oversized input beyond the bounded prefix.
-	if (value.length <= maxBytes && Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+	if (value.length <= maxBytes && Buffer.byteLength(value, "utf8") <= maxBytes) {
+		return isWellFormedUnicode(value) ? value : Buffer.from(value, "utf8").toString("utf8");
+	}
 	const noticeBytes = Buffer.byteLength(TRUNCATION_NOTICE, "utf8");
 	let end = maxBytes - noticeBytes;
 	const bytes = Buffer.from(value.slice(0, end + 2), "utf8");
