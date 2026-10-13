@@ -77,14 +77,15 @@ const terminalDisplayUnicode = (() => {
   const zeroWidthNonJoiner = String.fromCodePoint(0x200c);
   const variationSelector = String.fromCodePoint(0xfe0f);
   const orphanedVariationSelectors = `${String.fromCodePoint(0xfe0e)}${variationSelector}`;
+  const supplementaryEmojiVariation = `${String.fromCodePoint(0x1f6e0)}${variationSelector}`;
   const englandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
   const emojiSequence = `👩${zeroWidthJoiner}💻`;
   const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
   return {
     hidden: [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, standaloneTagCharacter, orphanedVariationSelectors],
     visible: ['\\u200b', '\\u2060', '\\u180e', '\\u{e0001}', '\\u{e0061}', '\\ufe0e\\ufe0f'],
-    preserved: [englandFlag, emojiSequence, scriptJoiner, `✈${variationSelector}`],
-    text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${englandFlag} ${emojiSequence} ${scriptJoiner} ✈${variationSelector}`,
+    preserved: [englandFlag, emojiSequence, scriptJoiner, supplementaryEmojiVariation, `✈${variationSelector}`],
+    text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${englandFlag} ${supplementaryEmojiVariation} ${emojiSequence} ${scriptJoiner} ✈${variationSelector}`,
   };
 })();
 const assertTerminalDisplayUnicode = rendered => {
@@ -3454,6 +3455,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   const walesFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0077, 0xe006c, 0xe0073, 0xe007f);
   const variationSelector = String.fromCodePoint(0xfe0f);
   const supplementaryVariationSelector = String.fromCodePoint(0xe0100);
+  const supplementaryEmojiVariation = `${String.fromCodePoint(0x1f6e0)}${variationSelector}`;
   const standaloneVariationSelectors = variationSelector.repeat(2);
   const emojiSequence = `👩${zeroWidthJoiner}💻`;
   const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
@@ -3461,7 +3463,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   const hostileName = `safe${hiddenFormatting}${standaloneVariationSelectors} ${englandFlag}${scotlandFlag}${walesFlag} ` + `name${wordJoiner} [link](https://example.invalid)`;
   const escape = String.fromCharCode(27);
   const c1 = String.fromCodePoint(0x009b);
-  const hostileDescription = `visible${hiddenFormatting}${wordJoiner} ${emojiSequence} ✈${variationSelector} 木${supplementaryVariationSelector} ${scriptJoiner} ${englandFlag}${scotlandFlag}${walesFlag}${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
+  const hostileDescription = `visible${hiddenFormatting}${wordJoiner} ${emojiSequence} ✈${variationSelector} ${supplementaryEmojiVariation} 木${supplementaryVariationSelector} ${scriptJoiner} ${englandFlag}${scotlandFlag}${walesFlag}${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
   const hostileCwd = `configured${String.fromCharCode(10)}${escape}[31m${String.fromCodePoint(0x202e)}`;
   const metadataFile = join(projectDir, 'metadata.md');
   const hostilePathFile = join(projectDir, `path-${escape}.md`);
@@ -3504,6 +3506,7 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.ok(text.includes(walesFlag), 'Wales flag emoji tag sequences remain intact');
     assert.ok(text.includes(emojiSequence), 'ZWJ emoji sequences remain intact');
     assert.ok(text.includes(`✈${variationSelector}`), 'emoji variation selectors remain intact');
+    assert.ok(text.includes(supplementaryEmojiVariation), 'variation selectors after supplementary emoji bases remain intact');
     assert.ok(text.includes(`木${supplementaryVariationSelector}`), 'supplementary variation selectors remain intact');
     assert.ok(text.includes(scriptJoiner), 'script-specific ZWNJ remains intact');
     assert.ok(text.includes('u000a'));
