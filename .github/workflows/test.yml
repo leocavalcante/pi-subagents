@@ -54,12 +54,16 @@ jobs:
       - name: Install Pi 1.0.4 for compatibility checks
         shell: bash
         run: |
-          archive="$(npm pack --silent @earendil-works/pi-coding-agent@1.0.4)"
-          test -f "$archive"
-          rm -rf node_modules/@earendil-works/pi-coding-agent
-          mkdir -p node_modules/@earendil-works/pi-coding-agent
-          tar -xzf "$archive" --strip-components=1 -C node_modules/@earendil-works/pi-coding-agent
-          rm "$archive"
+          # Pi 1.0.4 and 1.1.x need Codemode 1.1.0; Codemode 1.2.0 removed an imported export.
+          agent_archive="$(npm pack --silent @earendil-works/pi-coding-agent@1.0.4)"
+          codemode_archive="$(npm pack --silent @earendil-works/pi-codemode@1.1.0)"
+          test -f "$agent_archive"
+          test -f "$codemode_archive"
+          rm -rf node_modules/@earendil-works/pi-coding-agent node_modules/@earendil-works/pi-codemode
+          mkdir -p node_modules/@earendil-works/pi-coding-agent node_modules/@earendil-works/pi-codemode
+          tar -xzf "$agent_archive" --strip-components=1 -C node_modules/@earendil-works/pi-coding-agent
+          tar -xzf "$codemode_archive" --strip-components=1 -C node_modules/@earendil-works/pi-codemode
+          rm "$agent_archive" "$codemode_archive"
       - name: Check against Pi 1.0.4
         run: npm run check
       - name: Test against Pi 1.0.4

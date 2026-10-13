@@ -58,6 +58,9 @@ test('README documents the published npm version and unreleased GitHub installat
   assert.ok(installation.includes(`The npm package is published as version \`${packageJson.version}\``));
   assert.ok(installation.includes(npmInstall));
   assert.match(installation, /unreleased changes from the current GitHub `main` branch/);
+  assert.match(installation, /Tested with Pi 1\.0\.4 and 1\.1\.0 paired with Pi Codemode 1\.1\.0, and with Pi 1\.2\.0/);
+  assert.match(installation, /Fresh installs of Pi 1\.0\.4 or 1\.1\.0 may resolve incompatible Pi Codemode 1\.2\.0/);
+  assert.match(installation, /\[upstream bug report\]\(https:\/\/github\.com\/earendil-works\/pi\/issues\/10865\)/);
   assert.match(installation, /pi install git:github\.com\/leocavalcante\/pi-subagents/);
   assert.match(installation, /From the checkout root, install the local copy/);
   assert.match(installation, /pi install \.\n```/);
@@ -91,6 +94,8 @@ test('CI preserves the required Node, runner, Pi, and Node.js type coverage', ()
   const legacyTest = workflow.indexOf('Test against Pi 1.0.4');
   assert.ok(baseTest >= 0 && baseTest < legacyInstall && legacyInstall < legacyCheck && legacyCheck < legacyTest,
     'test the pinned current Pi runtime before swapping in Pi 1.0.4 for compatibility');
+  assert.ok(workflow.includes('npm pack --silent @earendil-works/pi-codemode@1.1.0'),
+    'pair Pi 1.0.4 with the Codemode release that exports the API its loader imports');
   const latestJobStart = workflow.indexOf('\n  latest-pi:');
   assert.ok(latestJobStart >= 0, 'keep Pi 1.2.0 in a separate job');
   const latestJob = workflow.slice(latestJobStart);
@@ -102,7 +107,8 @@ test('CI preserves the required Node, runner, Pi, and Node.js type coverage', ()
   assert.ok(latestJob.includes('@earendil-works/pi-coding-agent@1.2.0'));
   assert.ok(latestJob.includes('node-version: "22.19.0"'),
     'run the current Pi runtime on its declared minimum Node.js version');
-  assert.match(contributing, /with Node\.js 22, 24, and 26 against Pi 1\.0\.4 and 1\.1\.0/);
+  assert.match(contributing, /with Node\.js 22, 24, and 26 against Pi 1\.0\.4 and 1\.1\.0 paired with Pi Codemode 1\.1\.0/);
+  assert.match(contributing, /upstream report/);
   assert.match(contributing, /separate Ubuntu\/Node\.js 22\.19\.0 job also runs the type check and tests with Pi 1\.2\.0/);
 });
 

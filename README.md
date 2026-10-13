@@ -70,7 +70,7 @@ See [Installation](#installation) for local installs and Windows setup, and [Age
 
 ## Installation
 
-Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4, 1.1.0, and 1.2.0. Pi provides the runtime dependencies, so no build step is needed.
+Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4 and 1.1.0 paired with Pi Codemode 1.1.0, and with Pi 1.2.0. Fresh installs of Pi 1.0.4 or 1.1.0 may resolve incompatible Pi Codemode 1.2.0; see the [upstream bug report](https://github.com/earendil-works/pi/issues/10865). Use Pi Codemode 1.1.0 with those older Pi versions, or use Pi 1.2.0. Pi provides the runtime dependencies, so no build step is needed.
 
 The npm package is published as version `0.1.2`. Install that version with:
 
