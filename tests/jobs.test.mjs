@@ -86,10 +86,14 @@ test('unprintable thrown values cannot reject job cleanup or leave stale running
 test('job diagnostics are UTF-8 bounded and retain the run failure when delivery also fails', async () => {
   const jobs = new JobManager(() => { throw new Error('delivery failed'); }, () => false);
   const first = jobs.start('two failures', async () => { throw new Error('run failed'); });
+  const malformedText = `high${String.fromCharCode(0xd800)} low${String.fromCharCode(0xdc00)} valid 😀`;
+  const malformed = jobs.start('malformed failure', async () => { throw new Error(malformedText); });
   const large = jobs.start('large failure', async () => { throw new Error('😀'.repeat(10000)); });
   await tick();
   assert.match(jobs.get(first.id).error, /run failed/);
   assert.match(jobs.get(first.id).error, /Completion delivery failed: delivery failed/);
+  assert.ok(jobs.get(malformed.id).error.isWellFormed(), 'job diagnostics must not retain lone UTF-16 surrogates');
+  assert.ok(jobs.get(malformed.id).error.includes('high� low� valid 😀'), 'malformed code units are replaced without altering valid pairs');
   assert.ok(Buffer.byteLength(jobs.get(large.id).error) <= 2048);
   assert.equal(jobs.get(large.id).error.includes('�'), false);
   assert.match(jobs.get(large.id).error, /truncated/);
