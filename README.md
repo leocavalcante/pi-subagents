@@ -33,7 +33,7 @@ Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundl
 Install the published npm package and reload Pi:
 
 ```sh
-pi install npm:@leocavalcante/pi-subagents@0.1.1
+pi install npm:@leocavalcante/pi-subagents@0.1.2
 ```
 
 If Pi is already running, enter `/reload` so it loads the newly installed extension.
@@ -72,10 +72,10 @@ See [Installation](#installation) for local installs and Windows setup, and [Age
 
 Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4 and 1.1.0. Pi provides the runtime dependencies, so no build step is needed.
 
-The npm package is published as version `0.1.1`. Install that version with:
+The npm package is published as version `0.1.2`. Install that version with:
 
 ```sh
-pi install npm:@leocavalcante/pi-subagents@0.1.1
+pi install npm:@leocavalcante/pi-subagents@0.1.2
 ```
 
 To install unreleased changes from the current GitHub `main` branch instead, use:
