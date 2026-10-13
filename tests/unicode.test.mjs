@@ -6,6 +6,7 @@ const { caseFoldUnicode, isWellFormedUnicode } = await jiti.import('../unicode.t
 
 test('Unicode 17 default full case folding is canonical, locale-independent, and handles expansions', () => {
   for (const [input, expected] of [
+    ['ASCII Search 123', 'ascii search 123'],
     ['Straße', 'strasse'],
     ['ſtraße', 'strasse'],
     ['Oﬃce', 'office'],
