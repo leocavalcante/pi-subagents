@@ -140,14 +140,36 @@ const MAX_TASK_BYTES = 4 * 1024 * 1024;
 const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 const UNSAFE_DISPLAY_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]/gu;
-const PRESERVED_DISPLAY_CHARACTERS = /^(?:\u200c|\u200d|\p{Variation_Selector})$/u;
+const PRESERVED_DISPLAY_CHARACTERS = /^(?:\u200c|\u200d)$/u;
+const EMOJI_OR_IDEOGRAPH_VARIATION_BASE = /^(?:\p{Emoji}|\p{Unified_Ideograph})$/u;
+const IDEOGRAPHIC_VARIATION_BASE = /^\p{Unified_Ideograph}$/u;
 const EMOJI_TAG_FLAG_SEQUENCES = /\u{1f3f4}\u{e0067}\u{e0062}(?:\u{e0065}\u{e006e}\u{e0067}|\u{e0073}\u{e0063}\u{e0074}|\u{e0077}\u{e006c}\u{e0073})\u{e007f}/gu;
 const UNSAFE_TERMINAL_TEXT_CHARACTERS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff\p{Default_Ignorable_Code_Point}]/gu;
 const MAX_TERMINAL_ESCAPE_EXPANSION = 64 * 1024;
 
+function preserveDisplayCharacter(character: string, value: string, index: number): boolean {
+	if (PRESERVED_DISPLAY_CHARACTERS.test(character)) return true;
+	const codePoint = character.codePointAt(0)!;
+	if (codePoint < 0xfe00 || (codePoint > 0xfe0f && (codePoint < 0xe0100 || codePoint > 0xe01ef))) return false;
+	let previousIndex = index - 1;
+	if (previousIndex > 0) {
+		const previousUnit = value.charCodeAt(previousIndex);
+		const beforePreviousUnit = value.charCodeAt(previousIndex - 1);
+		if (previousUnit >= 0xdc00 && previousUnit <= 0xdfff &&
+			beforePreviousUnit >= 0xd800 && beforePreviousUnit <= 0xdbff) previousIndex--;
+	}
+	if (previousIndex < 0) return false;
+	const previous = String.fromCodePoint(value.codePointAt(previousIndex)!);
+	// Bare or misplaced variation selectors are default-ignorable and can make
+	// distinct metadata look identical; preserve them only beside a relevant base.
+	return codePoint <= 0xfe0f
+		? EMOJI_OR_IDEOGRAPH_VARIATION_BASE.test(previous)
+		: IDEOGRAPHIC_VARIATION_BASE.test(previous);
+}
+
 function escapeDisplaySegment(value: string): string {
-	return value.replace(UNSAFE_DISPLAY_CHARACTERS, (character) => {
-		if (PRESERVED_DISPLAY_CHARACTERS.test(character)) return character;
+	return value.replace(UNSAFE_DISPLAY_CHARACTERS, (character, index: number) => {
+		if (preserveDisplayCharacter(character, value, index)) return character;
 		const codePoint = character.codePointAt(0)!;
 		const hex = codePoint.toString(16).padStart(4, "0");
 		return codePoint > 0xffff ? `\\u{${hex}}` : `\\u${hex}`;
@@ -168,11 +190,11 @@ function escapeTerminalControls(value: string): string {
 function escapeTerminalText(value: string): string {
 	// Keep newlines and tabs for ordinary text/Markdown layout, but make terminal
 	// escape bytes and invisible formatting characters visible before TUI rendering.
-	// Preserve valid emoji tag flags, script joiners, and variation selectors.
+	// Preserve valid emoji tag flags, script joiners, and variation selectors attached to relevant bases.
 	// Bound expansion so hostile child output cannot multiply retained text.
 	let expandedBy = 0;
-	const escapeSegment = (segment: string) => segment.replace(UNSAFE_TERMINAL_TEXT_CHARACTERS, (character) => {
-		if (PRESERVED_DISPLAY_CHARACTERS.test(character)) return character;
+	const escapeSegment = (segment: string) => segment.replace(UNSAFE_TERMINAL_TEXT_CHARACTERS, (character, index: number) => {
+		if (preserveDisplayCharacter(character, segment, index)) return character;
 		const codePoint = character.codePointAt(0)!;
 		const hex = codePoint.toString(16).padStart(4, "0");
 		const escaped = codePoint > 0xffff ? `\\u{${hex}}` : `\\u${hex}`;

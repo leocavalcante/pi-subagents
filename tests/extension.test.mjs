@@ -76,14 +76,15 @@ const terminalDisplayUnicode = (() => {
   const zeroWidthJoiner = String.fromCodePoint(0x200d);
   const zeroWidthNonJoiner = String.fromCodePoint(0x200c);
   const variationSelector = String.fromCodePoint(0xfe0f);
+  const orphanedVariationSelectors = `${String.fromCodePoint(0xfe0e)}${variationSelector}`;
   const englandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
   const emojiSequence = `👩${zeroWidthJoiner}💻`;
   const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
   return {
-    hidden: [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, standaloneTagCharacter],
-    visible: ['\\u200b', '\\u2060', '\\u180e', '\\u{e0001}', '\\u{e0061}'],
+    hidden: [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, standaloneTagCharacter, orphanedVariationSelectors],
+    visible: ['\\u200b', '\\u2060', '\\u180e', '\\u{e0001}', '\\u{e0061}', '\\ufe0e\\ufe0f'],
     preserved: [englandFlag, emojiSequence, scriptJoiner, `✈${variationSelector}`],
-    text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter} ${englandFlag} ${emojiSequence} ${scriptJoiner} ✈${variationSelector}`,
+    text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${englandFlag} ${emojiSequence} ${scriptJoiner} ✈${variationSelector}`,
   };
 })();
 const assertTerminalDisplayUnicode = rendered => {
@@ -3453,10 +3454,11 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   const walesFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0077, 0xe006c, 0xe0073, 0xe007f);
   const variationSelector = String.fromCodePoint(0xfe0f);
   const supplementaryVariationSelector = String.fromCodePoint(0xe0100);
+  const standaloneVariationSelectors = variationSelector.repeat(2);
   const emojiSequence = `👩${zeroWidthJoiner}💻`;
   const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
   const hiddenFormatting = `${zeroWidthSpace}${mongolianVowelSeparator}${languageTag}${hangulFiller}${standaloneTagCharacter}`;
-  const hostileName = `safe${hiddenFormatting} ${englandFlag}${scotlandFlag}${walesFlag} ` + `name${wordJoiner} [link](https://example.invalid)`;
+  const hostileName = `safe${hiddenFormatting}${standaloneVariationSelectors} ${englandFlag}${scotlandFlag}${walesFlag} ` + `name${wordJoiner} [link](https://example.invalid)`;
   const escape = String.fromCharCode(27);
   const c1 = String.fromCodePoint(0x009b);
   const hostileDescription = `visible${hiddenFormatting}${wordJoiner} ${emojiSequence} ✈${variationSelector} 木${supplementaryVariationSelector} ${scriptJoiner} ${englandFlag}${scotlandFlag}${walesFlag}${String.fromCharCode(10)}### forged heading ${escape}[31mred${escape}[0m${c1}31m${String.fromCodePoint(0x202e)}`;
@@ -3484,6 +3486,8 @@ test('project agent metadata is escaped in listings and trust confirmations', as
     assert.equal(text.includes(escape), false);
     assert.equal(text.includes(String.fromCodePoint(0x202e)), false);
     assert.equal(text.includes(c1), false);
+    assert.equal(text.includes(standaloneVariationSelectors), false, 'standalone variation selectors must be visible');
+    assert.ok(text.includes('\\ufe0f\\ufe0f'));
     for (const character of [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, hangulFiller, standaloneTagCharacter]) {
       assert.equal(text.includes(character), false, `default-ignorable ${character.codePointAt(0).toString(16)} must be visible`);
     }
