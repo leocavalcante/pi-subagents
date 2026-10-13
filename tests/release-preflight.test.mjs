@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { inspectNpm, verifyStableRelease } from '../.github/scripts/check-release-package.mjs';
+
+const releasePreflightScript = fileURLToPath(new URL('../.github/scripts/check-release-package.mjs', import.meta.url));
 
 const packageJson = { name: '@leocavalcante/pi-subagents', version: '0.1.0' };
 const publishWorkflow = readFileSync(new URL('../.github/workflows/publish.yml', import.meta.url), 'utf8');
@@ -67,6 +71,18 @@ test('npm inspection distinguishes missing packages from unavailable registry st
     assert.equal(inspectNpm(packageJson.name, () => result), 'unavailable');
   }
   assert.equal(inspectNpm(packageJson.name, () => { throw new Error('spawn failed'); }), 'unavailable');
+});
+
+test('release preflight CLI reports invalid tags and exits before npm access', () => {
+  // An empty PATH keeps the CLI test offline if validation order regresses.
+  const result = spawnSync(process.execPath, [releasePreflightScript], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: '', RELEASE_TAG: 'v0.1.1' },
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /^::error::Use a stable release tag matching the package name and version in package\.json\./);
 });
 
 test('release preflight validates stable version tags before querying npm', () => {
