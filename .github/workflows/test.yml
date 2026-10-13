@@ -107,6 +107,43 @@ jobs:
         run: npm test
       - run: npm pack --dry-run --ignore-scripts
 
+  legacy-pi-1-1:
+    name: Pi 1.1.0 fresh-install compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - name: Install Pi 1.1.0 with compatible Codemode and fresh dependencies
+        shell: bash
+        run: |
+          prefix="$RUNNER_TEMP/pi-1.1.0"
+          mkdir -p "$prefix"
+          printf '{"private":true}\n' > "$prefix/package.json"
+          mapfile -t dev_dependencies < <(node -e '
+            const dependencies = require("./package.json").devDependencies;
+            for (const [name, version] of Object.entries(dependencies)) {
+              if (name !== "@earendil-works/pi-coding-agent") console.log(name + "@" + version);
+            }
+          ')
+          npm install --prefix "$prefix" --ignore-scripts --no-audit --no-fund --save-exact \
+            @earendil-works/pi-coding-agent@1.1.0 \
+            @earendil-works/pi-codemode@1.1.0 \
+            "${dev_dependencies[@]}"
+          rm -rf node_modules
+          cp -a "$prefix/node_modules" node_modules
+      - run: npm run check
+      - name: Test against the fresh Pi 1.1.0 dependency closure
+        env:
+          PI_PACKAGE_DIR: ${{ runner.temp }}/pi-1.1.0/node_modules/@earendil-works/pi-coding-agent
+        run: npm test
+      - run: npm pack --dry-run --ignore-scripts
+
   latest-pi:
     name: Pi 1.2.0 compatibility
     runs-on: ubuntu-latest
