@@ -60,7 +60,7 @@ test('README documents the published npm version and unreleased GitHub installat
   assert.match(installation, /unreleased changes from the current GitHub `main` branch/);
   assert.match(installation, /Tested with Pi 1\.0\.4 and 1\.1\.0 paired with Pi Codemode 1\.1\.0, and with Pi 1\.2\.0/);
   assert.match(installation, /Fresh installs of Pi 1\.0\.4 or 1\.1\.0 may resolve incompatible Pi Codemode 1\.2\.0/);
-  assert.ok(installation.includes('https://github.com/earendil-works/pi/issues/10865'));
+  assert.match(installation, /\[upstream bug report\]\(https:\/\/github\.com\/earendil-works\/pi\/issues\/10865\)/);
   assert.match(installation, /pi install git:github\.com\/leocavalcante\/pi-subagents/);
   assert.match(installation, /From the checkout root, install the local copy/);
   assert.match(installation, /pi install \.\n```/);
