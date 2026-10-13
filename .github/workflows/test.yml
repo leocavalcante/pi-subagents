@@ -65,3 +65,30 @@ jobs:
       - name: Test against Pi 1.0.4
         run: npm test
       - run: npm pack --dry-run --ignore-scripts
+
+  latest-pi:
+    name: Pi 1.2.0 compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Install Pi 1.2.0 with its dependency closure
+        shell: bash
+        run: |
+          prefix="$RUNNER_TEMP/pi-1.2.0"
+          mkdir -p "$prefix"
+          printf '{"private":true}\n' > "$prefix/package.json"
+          npm install --prefix "$prefix" --ignore-scripts --no-audit --no-fund --save-exact @earendil-works/pi-coding-agent@1.2.0
+          rm -rf node_modules/@earendil-works/pi-coding-agent
+          ln -s "$prefix/node_modules/@earendil-works/pi-coding-agent" node_modules/@earendil-works/pi-coding-agent
+      - name: Check against Pi 1.2.0
+        run: npm run check
+      - name: Test against Pi 1.2.0
+        run: npm test

@@ -70,7 +70,7 @@ See [Installation](#installation) for local installs and Windows setup, and [Age
 
 ## Installation
 
-Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4 and 1.1.0. Pi provides the runtime dependencies, so no build step is needed.
+Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4, 1.1.0, and 1.2.0. Pi provides the runtime dependencies, so no build step is needed.
 
 The npm package is published as version `0.1.2`. Install that version with:
 
