@@ -1,3 +1,5 @@
+import { normalizeUnicode17NFC, normalizeUnicode17NFD } from "./unicode-normalization.ts";
+
 /** Return false for lone UTF-16 surrogates that platform encoders replace with U+FFFD. */
 export function isWellFormedUnicode(value: string): boolean {
 	for (let index = 0; index < value.length; index++) {
@@ -1606,14 +1608,13 @@ const CASE_FOLDING = new Map<number, string>([
 	[0x1e921, "𞥃"],
 ]);
 /**
- * Apply Unicode default full case folding, normalizing around the mapping so
- * canonically equivalent text has the same NFC form. Turkic-specific mappings
- * are intentionally excluded; the generated table contains Unicode C and F mappings.
+ * Apply Unicode 17 default full case folding with version-pinned NFC normalization.
+ * Turkic-specific mappings are intentionally excluded; the generated table contains Unicode C and F mappings.
  */
 export function caseFoldUnicode(value: string): string {
 	let folded = "";
-	for (const character of value.normalize("NFD")) {
+	for (const character of normalizeUnicode17NFD(value)) {
 		folded += CASE_FOLDING.get(character.codePointAt(0)!) ?? character;
 	}
-	return folded.normalize("NFC");
+	return normalizeUnicode17NFC(folded);
 }

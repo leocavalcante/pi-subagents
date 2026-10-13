@@ -2641,6 +2641,7 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     ['lookup-cafe-composed.md', 'lookup-cafe-composed', 'Café tooling'],
     ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
     ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
+    ['lookup-unicode17-order.md', 'lookup-unicode17-order', 'a\u0315\u0300\u05ae\u1acf' + 'b'],
     ['lookup-model.md', 'lookup-model', 'Explicit model routing helper', undefined, 'vendor/custom-Reasoner', 'xhigh'],
     ['lookup-override.md', 'lookup-override', 'Secret token helper', ['custom-shell'], 'vendor/personal-secret', 'low', ['AWS_SECRET_ACCESS_KEY'], '/work/personal-runtime', 456000],
   ];
@@ -2895,6 +2896,12 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     const composedQuery = await invoke('subagent_agents', { query: 'café ass' });
     assert.deepEqual(composedQuery.details.agents.map(agent => agent.name), ['lookup-cafe-decomposed'],
       'composed query text should match canonically equivalent decomposed metadata');
+
+    const unicode17CanonicalQuery = await invoke('subagent_agents', {
+      query: 'a\u05ae\u0300\u1acf\u0315' + 'b',
+    });
+    assert.deepEqual(unicode17CanonicalQuery.details.agents.map(agent => agent.name), ['lookup-unicode17-order'],
+      'Unicode 17 combining classes must match canonical equivalents even when Node ICU uses Unicode 16');
 
     const nameQuery = await invoke('subagent_agents', { query: 'lookup-cafe\u0301-name' });
     assert.deepEqual(nameQuery.details.agents.map(agent => agent.name), ['lookup-café-name'],
