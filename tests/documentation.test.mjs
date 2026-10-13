@@ -102,15 +102,24 @@ test('CI preserves the required Node, runner, Pi, and Node.js type coverage', ()
   assert.ok(workflow.includes('npm pack --silent @earendil-works/pi-codemode@1.1.0'),
     'pair Pi 1.0.4 with the Codemode release that exports the API its loader imports');
   const legacyClosureJobStart = workflow.indexOf('\n  legacy-pi:');
+  const legacy11JobStart = workflow.indexOf('\n  legacy-pi-1-1:');
   const latestJobStart = workflow.indexOf('\n  latest-pi:');
-  assert.ok(legacyClosureJobStart >= 0 && latestJobStart > legacyClosureJobStart,
-    'test Pi 1.0.4 with a fresh dependency closure in its own job');
-  const legacyClosureJob = workflow.slice(legacyClosureJobStart, latestJobStart);
+  assert.ok(legacyClosureJobStart >= 0 && legacy11JobStart > legacyClosureJobStart && latestJobStart > legacy11JobStart,
+    'test Pi 1.0.4 and Pi 1.1.0 with fresh dependency closures in separate jobs');
+  const legacyClosureJob = workflow.slice(legacyClosureJobStart, legacy11JobStart);
   assert.ok(legacyClosureJob.includes('Install Pi 1.0.4 with compatible Codemode and fresh dependencies'));
   assert.ok(legacyClosureJob.includes('@earendil-works/pi-codemode@1.1.0'));
   assert.ok(legacyClosureJob.includes('cp -a "$prefix/node_modules" node_modules'));
   assert.ok(legacyClosureJob.includes('PI_PACKAGE_DIR: ${{ runner.temp }}/pi-1.0.4/node_modules/@earendil-works/pi-coding-agent'));
   assert.ok(legacyClosureJob.includes('node-version: "22.19.0"'));
+  const legacy11Job = workflow.slice(legacy11JobStart, latestJobStart);
+  assert.ok(legacy11Job.includes('Pi 1.1.0 fresh-install compatibility'));
+  assert.ok(legacy11Job.includes('Install Pi 1.1.0 with compatible Codemode and fresh dependencies'));
+  assert.ok(legacy11Job.includes('@earendil-works/pi-coding-agent@1.1.0'));
+  assert.ok(legacy11Job.includes('@earendil-works/pi-codemode@1.1.0'));
+  assert.ok(legacy11Job.includes('cp -a "$prefix/node_modules" node_modules'));
+  assert.ok(legacy11Job.includes('PI_PACKAGE_DIR: ${{ runner.temp }}/pi-1.1.0/node_modules/@earendil-works/pi-coding-agent'));
+  assert.ok(legacy11Job.includes('node-version: "22.19.0"'));
   const latestJob = workflow.slice(latestJobStart);
   const latestInstall = latestJob.indexOf('Install Pi 1.2.0 with its dependency closure');
   const latestCheck = latestJob.indexOf('Check against Pi 1.2.0');
@@ -122,7 +131,7 @@ test('CI preserves the required Node, runner, Pi, and Node.js type coverage', ()
     'run the current Pi runtime on its declared minimum Node.js version');
   assert.match(contributing, /with Node\.js 22, 24, and 26 against Pi 1\.0\.4 and 1\.1\.0 paired with Pi Codemode 1\.1\.0/);
   assert.match(contributing, /upstream report/);
-  assert.match(contributing, /additional Ubuntu\/Node\.js 22\.19\.0 job tests Pi 1\.0\.4 with Codemode 1\.1\.0 and its freshly resolved dependency closure/);
+  assert.match(contributing, /Additional Ubuntu\/Node\.js 22\.19\.0 jobs test Pi 1\.0\.4 and Pi 1\.1\.0, each paired with Codemode 1\.1\.0 and its freshly resolved dependency closure/);
   assert.match(contributing, /separate Ubuntu\/Node\.js 22\.19\.0 job also runs the type check and tests with Pi 1\.2\.0/);
 });
 
