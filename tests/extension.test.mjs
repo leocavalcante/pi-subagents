@@ -77,15 +77,17 @@ const terminalDisplayUnicode = (() => {
   const zeroWidthNonJoiner = String.fromCodePoint(0x200c);
   const variationSelector = String.fromCodePoint(0xfe0f);
   const orphanedVariationSelectors = `${String.fromCodePoint(0xfe0e)}${variationSelector}`;
+  const orphanedJoiners = `${zeroWidthJoiner} ${zeroWidthNonJoiner}`;
   const supplementaryEmojiVariation = `${String.fromCodePoint(0x1f6e0)}${variationSelector}`;
   const englandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
   const emojiSequence = `👩${zeroWidthJoiner}💻`;
+  const emojiKissSequence = `👩${zeroWidthJoiner}❤️${zeroWidthJoiner}💋${zeroWidthJoiner}👨`;
   const scriptJoiner = `می${zeroWidthNonJoiner}توان`;
   return {
     hidden: [zeroWidthSpace, wordJoiner, mongolianVowelSeparator, languageTag, standaloneTagCharacter, orphanedVariationSelectors],
-    visible: ['\\u200b', '\\u2060', '\\u180e', '\\u{e0001}', '\\u{e0061}', '\\ufe0e\\ufe0f'],
-    preserved: [englandFlag, emojiSequence, scriptJoiner, supplementaryEmojiVariation, `✈${variationSelector}`],
-    text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${englandFlag} ${supplementaryEmojiVariation} ${emojiSequence} ${scriptJoiner} ✈${variationSelector}`,
+    visible: ['\\u200b', '\\u2060', '\\u180e', '\\u{e0001}', '\\u{e0061}', '\\ufe0e\\ufe0f', '\\u200d', '\\u200c'],
+    preserved: [englandFlag, emojiSequence, emojiKissSequence, scriptJoiner, supplementaryEmojiVariation, `✈${variationSelector}`],
+    text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${orphanedJoiners} ${englandFlag} ${supplementaryEmojiVariation} ${emojiSequence} ${emojiKissSequence} ${scriptJoiner} ✈${variationSelector}`,
   };
 })();
 const assertTerminalDisplayUnicode = rendered => {
@@ -3554,6 +3556,47 @@ test('project agent metadata is escaped in listings and trust confirmations', as
   } finally {
     rmSync(metadataFile, { force: true });
     rmSync(hostilePathFile, { force: true });
+  }
+});
+
+test('orphaned script joiners are visible in project-agent listings and approvals', async () => {
+  const projectDir = join(sandbox, 'project/.pi/agents');
+  const context = { ...ctx(), cwd: join(sandbox, 'project') };
+  const joiners = [
+    [0x200c, 'ZWNJ'],
+    [0x200d, 'ZWJ'],
+  ];
+  const files = [];
+  try {
+    for (const [codePoint, label] of joiners) {
+      const joiner = String.fromCodePoint(codePoint);
+      const name = `orphan-${label}${joiner}`;
+      const description = `Joiner ${joiner} display test`;
+      const file = join(projectDir, `orphan-${label}.md`);
+      files.push(file);
+      writeFileSync(file, `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\nPrompt.\n`);
+
+      const listed = await invoke('subagent_agents', { agentScope: 'project' }, context);
+      const listingText = listed.content[0].text;
+      assert.equal(listingText.includes(name), false, `${label} should be visible in listings: ${JSON.stringify(listingText)}`);
+      assert.equal(listingText.includes(description), false, `${label} should be visible beside whitespace: ${JSON.stringify(listingText)}`);
+      assert.ok(listingText.includes(`u${codePoint.toString(16)}`));
+      const listedAgent = listed.details.agents.find(agent => agent.name === name);
+      assert.equal(listedAgent.name, name, 'structured metadata retains the original name');
+      assert.equal(listedAgent.description, description, 'structured metadata retains the original description');
+
+      let confirmation = '';
+      const trustContext = { ...context, hasUI: true, isProjectTrusted: () => false,
+        ui: { confirm: async (_title, body) => { confirmation = body; return false; } } };
+      const denied = await invoke('subagent', { agent: name, task: 'must not start', agentScope: 'project' }, trustContext);
+      assert.equal(denied.content[0].text, 'Canceled: project-local agents not approved.');
+      assert.equal(confirmation.includes(name), false, `${label} should be visible in approvals: ${JSON.stringify(confirmation)}`);
+      assert.equal(confirmation.includes(description), false, `${label} should be visible beside whitespace in approvals`);
+      assert.ok(confirmation.includes(`u${codePoint.toString(16)}`));
+    }
+    assert.equal(traces().length, 0);
+  } finally {
+    for (const file of files) rmSync(file, { force: true });
   }
 });
 

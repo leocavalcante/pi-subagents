@@ -12,9 +12,11 @@ const zeroWidthJoiner = String.fromCodePoint(0x200d);
 const zeroWidthNonJoiner = String.fromCodePoint(0x200c);
 const variationSelector = String.fromCodePoint(0xfe0f);
 const orphanedVariationSelectors = `${String.fromCodePoint(0xfe0e)}${variationSelector}`;
+const orphanedJoiners = `${zeroWidthJoiner} ${zeroWidthNonJoiner}`;
 const supplementaryEmojiVariation = `${String.fromCodePoint(0x1f6e0)}${variationSelector}`;
 const englandFlag = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
-const preservedUnicode = `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${englandFlag} ${supplementaryEmojiVariation} 👩${zeroWidthJoiner}💻 می${zeroWidthNonJoiner}توان ✈${variationSelector}`;
+const emojiKissSequence = `👩${zeroWidthJoiner}❤️${zeroWidthJoiner}💋${zeroWidthJoiner}👨`;
+const preservedUnicode = `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${orphanedJoiners} ${englandFlag} ${supplementaryEmojiVariation} 👩${zeroWidthJoiner}💻 ${emojiKissSequence} می${zeroWidthNonJoiner}توان ✈${variationSelector}`;
 const terminalControlText = `terminal ${String.fromCharCode(27)}]52;c;pi-subagents-test${String.fromCharCode(7)} ${String.fromCharCode(27)}[2J${String.fromCharCode(0x9b)}2J ${preservedUnicode}\nnext line`;
 const trace = entry => {
   const safeEntry = { ...entry };
