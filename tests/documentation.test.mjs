@@ -464,6 +464,11 @@ test('README documents terminal-control escaping for foreground, background, and
   assert.match(security, /preserving the raw follow-up content and structured details/i);
 });
 
+test('README documents metadata escaping and meaningful variation-selector sequences', () => {
+  const agents = section('Agent definitions');
+  assert.match(agents, /escapes default-ignorable Unicode code points for display while preserving zero-width joiners, non-joiners, variation selectors attached to emoji or ideographic bases, and registered emoji tag flag sequences; structured metadata remains unchanged/);
+});
+
 test('README distinguishes POSIX process-group cleanup from Windows Job Object supervision', () => {
   const deadlines = section('Task deadlines');
   assert.match(deadlines, /On POSIX, cleanup signals the child's process group/);
