@@ -1,6 +1,6 @@
 {
 	"name": "@leocavalcante/pi-subagents",
-	"version": "0.1.3",
+	"version": "0.2.0",
 	"description": "Delegate tasks to isolated Pi agents, singly, in parallel, or in a chain.",
 	"type": "module",
 	"license": "MIT",
