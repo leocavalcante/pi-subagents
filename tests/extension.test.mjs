@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
+import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
 import { promises as fsPromises } from 'node:fs';
@@ -884,6 +885,24 @@ test('parallel progress distinguishes running and queued tasks by display name',
   assert.equal((await finish(id, timeoutMs)).state, 'completed');
 });
 
+test('long display names leave parallel progress state visible', async () => {
+  const timeoutMs = process.platform === 'win32' ? 60_000 : 15_000;
+  const started = await invoke('subagent', { background: true, tasks: [
+    { agent: 'worker', name: 'x'.repeat(MAX_AGENT_NAME_BYTES), task: 'delay=3000 long progress name' },
+  ] });
+  const id = started.details.background.id;
+  try {
+    const progress = await waitFor(async () => {
+      const job = await status(id);
+      return job.latest?.details?.results?.[0]?.startedAtMs !== undefined ? job.latest : undefined;
+    }, timeoutMs);
+    const line = progress.content[0].text.split('\n').at(-1);
+    assert.match(line, /^1\. x{61}\.\.\. running [\d.]+s/);
+  } finally {
+    await finish(id, timeoutMs);
+  }
+});
+
 test('background output is available per task before the job finishes', async () => {
   const started = await invoke('subagent', { background: true, concurrency: 1, tasks: [
     { agent: 'worker', task: 'first task output' },
@@ -900,6 +919,15 @@ test('background output is available per task before the job finishes', async ()
   assert.notEqual(output.isError, true);
   assert.match(output.structuredContent.output.text, /first task output/);
   assert.equal((await finish(id)).state, 'completed');
+});
+
+test('background output renders caller-provided labels as literal Markdown', async () => {
+  const name = '[reviewer](https://example.com)';
+  const started = await invoke('subagent', { background: true, notify: false, agent: 'worker', name, task: 'markdown-safe output' });
+  const id = started.details.background.id;
+  await finish(id);
+  const output = await invoke('subagent_jobs', { action: 'output', jobId: id });
+  assert.ok(output.content[0].text.includes('[`[reviewer](https://example.com)` (`worker`)]'));
 });
 
 test('all foreground and background invocations share a four-process budget', async () => {
@@ -3240,6 +3268,39 @@ test('background display names remain stable through progress, job inspection, w
   await finish(competingId);
 });
 
+test('background generated names are reallocated after concurrent project-agent approval', async t => {
+  const randomInt = t.mock.method(crypto, 'randomInt', () => 0);
+  syncBuiltinESMExports();
+  const approvals = [];
+  const jobIds = [];
+  const launches = [];
+  const context = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: () => new Promise(resolve => approvals.push(resolve)) } };
+  const request = task => invoke('subagent', {
+    background: true, notify: false, agent: 'project', agentScope: 'project', task,
+  }, context).then(result => {
+    if (result.details.background?.id) jobIds.push(result.details.background.id);
+    return result;
+  });
+  try {
+    launches.push(request('delay=3000 concurrent approval one'));
+    launches.push(request('delay=3000 concurrent approval two'));
+    await waitFor(() => approvals.length === 2);
+    approvals.forEach(resolve => resolve(true));
+    const results = await Promise.all(launches);
+    assert.ok(results.every(result => result.isError !== true));
+    const [first, second] = await Promise.all(jobIds.map(status));
+    assert.equal(first.label, 'project amber badger');
+    assert.notEqual(first.label, second.label, 'the second approval must avoid the first active job label');
+  } finally {
+    approvals.forEach(resolve => resolve(true));
+    await Promise.allSettled(launches);
+    await Promise.all(jobIds.map(id => finish(id)));
+    randomInt.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test('agent listing rejects invalid search queries before discovery output or child launch', async () => {
   const parameters = tools.get('subagent_agents').definition.parameters;
   const outputSchema = tools.get('subagent_agents').definition.outputSchema;
@@ -5072,10 +5133,12 @@ test('background output can page captured stderr without changing the default re
   assert.ok(controlPage, 'The hostile stderr controls were present in a paginated response');
   const definition = tools.get('subagent_jobs').definition;
   const theme = { fg: (_color, text) => text, bold: text => text };
+  initTheme('dark', false);
   const rendered = definition.renderResult(controlPage, { expanded: true }, theme, { isError: false }).render(100).join('\n');
-  assert.equal(rendered.includes(esc), false, 'stderr terminal controls must be escaped for display');
+  assert.equal(rendered.includes(`${esc}]52;c;pi-subagents-test`), false, 'stderr OSC controls must be escaped for display');
+  assert.equal(rendered.includes(`${esc}[2J`), false, 'stderr CSI controls must be escaped for display');
+  assert.equal(rendered.includes(`${c1}2J`), false, 'stderr C1 controls must be escaped for display');
   assert.equal(rendered.includes(bell), false);
-  assert.equal(rendered.includes(c1), false);
   assert.ok(invisiblePage, 'The captured stderr included invisible Unicode formatting');
   const renderedInvisiblePage = definition.renderResult(invisiblePage, { expanded: true }, theme, { isError: false }).render(100).join('\n');
   assert.equal(renderedInvisiblePage.includes(zeroWidthSpace), false);

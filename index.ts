@@ -2107,8 +2107,8 @@ export default function (pi: ExtensionAPI) {
 						...(task.stepId !== undefined ? { stepId: task.stepId } : {}) };
 					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;
 					const streamLabel = stream === "stderr" ? " stderr" : "";
-					const safeName = escapeTerminalControls(output.name).replace(/`/g, "\\u0060");
-					const safeAgent = escapeTerminalControls(output.agent).replace(/`/g, "\\u0060");
+					const safeName = displayUntrustedText(output.name);
+					const safeAgent = displayUntrustedText(output.agent);
 					return reply(`${job.id} task ${taskIndex} [${safeName} (${safeAgent})]${streamLabel} bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
 						metadata, { job: metadata, output });
 				} catch (error) {
@@ -2746,7 +2746,8 @@ export default function (pi: ExtensionAPI) {
 									if (latest?.type === "toolCall") activity = ` ${latest.name} ${JSON.stringify(previewToolArguments(latest.args))}`;
 									else if (latest?.type === "text") activity = ` ${latest.text}`;
 								}
-								const line = `${index + 1}. ${terminalSubagentIdentity(r)} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
+								const identity = truncateOutput(terminalSubagentIdentity(r), 64, "...");
+								const line = `${index + 1}. ${identity} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
 								return truncateOutput(line, 160, "...");
 							});
 							onUpdate({
@@ -2874,6 +2875,13 @@ export default function (pi: ExtensionAPI) {
 
 			if (!params.background) return reportUsage(await run(signal, onUpdate));
 			signal?.throwIfAborted();
+			const finalNames = assignSubagentNames(selectedRequests,
+				jobs.list().filter((job) => !job.finishedAt).map((job) => job.label));
+			if (typeof finalNames === "string") return {
+				content: [{ type: "text", text: finalNames }],
+				details: makeDetails(mode)([]), isError: true,
+			};
+			for (const [index, item] of requested.entries()) item.name = finalNames[index]!;
 			const label =
 				mode === "single"
 					? requested[0].name
