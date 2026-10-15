@@ -47,7 +47,7 @@ test('silent jobs preserve progress, results, retention and waiters without comp
   assert.equal((await jobs.wait(thrown.id, 1000)).job.error, 'silent failure');
   assert.equal(delivered.length, 0);
   const normal = jobs.start('default notification', async () => 'ok');
-  await jobs.wait(normal.id, 1000);
+  await tick();
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].notify, true);
   assert.throws(() => jobs.start('bad notification', async () => 'ok', { notify: 'false' }), /notify/);
@@ -305,6 +305,32 @@ test('wait resolves every observer after completion and retention, including fai
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
   assert.equal((await jobs.wait(job.id, 1000)).timedOut, false);
   assert.equal(await jobs.wait('unknown', 1000), undefined);
+  await jobs.shutdown();
+});
+
+test('a wait pending at completion replaces the follow-up unless output is evicted', async () => {
+  const delivered = [];
+  const jobs = new JobManager(job => delivered.push(job), () => false, 8, 32, { maxBytes: 10, measure: result => Buffer.byteLength(result) });
+  const gate = deferred();
+  const waitedJob = jobs.start('waited', async () => gate.promise);
+  const waiting = jobs.wait(waitedJob.id, 1000);
+  gate.resolve('done');
+  assert.equal((await waiting).job.latest, 'done');
+  assert.equal(delivered.length, 0, 'The pending wait already returned the result');
+
+  const late = deferred();
+  const timedOutJob = jobs.start('timed out wait', async () => late.promise);
+  assert.equal((await jobs.wait(timedOutJob.id, 1)).timedOut, true);
+  late.resolve('late');
+  await tick();
+  assert.deepEqual(delivered.map(job => job.latest), ['late'], 'A wait that timed out earlier keeps the follow-up');
+
+  const evicted = deferred();
+  const evictedJob = jobs.start('evicted', async () => evicted.promise);
+  const evictedWait = jobs.wait(evictedJob.id, 1000);
+  evicted.resolve('x'.repeat(30));
+  assert.equal((await evictedWait).job.outputEvicted, true);
+  assert.equal(delivered.at(-1).latest, 'x'.repeat(30), 'Evicted output still reaches the parent through the follow-up');
   await jobs.shutdown();
 });
 

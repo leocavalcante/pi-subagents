@@ -244,9 +244,9 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /case-insensitive literal substring matching in names, descriptions, definition filenames \(not parent directories\), tags, explicitly configured tool allowlists, `cwd` paths, `unsetEnv` environment-variable names, `timeoutMs` values \(as decimal milliseconds\), model selectors, and thinking levels/);
   assert.match(usage, /Search does not infer runtime-default tools, the parent-session `cwd`, inherited model\/thinking settings, or unspecified deadlines; timeout values are matched as decimal milliseconds/);
   assert.match(usage, /It only searches the names of filtered environment variables, never their values/);
-  assert.match(usage, /Unicode 17\.0 default \(non-Turkic\) full case folding and NFC normalization \(so canonically equivalent composed and decomposed forms match\)/);
-  assert.match(usage, /Greek sigma, German sharp s \(`ß`\/`ẞ` → `ss`\), long s, and ligature expansions/);
-  assert.match(usage, /`STRASSE` matches `Straße`/);
+  assert.match(usage, /case-insensitive literal substring matching/);
+  assert.match(usage, /NFC normalization and lowercase conversion/);
+  assert.match(usage, /does not apply full Unicode case folding/);
   assert.match(usage, /Choose one of `name`, `query`, `tag`, or `tags`/);
   assert.match(usage, /To return agents with one exact tag, pass `tag`/);
   assert.match(usage, /tag matching is case-insensitive, matches a complete label, and normalizes input to lowercase/);
@@ -336,9 +336,9 @@ test('README documents bounded delegated working-directory paths and precedence'
 
 test('README documents the bounded delegated task input size', () => {
   const usage = section('Usage');
-  assert.match(usage, /Task, model-selector, and working-directory strings must be well-formed Unicode/);
-  assert.match(usage, /Each task is limited to 4 MiB of UTF-8 text/);
-  assert.match(usage, /all task text submitted in one dispatch is limited to 16 MiB total/);
+  assert.match(usage, /Task, preamble, model-selector, and working-directory strings must be well-formed Unicode/);
+  assert.match(usage, /Each child task is limited to 4 MiB of UTF-8 text/);
+  assert.match(usage, /task text submitted in one dispatch is limited to 16 MiB total, counting the preamble once/);
   assert.match(usage, /chain context after substitution/);
   assert.match(usage, /Expanded chain task text is also limited to 16 MiB total across all steps/);
 });

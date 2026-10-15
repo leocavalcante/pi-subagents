@@ -28,7 +28,6 @@
 		"usage.ts",
 		"chain.ts",
 		"unicode.ts",
-		"unicode-normalization.ts",
 		"progress.ts",
 		"abort.ts",
 		"temporary-files.ts",
@@ -36,7 +35,6 @@
 		"windows-supervisor.cs",
 		"CONTRIBUTING.md",
 		"SECURITY.md",
-		"UNICODE-LICENSE.txt",
 		"LICENSE",
 		"README.md"
 	],

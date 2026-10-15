@@ -99,7 +99,7 @@ import {
 	substituteChainContext,
 	substituteChainContextBounded,
 } from "./chain.ts";
-import { caseFoldUnicode, isWellFormedUnicode } from "./unicode.ts";
+import { isWellFormedUnicode } from "./unicode.ts";
 import { ProgressUpdateLimiter } from "./progress.ts";
 import { waitForSharedOperation, type SharedAbortableOperationState } from "./abort.ts";
 import { buildWindowsSupervisorInvocation } from "./windows-supervisor-invocation.ts";
@@ -107,7 +107,9 @@ import { removeTemporaryDirectory, trackTemporaryDirectory } from "./temporary-f
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
-const MAX_CONCURRENCY = 4;
+const DEFAULT_PROCESS_LIMIT = 4;
+const MAX_PROCESS_LIMIT = 8;
+const PROCESS_LIMIT_ENV = "PI_SUBAGENTS_MAX_PROCESSES";
 const MAX_ACTIVE_JOBS = 8;
 const MAX_RETAINED_JOBS = 32;
 const MAX_JOB_RECORDS = MAX_ACTIVE_JOBS + MAX_RETAINED_JOBS;
@@ -122,9 +124,18 @@ const MAX_AGENT_DIAGNOSTIC_LINE_BYTES = 256;
 const MAX_PROJECT_APPROVAL_BYTES = 32 * 1024;
 const SUBAGENT_NESTING_DEPTH_ENV = "PI_SUBAGENTS_NESTING_DEPTH";
 const MAX_SUBAGENT_NESTING_DEPTH = 2;
-// Allow every configured active background job to fill its process worker pool.
-const MAX_PROCESS_QUEUE = MAX_ACTIVE_JOBS * MAX_CONCURRENCY;
 const MAX_RETAINED_JOB_BYTES = 32 * 1024 * 1024;
+
+/** Read the shared child-process limit once per extension runtime; reject invalid values loudly. */
+function readProcessLimit(): number {
+	const value = process.env[PROCESS_LIMIT_ENV];
+	if (value === undefined || value === "") return DEFAULT_PROCESS_LIMIT;
+	const limit = Number(value);
+	if (!/^\d+$/.test(value) || limit < 1 || limit > MAX_PROCESS_LIMIT) {
+		throw new Error(`${PROCESS_LIMIT_ENV} must be an integer from 1 to ${MAX_PROCESS_LIMIT}.`);
+	}
+	return limit;
+}
 
 function getSubagentNestingDepth(): number {
 	const value = process.env[SUBAGENT_NESTING_DEPTH_ENV];
@@ -428,6 +439,8 @@ interface SingleResult {
 	processExitCode?: number | null;
 	failureContext?: FailureContext;
 	messages: Message[];
+	changedFiles?: string[];
+	changedFilesOmitted?: number;
 	stderr: string;
 	usage: UsageStats;
 	reportedUsage?: Usage;
@@ -438,6 +451,7 @@ interface SingleResult {
 	stepId?: string;
 	timeoutMs?: number;
 	timedOut?: boolean;
+	startedAtMs?: number;
 	capture?: {
 		messagesDropped?: number;
 		retainedMessageBytes?: number;
@@ -587,6 +601,10 @@ function getResultOutput(result: SingleResult): string {
 	}
 	const notice = getCaptureNotice(result);
 	if (notice) sections.push(notice);
+	if (result.changedFiles?.length) {
+		const omitted = result.changedFilesOmitted ? ` (+${result.changedFilesOmitted} more)` : "";
+		sections.push(`Changed files: ${result.changedFiles.map(displayUntrustedText).join(", ")}${omitted}`);
+	}
 	return sections.join("\n\n");
 }
 
@@ -897,6 +915,7 @@ async function runSingleAgent(
 	expandedTaskTooLarge = false,
 	historyByteLimit = MAX_HISTORY_BYTES,
 	expandedTaskError?: string,
+	recordedTask?: string,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -905,7 +924,7 @@ async function runSingleAgent(
 		return {
 			agent: agentName,
 			agentSource: "unknown",
-			task,
+			task: recordedTask ?? task,
 			exitCode: 1,
 			messages: [],
 			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
@@ -939,7 +958,7 @@ async function runSingleAgent(
 	const currentResult: SingleResult = {
 		agent: agentName,
 		agentSource: agent.source,
-		task,
+		task: recordedTask ?? task,
 		exitCode: -1, // Still running; progress must not count this task as completed.
 		messages: [],
 		stderr: "",
@@ -960,6 +979,16 @@ async function runSingleAgent(
 	signal?.throwIfAborted();
 	const effectiveCwd = cwd ?? agent.cwd;
 	const resolvedCwd = effectiveCwd ? path.resolve(defaultCwd, effectiveCwd) : defaultCwd;
+	const changedFiles = new Set<string>();
+	const MAX_CHANGED_FILES = 50;
+	function recordChangedFile(filePath: string) {
+		const resolved = path.resolve(resolvedCwd, filePath);
+		if (changedFiles.has(resolved)) return;
+		changedFiles.add(resolved);
+		if (currentResult.changedFiles === undefined) currentResult.changedFiles = [];
+		if (currentResult.changedFiles.length < MAX_CHANGED_FILES) currentResult.changedFiles.push(resolved);
+		else currentResult.changedFilesOmitted = (currentResult.changedFilesOmitted ?? 0) + 1;
+	}
 	if (resolvedCwd.length > MAX_WORKING_DIRECTORY_LENGTH) {
 		currentResult.exitCode = 1;
 		currentResult.errorMessage = `Resolved working directory exceeds the ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code-unit limit.`;
@@ -990,15 +1019,9 @@ async function runSingleAgent(
 	let progressPending = false;
 	// Avoid rebuilding the bounded message array for each accepted child event.
 	let refreshMessageSnapshot = () => {};
-	const emitUpdate = (force = false) => {
-		if (!onUpdate) return;
-		if (!progressLimiter.shouldUpdate(performance.now(), force)) {
-			progressPending = true;
-			return;
-		}
-		progressPending = false;
+	const sendUpdate = () => {
 		refreshMessageSnapshot();
-		onUpdate({
+		onUpdate?.({
 			content: [
 				{
 					type: "text",
@@ -1007,6 +1030,15 @@ async function runSingleAgent(
 			],
 			details: makeDetails([currentResult]),
 		});
+	};
+	const emitUpdate = (force = false) => {
+		if (!onUpdate) return;
+		if (!progressLimiter.shouldUpdate(performance.now(), force)) {
+			progressPending = true;
+			return;
+		}
+		progressPending = false;
+		sendUpdate();
 	};
 
 	let release: (() => void) | undefined;
@@ -1117,6 +1149,7 @@ async function runSingleAgent(
 			};
 
 			let previousToolResultRecord: { type: "message_end" | "tool_result_end"; message: Message } | undefined;
+			const pendingFileCalls = new Map<string, string>();
 			const processLine = (line: string) => {
 				const record = ++recordPosition;
 				if (!line.trim()) return;
@@ -1161,6 +1194,18 @@ async function runSingleAgent(
 
 				if (event.type === "message_end" && isCapturedMessageRole(event.message.role)) {
 					const msg = event.message as Message;
+					if (msg.role === "assistant") {
+						for (const part of msg.content) {
+							if (part.type === "toolCall" && (part.name === "edit" || part.name === "write") &&
+								typeof part.id === "string" && typeof part.arguments?.path === "string") {
+								pendingFileCalls.set(part.id, part.arguments.path);
+							}
+						}
+					} else if (msg.role === "toolResult") {
+						const filePath = pendingFileCalls.get(msg.toolCallId);
+						pendingFileCalls.delete(msg.toolCallId);
+						if (!msg.isError && filePath !== undefined) recordChangedFile(filePath);
+					}
 					if ((msg.role === "assistant" || msg.role === "toolResult") && msg.usage !== undefined) {
 						try {
 							const usage = sumUsage([currentResult.reportedUsage ?? normalizeUsage(undefined), normalizeUsage(msg.usage)]);
@@ -1198,7 +1243,10 @@ async function runSingleAgent(
 				}
 
 				if (event.type === "tool_result_end" && event.message) {
-					const msg = event.message as Message;
+					const msg = event.message as Extract<Message, { role: "toolResult" }>;
+					const filePath = pendingFileCalls.get(msg.toolCallId);
+					pendingFileCalls.delete(msg.toolCallId);
+					if (!msg.isError && filePath !== undefined) recordChangedFile(filePath);
 					const duplicateCanonicalCopy = adjacentToolResultRecord?.type === "message_end" &&
 						isDeepStrictEqual(adjacentToolResultRecord.message, msg);
 					if (!duplicateCanonicalCopy) {
@@ -1280,6 +1328,9 @@ async function runSingleAgent(
 
 			proc.once("spawn", () => {
 				processSpawned = true;
+				currentResult.startedAtMs = performance.now();
+				// Report the start outside the throttle so the first child event still updates promptly.
+				sendUpdate();
 				// Cancellation can arrive before Node assigns a PID. Retry now that
 				// the child exists, rather than letting it run after an abort.
 				if (wasAborted) {
@@ -1366,70 +1417,65 @@ async function runSingleAgent(
 const TimeoutSchema = Type.Integer({
 	minimum: 1,
 	maximum: MAX_TIMEOUT_MS,
-	description: "Per-task runtime deadline in milliseconds, starting at child spawn. Queue time excluded. No deadline by default.",
 });
 
-const DispatchTimeoutSchema = Type.Union([TimeoutSchema, Type.Null()], {
-	description: "Override the per-task runtime deadline. Use null to disable the deadline for this call or entry, including any agent default.",
-});
+const DispatchTimeoutSchema = Type.Union([TimeoutSchema, Type.Null()]);
 
 const DispatchOptions = {
 	unsetEnv: Type.Optional(Type.Array(Type.String({ pattern: ENVIRONMENT_VARIABLE_NAME_PATTERN }), {
 		maxItems: MAX_AGENT_UNSET_ENV_COUNT,
 		uniqueItems: true,
-		description: `Additional inherited child environment variable names to remove. Removal is additive with agent defaults and other dispatch levels; cannot remove the internal nesting guard. Maximum ${MAX_AGENT_UNSET_ENV_COUNT} names and ${MAX_AGENT_UNSET_ENV_BYTES} bytes.`,
 	})),
 	model: Type.Optional(Type.Union([
 		Type.String({ minLength: 1, maxLength: MAX_MODEL_SELECTOR_BYTES,
-			description: `Override the agent's model. Accepts a Pi model selector, including provider/id and :thinking suffixes; maximum ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.` }),
-		Type.Null({ description: "Ignore the agent's configured model and inherit the parent session model." }),
-	], { description: "Override the model, or set null to ignore the agent's configured model and inherit the parent session model." })),
+			 }),
+		Type.Null(),
+	], {  })),
 	thinking: Type.Optional(Type.Union([
-		StringEnum(THINKING_LEVELS, { description: "Override the agent's thinking level, including any model suffix." }),
-		Type.Null({ description: "Ignore the agent's configured thinking level; inherit parent thinking only when the model is also inherited." }),
-	], { description: "Override the thinking level, or set null to ignore the agent default and inherit parent thinking only when the model is inherited." })),
+		StringEnum(THINKING_LEVELS),
+		Type.Null(),
+	], {  })),
 	tools: Type.Optional(Type.Union([
 		Type.String({ maxLength: MAX_AGENT_TOOL_LIST_BYTES,
-			description: `Comma-separated tool names; maximum ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and ${MAX_AGENT_TOOL_COUNT} entries.` }),
+			 }),
 		Type.Array(Type.String({ maxLength: MAX_AGENT_TOOL_LIST_BYTES }), {
 			maxItems: MAX_AGENT_TOOL_COUNT,
-			description: `Tool names; maximum ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes total and ${MAX_AGENT_TOOL_COUNT} entries.`,
+
 		}),
-		Type.Null({ description: "Ignore the agent's configured tool allowlist and leave the child Pi tool selection at its defaults." }),
-	], { description: "Override the agent's configured tool allowlist. Use [] for no tools or null to use the child Pi defaults." })),
+		Type.Null(),
+	], {  })),
 };
 
 const AgentNameSchema = Type.String({
 	pattern: AGENT_NAME_PATTERN,
 	minLength: 1,
 	maxLength: MAX_AGENT_NAME_BYTES,
-	description: `Agent name; maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes and no terminal or bidirectional controls.`,
+
 });
 
-function taskTextSchema(description: string) {
-	return Type.String({ maxLength: MAX_TASK_BYTES,
-		description: `${description}. Maximum ${MAX_TASK_BYTES / (1024 * 1024)} MiB UTF-8 per task and ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB total per dispatch.` });
+function taskTextSchema() {
+	return Type.String({ maxLength: MAX_TASK_BYTES });
 }
 
 const WorkingDirectory = Type.String({
 	pattern: "^[^\\u0000]*$",
 	minLength: 1,
 	maxLength: MAX_WORKING_DIRECTORY_LENGTH,
-	description: `Non-empty working directory for the child process. Precedence: entry, top-level call, agent default, then parent session directory. Relative paths resolve from the parent session's working directory. Maximum ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units; no NUL characters.`,
+
 });
 
 const AgentTagsSelectorSchema = Type.Array(Type.String({ pattern: AGENT_TAG_INPUT_PATTERN,
 	minLength: 1, maxLength: MAX_AGENT_TAG_BYTES }), {
 	minItems: 1,
 	maxItems: MAX_AGENT_TAG_COUNT,
-	description: `Select an agent carrying every listed exact capability tag. Duplicate labels are ignored after lowercase normalization; maximum ${MAX_AGENT_TAG_COUNT} labels and ${MAX_AGENT_TAG_LIST_BYTES} bytes total. Dispatch requires exactly one matching agent; ambiguous matches fail without launching any agent.`,
+
 });
 
 const TASK_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
 const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "id", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
 const SUBAGENT_TOOL_KEYS = [
 	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "agentTags", "task", "tasks", "chain",
-	"agentScope", "concurrency", "timeoutMs", "cwd",
+	"agentScope", "concurrency", "timeoutMs", "cwd", "preamble",
 ] as const;
 const AGENT_TOOL_KEYS = ["agentScope", "name", "query", "tag", "tags", "offset", "limit"] as const;
 const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limit", "stream", "timeoutMs"] as const;
@@ -1438,7 +1484,7 @@ const TaskItem = Type.Object({
 	...DispatchOptions,
 	agent: Type.Optional(AgentNameSchema),
 	agentTags: Type.Optional(AgentTagsSelectorSchema),
-	task: taskTextSchema("Task to delegate to the agent"),
+	task: taskTextSchema(),
 	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
 }, { additionalProperties: false });
@@ -1446,16 +1492,16 @@ const TaskItem = Type.Object({
 const ChainItem = Type.Object({
 	...DispatchOptions,
 	id: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64,
-		description: "Optional unique step ID. Later tasks reference this output with {steps.ID}." })),
+		description: "Step ID for later {steps.ID} references." })),
 	agent: Type.Optional(AgentNameSchema),
 	agentTags: Type.Optional(AgentTagsSelectorSchema),
-	task: taskTextSchema("Task with {previous} for the preceding output or {steps.ID} for an earlier named step"),
+	task: taskTextSchema(),
 	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
 }, { additionalProperties: false });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
+	description: "Agent source scope; default user.",
 	default: "user",
 });
 
@@ -1463,33 +1509,34 @@ const SubagentParams = Type.Object({
 	...DispatchOptions,
 	background: Type.Optional(
 		Type.Boolean({
-			description: "Return a job ID immediately and deliver results later. TUI/RPC only. Default: false.",
+			description: "Run in background and return a job ID (TUI/RPC only).",
 			default: false,
 		}),
 	),
 	notify: Type.Optional(Type.Boolean({ default: true,
-		description: "Background only: send an automatic completion follow-up. Set false for silent jobs inspected with subagent_jobs. Default: true." })),
+		description: "Background only: send completion follow-up; false makes job silent." })),
 	agent: Type.Optional(AgentNameSchema),
 	agentTags: Type.Optional(AgentTagsSelectorSchema),
-	task: Type.Optional(taskTextSchema("Task to delegate (for single mode)")),
+	task: Type.Optional(taskTextSchema()),
 	tasks: Type.Optional(
 		Type.Array(TaskItem, {
-			description: "Array of {agent, task} for parallel execution",
+			description: "Parallel tasks.",
 			minItems: 1,
 			maxItems: MAX_PARALLEL_TASKS,
 		}),
 	),
 	chain: Type.Optional(
 		Type.Array(ChainItem, {
-			description: "Array of {agent, task} for sequential execution, up to 32 steps",
+			description: "Sequential chain steps.",
 			minItems: 1,
 			maxItems: MAX_CHAIN_STEPS,
 		}),
 	),
+	preamble: Type.Optional(taskTextSchema()),
 	agentScope: Type.Optional(AgentScopeSchema),
 	concurrency: Type.Optional(Type.Integer({
-		minimum: 1, maximum: MAX_CONCURRENCY, default: MAX_CONCURRENCY,
-		description: "Parallel mode only: maximum simultaneous tasks in this batch, from 1 to 4. Shared process budget still applies.",
+		minimum: 1, maximum: MAX_PROCESS_LIMIT,
+		description: "Parallel mode: maximum simultaneous tasks, up to the process limit.",
 	})),
 	timeoutMs: Type.Optional(DispatchTimeoutSchema),
 	cwd: Type.Optional(WorkingDirectory),
@@ -1614,7 +1661,9 @@ export default function (pi: ExtensionAPI) {
 		return box;
 	});
 
-	const pool = new ProcessPool(MAX_CONCURRENCY, MAX_PROCESS_QUEUE);
+	const processLimit = readProcessLimit();
+	// Allow every configured active background job to fill its process worker pool.
+	const pool = new ProcessPool(processLimit, MAX_ACTIVE_JOBS * processLimit);
 	const jobs = new JobManager<JobResult, Usage>(
 		(job) => {
 			const output =
@@ -1648,27 +1697,19 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_agents",
 		label: "Subagent agents",
-		description: [
-			"List available subagents, descriptions, capability tags, configuration, and source paths without running them.",
-			"Set name to look up one exact, case-sensitive definition, tag to filter by one exact, case-insensitive capability label, tags to require every listed exact label, or query to search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines after scope precedence is applied.",
-			`Search queries use NFC-normalized Unicode 17.0 default full case folding and literal substring matching in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels (including Greek sigma, ß/ẞ-to-ss, long-s, and ligature folds); runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred, and environment variable values are never searched. Queries are limited to ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes and cannot be combined with name, tag, or tags filters.`,
-			`Agent definitions are returned in pages of at most ${MAX_AGENT_LISTING_PAGE_SIZE}; use nextOffset to continue through a large inventory.`,
-			"Tags are bounded lowercase discovery labels; subagent can dispatch through agentTags when the all-tags match is unique. Tags do not configure child execution settings.",
-			`Agent descriptions are limited to ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes. Structured paths and cwd metadata are limited to ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; diagnostic messages are limited to ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes. Longer values are marked as truncated.`,
-			`Reports invalid and duplicate definitions and agent-directory inspection failures. Agent timeout defaults are capped at ${MAX_TIMEOUT_MS} ms. Agent cwd defaults resolve from the parent session working directory. Agent unsetEnv defaults remove named inherited environment variables from children. Defaults to personal agents; use agentScope to include project agents.`,
-		].join(" "),
+		description: "List agents or filter by exact name, exact tag(s), or case-insensitive substring query. Results are paginated; use nextOffset. Defaults to personal agents; agentScope includes project agents.",
 		parameters: Type.Object({
 			agentScope: Type.Optional(AgentScopeSchema),
 			name: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_NAME_BYTES,
-				description: `Find an exact, case-sensitive agent name (maximum ${MAX_AGENT_NAME_BYTES} UTF-8 bytes). Applied after scope precedence; cannot be combined with query, tag, or tags.` })),
+				description: "Exact agent name; exclusive with query and tag filters." })),
 			query: Type.Optional(Type.String({ pattern: AGENT_NAME_PATTERN, minLength: 1, maxLength: MAX_AGENT_SEARCH_QUERY_BYTES,
-				description: `NFC-normalized literal substring search in names, descriptions, definition filenames (not parent directories), capability tags, explicitly configured tool allowlists, cwd paths, unsetEnv variable names, decimal timeoutMs values (milliseconds), model selectors, and thinking levels with Unicode 17.0 default full case folding (including Greek sigma, ß/ẞ-to-ss, long-s, and ligatures; maximum ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes). Applied after scope precedence; runtime-default tools, inherited cwd paths and model/thinking settings, and unspecified deadlines are not inferred; environment variable values are never searched; cannot be combined with name, tag, or tags.` })),
+				description: "Case-insensitive substring query; exclusive with name and tag filters." })),
 			tag: Type.Optional(Type.String({ pattern: AGENT_TAG_INPUT_PATTERN, minLength: 1, maxLength: MAX_AGENT_TAG_BYTES,
-				description: `Filter for one exact, case-insensitive capability tag using ASCII letters, digits, dots, underscores, or hyphens. Applied after scope precedence and before pagination; cannot be combined with name, query, or tags.` })),
+				description: "Filter by one exact tag; exclusive with other filters." })),
 			tags: Type.Optional(Type.Array(Type.String({ pattern: AGENT_TAG_INPUT_PATTERN, minLength: 1, maxLength: MAX_AGENT_TAG_BYTES }), {
 				minItems: 1,
 				maxItems: MAX_AGENT_TAG_COUNT,
-				description: `Require every listed exact, case-insensitive capability tag. Duplicate labels are ignored after lowercase normalization; maximum ${MAX_AGENT_TAG_COUNT} labels and ${MAX_AGENT_TAG_LIST_BYTES} bytes total. Applied after scope precedence and before pagination; cannot be combined with name, query, or tag.`,
+				description: "Require every listed tag; exclusive with other filters.",
 			})),
 			offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_AGENT_FILES * 2,
 				description: "Zero-based offset into the locale-independent agent-name ordering, after any name, query, tag, or tags filter. Default: 0." })),
@@ -1770,7 +1811,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const exactName = typeof requestedName === "string" ? requestedName : undefined;
 			const query = typeof requestedQuery === "string" ? requestedQuery.trim() : undefined;
-			const normalizedQuery = query === undefined ? undefined : caseFoldUnicode(query);
+			const normalizedQuery = query === undefined ? undefined : query.normalize("NFC").toLowerCase();
 			const requestedOffset: unknown = params.offset;
 			const offset = requestedOffset === undefined ? 0 : requestedOffset;
 			if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset > MAX_AGENT_FILES * 2) {
@@ -1787,16 +1828,16 @@ export default function (pi: ExtensionAPI) {
 				.filter((agent) => tag === undefined || (agent.tags?.includes(tag) ?? false))
 				.filter((agent) => tags === undefined || tags.every((tag) => agent.tags?.includes(tag) ?? false))
 				.filter((agent) => normalizedQuery === undefined ||
-					caseFoldUnicode(agent.name).includes(normalizedQuery) ||
-					caseFoldUnicode(agent.description).includes(normalizedQuery) ||
-					caseFoldUnicode(path.basename(agent.filePath)).includes(normalizedQuery) ||
-					(agent.tags?.some((tag) => caseFoldUnicode(tag).includes(normalizedQuery)) ?? false) ||
-					(agent.tools?.some((tool) => caseFoldUnicode(tool).includes(normalizedQuery)) ?? false) ||
-					(agent.cwd !== undefined && caseFoldUnicode(agent.cwd).includes(normalizedQuery)) ||
-					(agent.unsetEnv?.some((name) => caseFoldUnicode(name).includes(normalizedQuery)) ?? false) ||
-					(agent.timeoutMs !== undefined && caseFoldUnicode(String(agent.timeoutMs)).includes(normalizedQuery)) ||
-					(agent.model !== undefined && caseFoldUnicode(agent.model).includes(normalizedQuery)) ||
-					(agent.thinking !== undefined && caseFoldUnicode(agent.thinking).includes(normalizedQuery)))
+					agent.name.normalize("NFC").toLowerCase().includes(normalizedQuery) ||
+					agent.description.normalize("NFC").toLowerCase().includes(normalizedQuery) ||
+					path.basename(agent.filePath).normalize("NFC").toLowerCase().includes(normalizedQuery) ||
+					(agent.tags?.some((tag) => tag.normalize("NFC").toLowerCase().includes(normalizedQuery)) ?? false) ||
+					(agent.tools?.some((tool) => tool.normalize("NFC").toLowerCase().includes(normalizedQuery)) ?? false) ||
+					(agent.cwd !== undefined && agent.cwd.normalize("NFC").toLowerCase().includes(normalizedQuery)) ||
+					(agent.unsetEnv?.some((name) => name.normalize("NFC").toLowerCase().includes(normalizedQuery)) ?? false) ||
+					(agent.timeoutMs !== undefined && String(agent.timeoutMs).normalize("NFC").toLowerCase().includes(normalizedQuery)) ||
+					(agent.model !== undefined && agent.model.normalize("NFC").toLowerCase().includes(normalizedQuery)) ||
+					(agent.thinking !== undefined && agent.thinking.normalize("NFC").toLowerCase().includes(normalizedQuery)))
 				.map((agent) => ({
 					name: agent.name,
 					description: agent.description,
@@ -1874,7 +1915,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "subagent_jobs",
 		label: "Subagent jobs",
-		description: "List, inspect, wait for, cancel, or forget session-owned background jobs. Wait blocks until cleanup finishes or its timeout expires without canceling the job; at most 32 waits may be pending across the session. Use output to page through a finished task's captured text, failure diagnosis, and any partial, unverified assistant/tool output. Select a named chain step by stepId or another task by taskIndex. Clear removes only finished records; it never cancels active jobs. Do not poll repeatedly; non-silent completions arrive automatically as follow-ups.",
+		description: "List jobs, inspect status, page a finished task's output (even while its job runs), wait without canceling, cancel active jobs, or clear finished jobs. Completions arrive automatically unless the job is silent or a pending wait returns them.",
 		parameters: Type.Object({
 			action: JobActionSchema,
 			jobId: Type.Optional(Type.String({ maxLength: JOB_ID_MAX_LENGTH,
@@ -1964,14 +2005,18 @@ export default function (pi: ExtensionAPI) {
 			const metadata = jobMetadata(job, jobs.getObservation(job.id));
 			const completionHint = job.notify ? "See the completion message." : "Silent jobs do not deliver completion messages.";
 			if (action === "output") {
-				if (!job.finishedAt) return fail("Output pages require a finished job. Use action: wait to await cleanup.", job);
 				if (job.outputEvicted) return fail(`Captured output was evicted from the job registry. ${completionHint}`, job);
 				const taskIndex = params.stepId === undefined
 					? params.taskIndex ?? 0
 					: job.latest?.details?.results.findIndex((result) => result.stepId === params.stepId) ?? -1;
-				if (taskIndex < 0) return fail(`No retained chain step named "${params.stepId}". Inspect status for resultCount.`, job);
+				if (taskIndex < 0) return fail(!job.finishedAt
+					? `Chain step "${params.stepId}" is not finished; use action: wait.`
+					: `No retained chain step named "${params.stepId}". Inspect status for resultCount.`, job);
 				const task = job.latest?.details?.results[taskIndex];
-				if (!task) return fail("No retained task at this taskIndex. Inspect status for resultCount.", job);
+				if (!task) return fail(!job.finishedAt
+					? `Task ${taskIndex + 1} is not finished; use action: wait.`
+					: "No retained task at this taskIndex. Inspect status for resultCount.", job);
+				if (task.exitCode === -1) return fail(`Task ${taskIndex + 1} is still ${task.startedAtMs === undefined ? "queued" : "running"}; use action: wait.`, job);
 				try {
 					const stream: JobOutputStream = params.stream ?? "result";
 					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384, stream),
@@ -2035,16 +2080,14 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent",
 		label: "Subagent",
 		description: [
-			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} or {steps.ID} output references).",
-			"Use subagent_agents to discover available agents and diagnose invalid definitions.",
-			"Set timeoutMs for a per-child runtime deadline. Parallel/chain entries can override it; use null to disable a call's or agent's deadline. Agent frontmatter can provide a default. Queue time is excluded. On Windows, first-use supervisor compilation also happens before the deadline and has no independent timeout; canceling a caller detaches it but does not stop the shared compile.",
-			"In parallel mode, set concurrency from 1 to 4 to lower this batch's process limit.",
-			`Extension-mediated nested subagent calls are limited to ${MAX_SUBAGENT_NESTING_DEPTH} child-process levels to bound recursive delegation.`,
-			"Select an agent by exact name or by agentTags when exactly one in-scope agent matches every tag; ambiguous tag matches fail rather than choosing arbitrarily. Use the same selector per parallel task or chain step. Set model, thinking, or tools to override agent configuration. Use null to ignore an agent's configured model, thinking, or tool allowlist. unsetEnv removes additional inherited environment variables from child processes; agent, batch, and entry lists combine additively. Parallel/chain entries override batch defaults for model, thinking, and tools.",
-			"Set background: true to return immediately with a job ID while you continue working. Results arrive automatically unless notify: false requests a silent job. Use subagent_jobs to inspect, wait, or cancel.",
-			`Default agent scope is "user" (from ${path.join(getAgentDir(), "agents")}).`,
-			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project"). Untrusted projects require UI approval or Pi project trust; tool arguments cannot bypass this.`,
+			"Run one task, parallel tasks (up to 8), or a sequential chain (up to 32) where {previous} or {steps.ID} insert earlier outputs.",
+			"Optional preamble text is prepended to every child task.",
+			"Select agents by name or unique agentTags. Use subagent_agents to discover agents.",
+			"Set timeoutMs for per-child runtime deadline; null disables it.",
+			`Set concurrency to limit parallel tasks (1 to ${processLimit}).`,
+			"Override model, thinking, tools, or unsetEnv per task.",
+			"Background runs return a job ID; results arrive unless notify is false. Use subagent_jobs to wait, inspect, or cancel.",
+			"Default scope is user; project agents require trust approval.",
 		].join(" "),
 		parameters: SubagentParams,
 
@@ -2078,8 +2121,8 @@ export default function (pi: ExtensionAPI) {
 			const hasTasks = params.tasks !== undefined;
 			const hasSingle = params.agent !== undefined || params.agentTags !== undefined || params.task !== undefined;
 			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
-			const concurrency = Number.isInteger(params.concurrency) && params.concurrency! >= 1 && params.concurrency! <= MAX_CONCURRENCY
-				? params.concurrency! : MAX_CONCURRENCY;
+			const concurrency = Number.isInteger(params.concurrency) && params.concurrency! >= 1 && params.concurrency! <= processLimit
+				? params.concurrency! : processLimit;
 
 			const makeDetails =
 				(mode: "single" | "parallel" | "chain") =>
@@ -2145,9 +2188,9 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 			if (params.concurrency !== undefined && (mode !== "parallel" || !Number.isInteger(params.concurrency) ||
-				params.concurrency < 1 || params.concurrency > MAX_CONCURRENCY)) {
+				params.concurrency < 1 || params.concurrency > processLimit)) {
 				return {
-					content: [{ type: "text", text: `concurrency applies only to parallel mode and must be an integer from 1 to ${MAX_CONCURRENCY}.` }],
+					content: [{ type: "text", text: `concurrency applies only to parallel mode and must be an integer from 1 to ${processLimit}.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
@@ -2169,7 +2212,21 @@ export default function (pi: ExtensionAPI) {
 					details: makeDetails(mode)([]), isError: true,
 				};
 			}
-			let submittedTaskBytes = 0;
+			const preamble = params.preamble;
+			if (preamble !== undefined && typeof preamble !== "string") return {
+				content: [{ type: "text", text: "Preamble must be a string." }],
+				details: makeDetails(mode)([]), isError: true,
+			};
+			if (preamble !== undefined && !isWellFormedUnicode(preamble)) return {
+				content: [{ type: "text", text: "Preamble must contain well-formed Unicode." }],
+				details: makeDetails(mode)([]), isError: true,
+			};
+			const preambleBytes = preamble === undefined ? 0 : taskByteLength(preamble);
+			if (preambleBytes > MAX_TASK_BYTES) return {
+				content: [{ type: "text", text: taskSizeError() }],
+				details: makeDetails(mode)([]), isError: true,
+			};
+			let submittedTaskBytes = preamble === undefined ? 0 : preambleBytes;
 			for (const item of requestedInputs) {
 				const task = item.task as string;
 				if (task.length <= MAX_TASK_BYTES && !isWellFormedUnicode(task)) return {
@@ -2185,11 +2242,16 @@ export default function (pi: ExtensionAPI) {
 					content: [{ type: "text", text: "Provide exactly one agent or agentTags selector and a non-empty task for each requested task." }],
 					details: makeDetails(mode)([]), isError: true,
 				};
-				if (bytes > MAX_DISPATCH_TASK_BYTES - submittedTaskBytes) return {
+				const delimiterBytes = preamble === undefined ? 0 : 2;
+				if (preamble !== undefined && preambleBytes + delimiterBytes + bytes > MAX_TASK_BYTES) return {
+					content: [{ type: "text", text: taskSizeError() }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				if (bytes + delimiterBytes > MAX_DISPATCH_TASK_BYTES - submittedTaskBytes) return {
 					content: [{ type: "text", text: `Combined task text exceeds the ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB UTF-8 size limit.` }],
 					details: makeDetails(mode)([]), isError: true,
 				};
-				submittedTaskBytes += bytes;
+				submittedTaskBytes += bytes + delimiterBytes;
 			}
 			const selectedAgents: AgentConfig[] = [];
 			for (const item of requestedInputs) {
@@ -2457,21 +2519,23 @@ export default function (pi: ExtensionAPI) {
 				if (params.chain && params.chain.length > 0) {
 					const results: SingleResult[] = [];
 					let retainedHistoryBytes = 0;
-					let expandedTaskBytes = 0;
+					let expandedTaskBytes = preamble === undefined ? 0 : preambleBytes;
 					let previousOutput = "";
 					const namedOutputs = new Map<string, string>();
 
 					for (let i = 0; i < params.chain.length; i++) {
 						const step = params.chain[i];
-						const remainingTaskBytes = MAX_DISPATCH_TASK_BYTES - expandedTaskBytes;
-						const taskByteLimit = Math.min(MAX_TASK_BYTES, remainingTaskBytes);
+						const delimiterBytes = preamble === undefined ? 0 : 2;
+						const remainingTaskBytes = MAX_DISPATCH_TASK_BYTES - expandedTaskBytes - delimiterBytes;
+						const taskByteLimit = Math.min(MAX_TASK_BYTES - preambleBytes - delimiterBytes, remainingTaskBytes);
 						const boundedTask = substituteChainContextBounded(step.task, previousOutput, namedOutputs, taskByteLimit);
 						const expandedTaskTooLarge = boundedTask === undefined;
 						const expandedTaskError = expandedTaskTooLarge && remainingTaskBytes < MAX_TASK_BYTES
 							? `Expanded chain task exceeds the remaining ${remainingTaskBytes} UTF-8 bytes of the ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB per-dispatch task limit.`
 							: undefined;
 						// Keep only the bounded template in the failed result if expansion would exceed the cap.
-						const taskWithContext = boundedTask ?? step.task;
+						const expandedTask = boundedTask ?? step.task;
+						const taskWithContext = preamble === undefined ? expandedTask : `${preamble}\n\n${expandedTask}`;
 
 						// Create update callback that includes all previous results
 						const chainUpdate: OnUpdateCallback | undefined = onUpdate
@@ -2511,9 +2575,10 @@ export default function (pi: ExtensionAPI) {
 							expandedTaskTooLarge,
 							historyByteLimit,
 							expandedTaskError,
+							preamble === undefined ? undefined : expandedTask,
 						);
 						if (step.id !== undefined) result.stepId = step.id;
-						if (boundedTask !== undefined) expandedTaskBytes += Buffer.byteLength(taskWithContext, "utf8");
+						if (boundedTask !== undefined) expandedTaskBytes += Buffer.byteLength(expandedTask, "utf8") + delimiterBytes;
 						retainedHistoryBytes += result.capture?.retainedMessageBytes ?? 0;
 						results.push(result);
 
@@ -2572,16 +2637,26 @@ export default function (pi: ExtensionAPI) {
 
 					const emitParallelUpdate = () => {
 						if (onUpdate) {
-							const running = allResults.filter((r) => r.exitCode === -1).length;
-							const done = allResults.filter((r) => r.exitCode !== -1).length;
+							const results = [...allResults];
+							const done = results.filter((r) => r.exitCode !== -1).length;
+							const running = results.filter((r) => r.exitCode === -1 && r.startedAtMs !== undefined).length;
+							const queued = results.length - done - running;
+							const lines = results.map((r, index) => {
+								const state = r.exitCode === -1 ? (r.startedAtMs === undefined ? "queued" : "running")
+									: r.timedOut ? "timed out" : r.stopReason === "aborted" ? "canceled" : isFailedResult(r) ? "failed" : "completed";
+								const elapsed = state === "running" ? ` ${((performance.now() - r.startedAtMs!) / 1000).toFixed(1)}s` : "";
+								let activity = "";
+								if (state === "running") {
+									const latest = getDisplayItems(r.messages, 1).items[0];
+									if (latest?.type === "toolCall") activity = ` ${latest.name} ${JSON.stringify(previewToolArguments(latest.args))}`;
+									else if (latest?.type === "text") activity = ` ${latest.text}`;
+								}
+								const line = `${index + 1}. ${escapeTerminalText(truncateOutput(r.agent, 64, "..."))} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
+								return truncateOutput(line, 160, "...");
+							});
 							onUpdate({
-								content: [
-									{
-										type: "text",
-										text: `Parallel: ${done}/${allResults.length} done, ${running} pending...`,
-									},
-								],
-								details: makeDetails("parallel")([...allResults]),
+								content: [{ type: "text", text: `Parallel: ${done}/${results.length} done, ${running} running, ${queued} queued\n${lines.join("\n")}` }],
+								details: makeDetails("parallel")(results),
 							});
 						}
 					};
@@ -2596,7 +2671,7 @@ export default function (pi: ExtensionAPI) {
 							dispatchDefaults,
 							agents,
 							requested[index].agent,
-							t.task,
+							preamble === undefined ? t.task : `${preamble}\n\n${t.task}`,
 							t.cwd ?? params.cwd,
 							mergeDispatchOverrides(callOverrides, taskOverrides[index]),
 							t.timeoutMs !== undefined ? t.timeoutMs : params.timeoutMs,
@@ -2612,6 +2687,8 @@ export default function (pi: ExtensionAPI) {
 							makeDetails("parallel"),
 							false,
 							historyByteLimit,
+							undefined,
+							t.task,
 						);
 						allResults[index] = result;
 						emitParallelUpdate();
@@ -2648,7 +2725,7 @@ export default function (pi: ExtensionAPI) {
 						dispatchDefaults,
 						agents,
 						requested[0].agent,
-						params.task,
+						preamble === undefined ? params.task : `${preamble}\n\n${params.task}`,
 						params.cwd,
 						callOverrides,
 						params.timeoutMs,
@@ -2656,6 +2733,10 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						onUpdate,
 						makeDetails("single"),
+						false,
+						MAX_HISTORY_BYTES,
+						undefined,
+						params.task,
 					);
 					const isError = isFailedResult(result);
 					if (isError) {
@@ -2743,7 +2824,7 @@ export default function (pi: ExtensionAPI) {
 			if (Array.isArray(args.tasks) && args.tasks.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
-					theme.fg("accent", `parallel (${args.tasks.length} tasks, limit ${Number.isInteger(args.concurrency) ? args.concurrency : MAX_CONCURRENCY})`) +
+					theme.fg("accent", `parallel (${args.tasks.length} tasks, limit ${Number.isInteger(args.concurrency) ? args.concurrency : processLimit})`) +
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
 					const task = stringArg(t?.task, "");
