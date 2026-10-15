@@ -868,9 +868,9 @@ test('batch preambles reach parallel and chain children without changing recorde
   ]);
 });
 
-test('parallel progress distinguishes running and queued tasks', async () => {
+test('parallel progress distinguishes running and queued tasks by display name', async () => {
   const started = await invoke('subagent', { background: true, concurrency: 2,
-    tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=3000 progress-check' })) });
+    tasks: Array.from({ length: 4 }, (_, index) => ({ agent: 'worker', name: `progress-${index + 1}`, task: 'delay=3000 progress-check' })) });
   const id = started.details.background.id;
   const timeoutMs = process.platform === 'win32' ? 60_000 : 15_000;
   // Wait for the stable state where both slots have spawned and the rest are queued.
@@ -878,8 +878,8 @@ test('parallel progress distinguishes running and queued tasks', async () => {
     const latest = (await status(id)).latest;
     return latest?.content[0].text.includes('Parallel: 0/4 done, 2 running, 2 queued') ? latest : undefined;
   }, timeoutMs);
-  assert.match(progress.content[0].text, /1\. worker running [\d.]+s/);
-  assert.match(progress.content[0].text, /3\. worker queued\n4\. worker queued$/);
+  assert.match(progress.content[0].text, /1\. progress-1 \(worker\) running [\d.]+s/);
+  assert.match(progress.content[0].text, /3\. progress-3 \(worker\) queued\n4\. progress-4 \(worker\) queued$/);
   assert.ok(progress.details.results.every(r => r.exitCode === -1));
   assert.equal((await finish(id, timeoutMs)).state, 'completed');
 });
@@ -895,7 +895,7 @@ test('background output is available per task before the job finishes', async ()
     return latest?.details.results[0]?.exitCode !== undefined && latest.details.results[0].exitCode !== -1;
   });
   const pending = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 1 });
-  assert.match(pending.content[0].text, /Task 2 is still (?:queued|running); use action: wait/);
+  assert.match(pending.content[0].text, /Task `worker [a-z]+ [a-z]+` \(`worker`\) is still (?:queued|running); use action: wait/);
   const output = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 0 });
   assert.notEqual(output.isError, true);
   assert.match(output.structuredContent.output.text, /first task output/);
@@ -1847,7 +1847,7 @@ test('malformed child events fail cleanly without crashing or retaining slots', 
         }), false, 'structured usage schema rejects inexact token counts');
       }
     }
-    assert.match(job.latest.content[0].text, /^Agent failed:/);
+    assert.match(job.latest.content[0].text, /^Subagent .* failed:/);
   }
   assert.equal((await finish(await launch({ task: 'after malformed output' }))).state, 'completed');
 });
@@ -3114,6 +3114,130 @@ test('agentTags dispatch selects uniquely in single, parallel, and chain modes b
   } finally {
     for (const file of [...definitions, personalScope, projectScope, exactLimitFile]) rmSync(file, { force: true });
   }
+});
+
+test('subagent display names are distinct from selectors in single, parallel, and chain modes', async () => {
+  const schema = tools.get('subagent').definition.parameters;
+  assert.equal(Value.Check(schema, { agent: 'worker', name: 'reviewer', task: 'named single' }), true);
+  assert.equal(Value.Check(schema, { tasks: [{ agent: 'worker', name: 'reviewer', task: 'named parallel' }] }), true);
+  assert.equal(Value.Check(schema, { chain: [{ agent: 'worker', name: 'reviewer', task: 'named chain' }] }), true);
+  assert.equal(Value.Check(schema, { agent: 'worker', name: '\u001bunsafe', task: 'invalid' }), false);
+  assert.equal(Value.Check(schema, { agent: 'worker', name: 'x'.repeat(MAX_AGENT_NAME_BYTES + 1), task: 'invalid' }), false);
+
+  const definition = tools.get('subagent').definition;
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const single = await invoke('subagent', { agent: 'worker', name: 'reviewer', task: 'named single' });
+  assert.equal(single.isError, undefined);
+  assert.equal(single.details.results[0].name, 'reviewer');
+  assert.equal(single.details.results[0].agent, 'worker');
+  assert.match(definition.renderResult(single, { expanded: false }, theme, {}).render(100).join('\n'), /reviewer \(worker\)/);
+  assert.match(definition.renderCall({ agent: 'worker', name: 'reviewer', task: 'named single' }, theme, {}).render(100).join('\n'), /worker as reviewer/);
+
+  const parallel = await invoke('subagent', { tasks: [
+    { agent: 'worker', name: 'reviewer', task: 'explicit parallel name' },
+    { agent: 'worker', task: 'generated parallel name' },
+  ] });
+  assert.equal(parallel.isError, false);
+  assert.deepEqual(parallel.details.results.map(result => result.agent), ['worker', 'worker']);
+  assert.equal(parallel.details.results[0].name, 'reviewer');
+  assert.match(parallel.details.results[1].name, /^worker [a-z]+ [a-z]+$/);
+  assert.notEqual(parallel.details.results[0].name, parallel.details.results[1].name);
+  assert.match(parallel.content[0].text, /reviewer/);
+  assert.match(parallel.content[0].text, /worker [a-z]+ [a-z]+/);
+
+  const chain = await invoke('subagent', { chain: [
+    { agent: 'worker', name: 'review-step', id: 'review', task: 'chain review' },
+    { agent: 'worker', name: 'verify-step', task: 'verify {steps.review}' },
+  ] });
+  assert.equal(chain.isError, undefined);
+  assert.deepEqual(chain.details.results.map(result => [result.name, result.agent]), [
+    ['review-step', 'worker'], ['verify-step', 'worker'],
+  ]);
+
+  const failed = await invoke('subagent', { agent: 'worker', name: 'failed-review', task: 'fail' });
+  assert.equal(failed.isError, true);
+  assert.equal(failed.details.results[0].name, 'failed-review');
+  assert.match(failed.content[0].text, /failed-review/);
+
+  const invisibleName = `reviewer${String.fromCodePoint(0x200b)}`;
+  const invisible = await invoke('subagent', { agent: 'worker', name: invisibleName, task: 'safe name rendering' });
+  assert.equal(invisible.details.results[0].name, invisibleName);
+  const visibleName = definition.renderResult(invisible, { expanded: false }, theme, {}).render(100).join('\n');
+  assert.equal(visibleName.includes(String.fromCodePoint(0x200b)), false);
+  assert.match(visibleName, /reviewer\\u200b/);
+});
+
+test('subagent names reject invalid and duplicate labels before launching children', async () => {
+  const schema = tools.get('subagent').definition.parameters;
+  const multibyteName = '€'.repeat(86);
+  const unpairedName = String.fromCharCode(0xd800);
+  assert.equal(Value.Check(schema, { agent: 'worker', name: multibyteName, task: 'oversized bytes' }), true);
+  assert.equal(Value.Check(schema, { agent: 'worker', name: unpairedName, task: 'unpaired surrogate' }), true);
+  const before = traces().length;
+  for (const params of [
+    { agent: 'worker', name: multibyteName, task: 'oversized bytes' },
+    { agent: 'worker', name: unpairedName, task: 'unpaired surrogate' },
+    { name: 'batch-default', tasks: [{ agent: 'worker', task: 'batch' }] },
+    { tasks: [
+      { agent: 'worker', name: 'duplicate', task: 'first duplicate' },
+      { agent: 'worker', name: 'duplicate', task: 'second duplicate' },
+    ] },
+    { chain: [
+      { agent: 'worker', name: 'duplicate', task: 'first duplicate' },
+      { agent: 'worker', name: 'duplicate', task: 'second duplicate' },
+    ] },
+  ]) {
+    const result = await invoke('subagent', params);
+    assert.equal(result.isError, true);
+  }
+  assert.equal(traces().length, before, 'invalid or ambiguous display names must fail before any child starts');
+});
+
+test('background display names remain stable through progress, job inspection, wait, and output', async () => {
+  const started = await invoke('subagent', { background: true, notify: false, concurrency: 1, tasks: [
+    { agent: 'worker', task: 'delay=700 named background first' },
+    { agent: 'worker', task: 'named background second' },
+  ] });
+  const id = started.details.background.id;
+  const progress = await waitFor(async () => {
+    const job = await status(id);
+    return job.latest?.details?.results?.[0]?.startedAtMs !== undefined ? job : undefined;
+  });
+  const progressNames = progress.latest.details.results.map(result => result.name);
+  assert.match(progressNames[0], /^worker [a-z]+ [a-z]+$/);
+  assert.match(progressNames[1], /^worker [a-z]+ [a-z]+$/);
+  assert.equal(new Set(progressNames).size, 2);
+  assert.ok(progress.latest.content[0].text.includes(progressNames[0]));
+  assert.ok(progress.label.includes(progressNames[0]));
+  assert.ok(progress.label.includes(progressNames[1]));
+
+  const competing = await invoke('subagent', { background: true, notify: false, concurrency: 1, tasks: [
+    { agent: 'worker', task: 'delay=700 competing background first' },
+    { agent: 'worker', task: 'competing background second' },
+  ] });
+  const competingId = competing.details.background.id;
+  const competingProgress = await waitFor(async () => {
+    const job = await status(competingId);
+    return job.latest?.details?.results?.[0]?.startedAtMs !== undefined ? job : undefined;
+  });
+  const competingNames = competingProgress.latest.details.results.map(result => result.name);
+  assert.equal(new Set([...progressNames, ...competingNames]).size, 4,
+    'generated names must not collide with another active background job');
+
+  const listed = await invoke('subagent_jobs', { action: 'list' });
+  const listedJob = listed.structuredContent.jobs.find(job => job.id === id);
+  assert.equal(listedJob.label, progress.label);
+  const waited = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: process.platform === 'win32' ? 60000 : 5000 });
+  assert.equal(waited.structuredContent.job.label, progress.label);
+  assert.deepEqual(waited.details.latest.details.results.map(result => result.name), progressNames);
+
+  for (let taskIndex = 0; taskIndex < progressNames.length; taskIndex++) {
+    const page = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex });
+    assert.equal(page.structuredContent.output.name, progressNames[taskIndex]);
+    assert.equal(page.structuredContent.output.agent, 'worker', 'agent remains the definition selector');
+    assert.ok(page.content[0].text.includes(progressNames[taskIndex]));
+  }
+  await finish(competingId);
 });
 
 test('agent listing rejects invalid search queries before discovery output or child launch', async () => {
@@ -4725,7 +4849,7 @@ test('parallel responses share a total text budget and keep every captured resul
   assert.match(result.content[0].text, /Output truncated/);
   assert.equal(result.details.results.length, 8);
   assert.ok(result.details.results.every(r => r.messages.at(-1).content[0].text.length === 40000));
-  assert.equal((result.content[0].text.match(/### \[`worker`\] completed/g) ?? []).length, 8);
+  assert.equal([...result.content[0].text.matchAll(/^### \[/gm)].length, 8);
   const mixed = await invoke('subagent', { tasks: Array.from({ length: 8 }, (_, i) => ({ agent: 'worker', task: i === 7 ? 'large fail' : 'large' })) });
   assert.match(mixed.content[0].text, /7\/8 succeeded/);
   assert.match(mixed.content[0].text, /fixture failure/);
@@ -4794,7 +4918,7 @@ test('background job response schema enforces runtime collection and page limits
   const response = {
     action: 'output', jobs: Array(40).fill(metadata), job: metadata,
     output: {
-      taskIndex: 31, agent: 'a'.repeat(256), exitCode: 0, partial: false, timedOut: false,
+      taskIndex: 31, name: 'n'.repeat(288), agent: 'a'.repeat(256), exitCode: 0, partial: false, timedOut: false,
       stepId: 's'.repeat(64), stream: 'result', text: 'x'.repeat(MAX_PAGE_BYTES),
       offset: Number.MAX_SAFE_INTEGER, totalBytes: Number.MAX_SAFE_INTEGER,
       nextOffset: Number.MAX_SAFE_INTEGER,
@@ -4808,6 +4932,7 @@ test('background job response schema enforces runtime collection and page limits
     ['overlong job label', candidate => { candidate.job.label += 'x'; }],
     ['overlong diagnostic', candidate => { candidate.job.error += 'x'; }],
     ['too many results', candidate => { candidate.job.resultCount++; }],
+    ['oversized display name', candidate => { candidate.output.name += 'x'; }],
     ['oversized agent name', candidate => { candidate.output.agent += 'x'; }],
     ['out-of-range task index', candidate => { candidate.output.taskIndex++; }],
     ['overlong chain step ID', candidate => { candidate.output.stepId += 'x'; }],
