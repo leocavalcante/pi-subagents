@@ -618,7 +618,7 @@ test('successful edit and write calls report deduplicated, bounded paths relativ
   ]);
   assert.equal(task.changedFilesOmitted, 1);
   const changedFilesLine = result.content[0].text.split('\n').find(line => line.startsWith('Changed files:'));
-  assert.match(changedFilesLine, /Changed files: .*src\/one\.ts.*src\/two\.ts.*\(\+1 more\)/);
+  assert.match(changedFilesLine, /Changed files: .*src[\\/]one\.ts.*src[\\/]two\.ts.*\(\+1 more\)/);
   assert.equal(changedFilesLine.includes('ignored.ts'), false);
   assert.equal(changedFilesLine.includes('not-tracked.ts'), false);
 });
@@ -869,14 +869,19 @@ test('batch preambles reach parallel and chain children without changing recorde
 });
 
 test('parallel progress distinguishes running and queued tasks', async () => {
-  const started = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=500 progress-check' })) });
+  const started = await invoke('subagent', { background: true, concurrency: 2,
+    tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=3000 progress-check' })) });
   const id = started.details.background.id;
-  await waitFor(async () => (await status(id)).latest?.content[0].text.includes('running'));
-  const progress = (await status(id)).latest;
-  assert.match(progress.content[0].text, /Parallel: 0\/4 done, 4 running, 0 queued/);
+  const timeoutMs = process.platform === 'win32' ? 60_000 : 15_000;
+  // Wait for the stable state where both slots have spawned and the rest are queued.
+  const progress = await waitFor(async () => {
+    const latest = (await status(id)).latest;
+    return latest?.content[0].text.includes('Parallel: 0/4 done, 2 running, 2 queued') ? latest : undefined;
+  }, timeoutMs);
   assert.match(progress.content[0].text, /1\. worker running [\d.]+s/);
+  assert.match(progress.content[0].text, /3\. worker queued\n4\. worker queued$/);
   assert.ok(progress.details.results.every(r => r.exitCode === -1));
-  assert.equal((await finish(id)).state, 'completed');
+  assert.equal((await finish(id, timeoutMs)).state, 'completed');
 });
 
 test('background output is available per task before the job finishes', async () => {
