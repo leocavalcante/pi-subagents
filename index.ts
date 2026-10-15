@@ -246,8 +246,10 @@ function escapeTerminalText(value: string): string {
 	return escaped + escapeSegment(value.slice(start));
 }
 
-function displayUntrustedText(value: string): string {
-	const escaped = escapeTerminalControls(value).replace(/`/g, "\\u0060");
+function displayUntrustedText(value: string, maxBytes?: number): string {
+	let escaped = escapeTerminalControls(value).replace(/`/g, "\\u0060");
+	// Reserve two backticks and up to two padding spaces inside the byte budget.
+	if (maxBytes !== undefined) escaped = truncateOutput(escaped, maxBytes - 4, "...");
 	// A code span prevents metadata from becoming Markdown/HTML; controls and
 	// embedded backticks are escaped first so it cannot break out of the span.
 	const padding = escaped.startsWith(" ") || escaped.endsWith(" ") ? " " : "";
@@ -666,7 +668,7 @@ function getResultOutput(result: SingleResult): string {
 	if (notice) sections.push(notice);
 	if (result.changedFiles?.length) {
 		const omitted = result.changedFilesOmitted ? ` (+${result.changedFilesOmitted} more)` : "";
-		sections.push(`Changed files: ${result.changedFiles.map(displayUntrustedText).join(", ")}${omitted}`);
+		sections.push(`Changed files: ${result.changedFiles.map((filePath) => displayUntrustedText(filePath)).join(", ")}${omitted}`);
 	}
 	return sections.join("\n\n");
 }
@@ -2058,7 +2060,7 @@ export default function (pi: ExtensionAPI) {
 				const snapshots = listed.map(({ latest: _latest, ...job }) => job);
 				const metadata = listed.map((job) => jobMetadata(job, jobs.getObservation(job.id)));
 				return reply(metadata.length
-					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
+					? metadata.map((j) => `${j.id} ${j.state}: ${displayUntrustedText(j.label)}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
 			let waited: Awaited<ReturnType<typeof jobs.wait>> = undefined;
@@ -2746,7 +2748,7 @@ export default function (pi: ExtensionAPI) {
 									if (latest?.type === "toolCall") activity = ` ${latest.name} ${JSON.stringify(previewToolArguments(latest.args))}`;
 									else if (latest?.type === "text") activity = ` ${latest.text}`;
 								}
-								const identity = truncateOutput(terminalSubagentIdentity(r), 64, "...");
+								const identity = displayUntrustedText(terminalSubagentIdentity(r), 64);
 								const line = `${index + 1}. ${identity} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
 								return truncateOutput(line, 160, "...");
 							});

@@ -871,7 +871,8 @@ test('batch preambles reach parallel and chain children without changing recorde
 
 test('parallel progress distinguishes running and queued tasks by display name', async () => {
   const started = await invoke('subagent', { background: true, concurrency: 2,
-    tasks: Array.from({ length: 4 }, (_, index) => ({ agent: 'worker', name: `progress-${index + 1}`, task: 'delay=3000 progress-check' })) });
+    tasks: Array.from({ length: 4 }, (_, index) => ({ agent: 'worker',
+      name: index === 0 ? '[reviewer](https://example.com)`' : `progress-${index + 1}`, task: 'delay=3000 progress-check' })) });
   const id = started.details.background.id;
   const timeoutMs = process.platform === 'win32' ? 60_000 : 15_000;
   // Wait for the stable state where both slots have spawned and the rest are queued.
@@ -879,8 +880,8 @@ test('parallel progress distinguishes running and queued tasks by display name',
     const latest = (await status(id)).latest;
     return latest?.content[0].text.includes('Parallel: 0/4 done, 2 running, 2 queued') ? latest : undefined;
   }, timeoutMs);
-  assert.match(progress.content[0].text, /1\. progress-1 \(worker\) running [\d.]+s/);
-  assert.match(progress.content[0].text, /3\. progress-3 \(worker\) queued\n4\. progress-4 \(worker\) queued$/);
+  assert.ok(progress.content[0].text.includes('1. `[reviewer](https://example.com)\\u0060 (worker)` running '));
+  assert.match(progress.content[0].text, /3\. `progress-3 \(worker\)` queued\n4\. `progress-4 \(worker\)` queued$/);
   assert.ok(progress.details.results.every(r => r.exitCode === -1));
   assert.equal((await finish(id, timeoutMs)).state, 'completed');
 });
@@ -897,7 +898,7 @@ test('long display names leave parallel progress state visible', async () => {
       return job.latest?.details?.results?.[0]?.startedAtMs !== undefined ? job.latest : undefined;
     }, timeoutMs);
     const line = progress.content[0].text.split('\n').at(-1);
-    assert.match(line, /^1\. x{61}\.\.\. running [\d.]+s/);
+    assert.match(line, /^1\. `x{57}\.\.\.` running [\d.]+s/);
   } finally {
     await finish(id, timeoutMs);
   }
@@ -928,6 +929,16 @@ test('background output renders caller-provided labels as literal Markdown', asy
   await finish(id);
   const output = await invoke('subagent_jobs', { action: 'output', jobId: id });
   assert.ok(output.content[0].text.includes('[`[reviewer](https://example.com)` (`worker`)]'));
+});
+
+test('job listing renders untrusted labels literally and keeps raw metadata', async () => {
+  const name = `[reviewer](https://example.com)${String.fromCodePoint(0x200b)}`;
+  const started = await invoke('subagent', { background: true, notify: false, agent: 'worker', name, task: 'markdown-safe job listing' });
+  const id = started.details.background.id;
+  const listed = await invoke('subagent_jobs', { action: 'list' });
+  assert.ok(listed.content[0].text.includes('`[reviewer](https://example.com)\\u200b`'));
+  assert.equal(listed.structuredContent.jobs.find(job => job.id === id).label, name);
+  await finish(id);
 });
 
 test('all foreground and background invocations share a four-process budget', async () => {
