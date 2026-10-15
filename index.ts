@@ -2508,6 +2508,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			let namesNeedRefresh = false;
 			if (agentScope === "project" || agentScope === "both") {
 				const requestedAgentNames = new Set(requested.map((item) => item.agent));
 
@@ -2593,6 +2594,7 @@ export default function (pi: ExtensionAPI) {
 							isError: true,
 						};
 					}
+					namesNeedRefresh = true;
 					const ok = await ctx.ui.confirm(approvalTitle, approvalBody);
 					if (!ok)
 						return {
@@ -2605,6 +2607,16 @@ export default function (pi: ExtensionAPI) {
 							details: makeDetails(mode)([]),
 						};
 				}
+			}
+
+			if (namesNeedRefresh) {
+				const finalNames = assignSubagentNames(selectedRequests,
+					jobs.list().filter((job) => !job.finishedAt).map((job) => job.label));
+				if (typeof finalNames === "string") return {
+					content: [{ type: "text", text: finalNames }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				for (const [index, item] of requested.entries()) item.name = finalNames[index]!;
 			}
 
 			// Capture dispatch configuration and permissions before detaching from this turn.
@@ -2878,13 +2890,6 @@ export default function (pi: ExtensionAPI) {
 
 			if (!params.background) return reportUsage(await run(signal, onUpdate));
 			signal?.throwIfAborted();
-			const finalNames = assignSubagentNames(selectedRequests,
-				jobs.list().filter((job) => !job.finishedAt).map((job) => job.label));
-			if (typeof finalNames === "string") return {
-				content: [{ type: "text", text: finalNames }],
-				details: makeDetails(mode)([]), isError: true,
-			};
-			for (const [index, item] of requested.entries()) item.name = finalNames[index]!;
 			const label =
 				mode === "single"
 					? requested[0].name

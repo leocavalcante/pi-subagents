@@ -3329,6 +3329,37 @@ test('background display names remain stable through progress, job inspection, w
   await finish(competingId);
 });
 
+test('foreground generated names refresh after project-agent approval', async t => {
+  const randomInt = t.mock.method(crypto, 'randomInt', () => 0);
+  syncBuiltinESMExports();
+  const approvals = [];
+  let foreground;
+  let backgroundId;
+  const projectContext = { ...ctx(), cwd: join(sandbox, 'project'), hasUI: true, isProjectTrusted: () => false,
+    ui: { confirm: () => new Promise(resolve => approvals.push(resolve)) } };
+  const trustedContext = { ...ctx(), cwd: join(sandbox, 'project'), isProjectTrusted: () => true };
+  try {
+    foreground = invoke('subagent', { agent: 'project', agentScope: 'project', task: 'foreground waits for approval' }, projectContext);
+    await waitFor(() => approvals.length === 1);
+    const started = await invoke('subagent', { background: true, notify: false, agent: 'project', agentScope: 'project',
+      task: 'delay=3000 background name collision' }, trustedContext);
+    backgroundId = started.details.background.id;
+    const competing = await status(backgroundId);
+    assert.equal(competing.label, 'project amber badger');
+    approvals[0](true);
+    const result = await foreground;
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details.results[0].name, 'project amber beaver');
+    assert.notEqual(result.details.results[0].name, competing.label);
+  } finally {
+    approvals.forEach(resolve => resolve(true));
+    if (foreground) await Promise.allSettled([foreground]);
+    if (backgroundId) await finish(backgroundId);
+    randomInt.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 test('background generated names are reallocated after concurrent project-agent approval', async t => {
   const randomInt = t.mock.method(crypto, 'randomInt', () => 0);
   syncBuiltinESMExports();
