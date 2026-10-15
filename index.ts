@@ -2061,7 +2061,7 @@ export default function (pi: ExtensionAPI) {
 				const snapshots = listed.map(({ latest: _latest, ...job }) => job);
 				const metadata = listed.map((job) => jobMetadata(job, jobs.getObservation(job.id)));
 				return reply(metadata.length
-					? metadata.map((j) => `${j.id} ${j.state}: ${displayUntrustedText(j.label)}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
+					? metadata.map((j) => `${j.id} ${j.state}: ${displayUntrustedText(j.label, MAX_JOB_LABEL_BYTES)}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
 			let waited: Awaited<ReturnType<typeof jobs.wait>> = undefined;

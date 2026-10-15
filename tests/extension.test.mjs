@@ -941,6 +941,31 @@ test('job listing renders untrusted labels literally and keeps raw metadata', as
   await finish(id);
 });
 
+test('job listings bound escaped labels without hiding job IDs', async () => {
+  const jobIds = [];
+  for (let jobIndex = 0; jobIndex < 9; jobIndex++) {
+    const names = Array.from({ length: 4 }, (_, taskIndex) => {
+      const suffix = `${jobIndex}-${taskIndex}`;
+      return '`'.repeat(MAX_AGENT_NAME_BYTES - suffix.length) + suffix;
+    });
+    const started = await invoke('subagent', { background: true, notify: false, tasks: names.map(name => ({
+      agent: 'worker', name, task: 'job list label budget',
+    })) });
+    const id = started.details.background.id;
+    jobIds.push(id);
+    await finish(id);
+  }
+  const listed = await invoke('subagent_jobs', { action: 'list' });
+  const text = listed.content[0].text;
+  assert.ok(Buffer.byteLength(text, 'utf8') <= 50 * 1024);
+  for (const id of jobIds) {
+    assert.ok(text.includes(id), `job ID ${id} must remain visible`);
+    const label = listed.structuredContent.jobs.find(job => job.id === id).label;
+    assert.ok(label.includes('`'), 'structured metadata retains raw backticks');
+    assert.equal(label.includes('\\u0060'), false, 'structured metadata must not contain display escaping');
+  }
+});
+
 test('pending background output bounds escaped labels to the error schema', async () => {
   const agentName = '`'.repeat(MAX_AGENT_NAME_BYTES);
   const agentFile = join(sandbox, 'agent/agents/backtick-name.md');
