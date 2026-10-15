@@ -13,6 +13,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomInt } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import * as fs from "node:fs";
@@ -115,7 +116,21 @@ const MAX_RETAINED_JOBS = 32;
 const MAX_JOB_RECORDS = MAX_ACTIVE_JOBS + MAX_RETAINED_JOBS;
 const MAX_JOB_LABEL_BYTES = 1024;
 const MAX_JOB_DIAGNOSTIC_BYTES = 2048;
+const MAX_JOB_DIAGNOSTIC_LABEL_BYTES = 512;
 const MAX_JOB_AGENT_BYTES = 256;
+const MAX_SUBAGENT_NAME_BYTES = MAX_AGENT_NAME_BYTES + 32;
+const AUTO_NAME_ADJECTIVES = [
+	"amber", "brisk", "calm", "clever", "cozy", "crisp", "daring", "eager",
+	"fair", "gentle", "golden", "happy", "kind", "lively", "lucky", "mellow",
+	"nimble", "noble", "quiet", "rapid", "ready", "rosy", "steady", "sunny",
+	"swift", "tidy", "vivid", "warm", "wise", "witty", "zesty", "bold",
+] as const;
+const AUTO_NAME_ANIMALS = [
+	"badger", "beaver", "bison", "canary", "capybara", "cheetah", "coyote", "dolphin",
+	"falcon", "ferret", "finch", "fox", "gecko", "heron", "ibis", "jaguar",
+	"koala", "lemur", "lion", "loon", "lynx", "marmot", "otter", "owl",
+	"panda", "parrot", "penguin", "puffin", "rabbit", "raven", "robin", "seal",
+] as const;
 // Keep ten rendered rows and every capped diagnostic inside the 50 KiB model-response budget.
 const MAX_AGENT_LISTING_PAGE_SIZE = 10;
 const MAX_AGENT_LISTING_LINE_BYTES = 3 * 1024;
@@ -232,8 +247,10 @@ function escapeTerminalText(value: string): string {
 	return escaped + escapeSegment(value.slice(start));
 }
 
-function displayUntrustedText(value: string): string {
-	const escaped = escapeTerminalControls(value).replace(/`/g, "\\u0060");
+function displayUntrustedText(value: string, maxBytes?: number): string {
+	let escaped = escapeTerminalControls(value).replace(/`/g, "\\u0060");
+	// Reserve two backticks and up to two padding spaces inside the byte budget.
+	if (maxBytes !== undefined) escaped = truncateOutput(escaped, maxBytes - 4, "...");
 	// A code span prevents metadata from becoming Markdown/HTML; controls and
 	// embedded backticks are escaped first so it cannot break out of the span.
 	const padding = escaped.startsWith(" ") || escaped.endsWith(" ") ? " " : "";
@@ -253,6 +270,54 @@ function previewAgentSelector(value: unknown): string {
 		return `tags:[${tags}${value.agentTags.length > MAX_AGENT_TAG_COUNT ? ",…" : ""}]`;
 	}
 	return previewAgentName("...");
+}
+
+function previewSubagentName(value: unknown): string | undefined {
+	if (!isToolParameterObject(value) || typeof value.name !== "string") return undefined;
+	return escapeTerminalControls(truncateOutput(value.name, MAX_SUBAGENT_NAME_BYTES, "..."));
+}
+
+function assignSubagentNames(requests: ReadonlyArray<{ agent: string; name?: unknown }>, activeJobLabels: readonly string[] = []): string[] | string {
+	const names = new Array<string>(requests.length);
+	const used = new Set<string>();
+	for (const [index, request] of requests.entries()) {
+		if (request.name === undefined) continue;
+		if (typeof request.name !== "string" || !isSafeAgentName(request.name)) {
+			return `Subagent name must be non-empty, at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, contain well-formed Unicode, and contain no terminal or bidirectional controls.`;
+		}
+		if (used.has(request.name)) return `Subagent names must be unique within a dispatch; duplicate name: ${displayUntrustedText(request.name)}.`;
+		names[index] = request.name;
+		used.add(request.name);
+	}
+
+	const combinations = AUTO_NAME_ADJECTIVES.length * AUTO_NAME_ANIMALS.length;
+	for (const [index, request] of requests.entries()) {
+		if (names[index] !== undefined) continue;
+		const start = randomInt(combinations);
+		let assigned: string | undefined;
+		for (let offset = 0; offset < combinations; offset++) {
+			const candidateIndex = (start + offset) % combinations;
+			const candidate = `${request.agent} ${AUTO_NAME_ADJECTIVES[Math.floor(candidateIndex / AUTO_NAME_ANIMALS.length)]} ${AUTO_NAME_ANIMALS[candidateIndex % AUTO_NAME_ANIMALS.length]}`;
+			if (!used.has(candidate) && !activeJobLabels.some((label) => label.includes(candidate))) {
+				assigned = candidate;
+				break;
+			}
+		}
+		if (!assigned) return "Unable to assign a unique display name to every subagent in this dispatch.";
+		names[index] = assigned;
+		used.add(assigned);
+	}
+	return names;
+}
+
+function subagentIdentity(result: Pick<SingleResult, "agent" | "name">): string {
+	const name = result.name || result.agent;
+	return `${displayUntrustedText(name)} (${displayUntrustedText(result.agent)})`;
+}
+
+function terminalSubagentIdentity(result: Pick<SingleResult, "agent" | "name">): string {
+	const name = result.name || result.agent;
+	return `${escapeTerminalControls(truncateOutput(name, MAX_SUBAGENT_NAME_BYTES, "..."))} (${previewAgentName(result.agent)})`;
 }
 
 function taskByteLength(task: string): number {
@@ -432,6 +497,7 @@ interface FailureContext {
 }
 
 interface SingleResult {
+	name: string;
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
 	task: string;
@@ -501,7 +567,7 @@ type JobToolDetails = JobSnapshot<JobResult> | { jobs: Omit<JobSnapshot<JobResul
 function estimateJobBytes(result: JobResult): number {
 	let bytes = result.content.reduce((sum, part) => sum + Buffer.byteLength(part.type === "text" ? part.text : part.data), 0);
 	for (const task of result.details?.results ?? []) {
-		bytes += (task.capture?.retainedMessageBytes ?? 0) + Buffer.byteLength(task.task) + Buffer.byteLength(task.stderr);
+		bytes += (task.capture?.retainedMessageBytes ?? 0) + Buffer.byteLength(task.name ?? task.agent) + Buffer.byteLength(task.task) + Buffer.byteLength(task.stderr);
 		// The result model can outlive its source message when history evicts that message.
 		if (task.model) bytes += Buffer.byteLength(task.model);
 		if (task.errorMessage) bytes += Buffer.byteLength(task.errorMessage);
@@ -603,7 +669,7 @@ function getResultOutput(result: SingleResult): string {
 	if (notice) sections.push(notice);
 	if (result.changedFiles?.length) {
 		const omitted = result.changedFilesOmitted ? ` (+${result.changedFilesOmitted} more)` : "";
-		sections.push(`Changed files: ${result.changedFiles.map(displayUntrustedText).join(", ")}${omitted}`);
+		sections.push(`Changed files: ${result.changedFiles.map((filePath) => displayUntrustedText(filePath)).join(", ")}${omitted}`);
 	}
 	return sections.join("\n\n");
 }
@@ -904,6 +970,7 @@ async function runSingleAgent(
 	dispatchDefaults: DispatchDefaults,
 	agents: AgentConfig[],
 	agentName: string,
+	displayName: string,
 	task: string,
 	cwd: string | undefined,
 	overrides: DispatchOverrides,
@@ -922,6 +989,7 @@ async function runSingleAgent(
 	if (!agent) {
 		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
 		return {
+			name: displayName,
 			agent: agentName,
 			agentSource: "unknown",
 			task: recordedTask ?? task,
@@ -956,6 +1024,7 @@ async function runSingleAgent(
 	let tmpPromptPath: string | null = null;
 
 	const currentResult: SingleResult = {
+		name: displayName,
 		agent: agentName,
 		agentSource: agent.source,
 		task: recordedTask ?? task,
@@ -1453,6 +1522,13 @@ const AgentNameSchema = Type.String({
 
 });
 
+const SubagentDisplayNameSchema = Type.String({
+	pattern: AGENT_NAME_PATTERN,
+	minLength: 1,
+	maxLength: MAX_AGENT_NAME_BYTES,
+	description: "Display label, distinct from the agent selector.",
+});
+
 function taskTextSchema() {
 	return Type.String({ maxLength: MAX_TASK_BYTES });
 }
@@ -1471,10 +1547,10 @@ const AgentTagsSelectorSchema = Type.Array(Type.String({ pattern: AGENT_TAG_INPU
 
 });
 
-const TASK_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
-const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "id", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
+const TASK_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "name", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
+const CHAIN_ITEM_KEYS = ["model", "thinking", "tools", "unsetEnv", "id", "name", "agent", "agentTags", "task", "timeoutMs", "cwd"] as const;
 const SUBAGENT_TOOL_KEYS = [
-	"model", "thinking", "tools", "unsetEnv", "background", "notify", "agent", "agentTags", "task", "tasks", "chain",
+	"model", "thinking", "tools", "unsetEnv", "background", "notify", "name", "agent", "agentTags", "task", "tasks", "chain",
 	"agentScope", "concurrency", "timeoutMs", "cwd", "preamble",
 ] as const;
 const AGENT_TOOL_KEYS = ["agentScope", "name", "query", "tag", "tags", "offset", "limit"] as const;
@@ -1482,6 +1558,7 @@ const JOB_TOOL_KEYS = ["action", "jobId", "taskIndex", "stepId", "offset", "limi
 
 const TaskItem = Type.Object({
 	...DispatchOptions,
+	name: Type.Optional(SubagentDisplayNameSchema),
 	agent: Type.Optional(AgentNameSchema),
 	agentTags: Type.Optional(AgentTagsSelectorSchema),
 	task: taskTextSchema(),
@@ -1493,6 +1570,7 @@ const ChainItem = Type.Object({
 	...DispatchOptions,
 	id: Type.Optional(Type.String({ pattern: CHAIN_ID_PATTERN, minLength: 1, maxLength: 64,
 		description: "Step ID for later {steps.ID} references." })),
+	name: Type.Optional(SubagentDisplayNameSchema),
 	agent: Type.Optional(AgentNameSchema),
 	agentTags: Type.Optional(AgentTagsSelectorSchema),
 	task: taskTextSchema(),
@@ -1515,6 +1593,7 @@ const SubagentParams = Type.Object({
 	),
 	notify: Type.Optional(Type.Boolean({ default: true,
 		description: "Background only: send completion follow-up; false makes job silent." })),
+	name: Type.Optional(SubagentDisplayNameSchema),
 	agent: Type.Optional(AgentNameSchema),
 	agentTags: Type.Optional(AgentTagsSelectorSchema),
 	task: Type.Optional(taskTextSchema()),
@@ -1603,6 +1682,7 @@ const JobResponseSchema = Type.Object({
 	job: Type.Optional(JobMetadataSchema),
 	output: Type.Optional(Type.Object({
 		taskIndex: Type.Integer({ minimum: 0, maximum: MAX_CHAIN_STEPS - 1 }),
+		name: Type.String({ maxLength: MAX_SUBAGENT_NAME_BYTES }),
 		agent: Type.String({ maxLength: MAX_JOB_AGENT_BYTES }), exitCode: Type.Integer(),
 		processExitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
 		partial: Type.Boolean(), timedOut: Type.Boolean(), timeoutMs: Type.Optional(TimeoutSchema),
@@ -1981,7 +2061,7 @@ export default function (pi: ExtensionAPI) {
 				const snapshots = listed.map(({ latest: _latest, ...job }) => job);
 				const metadata = listed.map((job) => jobMetadata(job, jobs.getObservation(job.id)));
 				return reply(metadata.length
-					? metadata.map((j) => `${j.id} ${j.state}: ${j.label}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
+					? metadata.map((j) => `${j.id} ${j.state}: ${displayUntrustedText(j.label, MAX_JOB_LABEL_BYTES)}${!j.notify ? " (silent)" : ""}${j.outputEvicted ? " (output evicted)" : ""}`).join("\n")
 					: "No background subagent jobs.", { jobs: snapshots }, { jobs: metadata });
 			}
 			let waited: Awaited<ReturnType<typeof jobs.wait>> = undefined;
@@ -2016,11 +2096,12 @@ export default function (pi: ExtensionAPI) {
 				if (!task) return fail(!job.finishedAt
 					? `Task ${taskIndex + 1} is not finished; use action: wait.`
 					: "No retained task at this taskIndex. Inspect status for resultCount.", job);
-				if (task.exitCode === -1) return fail(`Task ${taskIndex + 1} is still ${task.startedAtMs === undefined ? "queued" : "running"}; use action: wait.`, job);
+				if (task.exitCode === -1) return fail(`Task ${displayUntrustedText(task.name, MAX_JOB_DIAGNOSTIC_LABEL_BYTES)} (${displayUntrustedText(task.agent, MAX_JOB_DIAGNOSTIC_LABEL_BYTES)}) is still ${task.startedAtMs === undefined ? "queued" : "running"}; use action: wait.`, job);
 				try {
 					const stream: JobOutputStream = params.stream ?? "result";
 					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384, stream),
-						stream, taskIndex, agent: truncateOutput(task.agent, MAX_JOB_AGENT_BYTES, "..."), exitCode: task.exitCode,
+						stream, taskIndex, name: truncateOutput(task.name ?? task.agent, MAX_SUBAGENT_NAME_BYTES, "..."),
+						agent: truncateOutput(task.agent, MAX_JOB_AGENT_BYTES, "..."), exitCode: task.exitCode,
 						...(task.processExitCode !== undefined ? { processExitCode: task.processExitCode } : {}),
 						partial: isPartialResult(task), timedOut: task.timedOut === true,
 						...(stream === "stderr" ? { stderrTruncated: task.capture?.stderrTruncated === true } : {}),
@@ -2029,7 +2110,9 @@ export default function (pi: ExtensionAPI) {
 						...(task.stepId !== undefined ? { stepId: task.stepId } : {}) };
 					const cursor = output.nextOffset === null ? "end" : `nextOffset=${output.nextOffset}`;
 					const streamLabel = stream === "stderr" ? " stderr" : "";
-					return reply(`${job.id} task ${taskIndex} [${output.agent}]${streamLabel} bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
+					const safeName = displayUntrustedText(output.name);
+					const safeAgent = displayUntrustedText(output.agent);
+					return reply(`${job.id} task ${taskIndex} [${safeName} (${safeAgent})]${streamLabel} bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
 						metadata, { job: metadata, output });
 				} catch (error) {
 					if (!(error instanceof RangeError)) throw error;
@@ -2082,7 +2165,7 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"Run one task, parallel tasks (up to 8), or a sequential chain (up to 32) where {previous} or {steps.ID} insert earlier outputs.",
 			"Optional preamble text is prepended to every child task.",
-			"Select agents by name or unique agentTags. Use subagent_agents to discover agents.",
+			"Select agents by name or unique agentTags; name labels results. Discover with subagent_agents.",
 			"Set timeoutMs for per-child runtime deadline; null disables it.",
 			`Set concurrency to limit parallel tasks (1 to ${processLimit}).`,
 			"Override model, thinking, tools, or unsetEnv per task.",
@@ -2149,6 +2232,12 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const mode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+			if (params.name !== undefined && mode !== "single") {
+				return {
+					content: [{ type: "text", text: "Top-level name applies only to a single task; set name on each parallel task or chain step." }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+			}
 			if (Object.hasOwn(params, "confirmProjectAgents")) {
 				return {
 					content: [{ type: "text", text: "confirmProjectAgents is no longer supported. Trust the project in Pi before using project-local agents." }],
@@ -2195,7 +2284,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 			const requestedInputs = hasChain ? params.chain! : hasTasks ? params.tasks! : [{
-				agent: params.agent, agentTags: params.agentTags, task: params.task, cwd: params.cwd,
+				name: params.name, agent: params.agent, agentTags: params.agentTags, task: params.task, cwd: params.cwd,
 				timeoutMs: params.timeoutMs, model: params.model, thinking: params.thinking,
 				tools: params.tools, unsetEnv: params.unsetEnv,
 			}];
@@ -2302,7 +2391,14 @@ export default function (pi: ExtensionAPI) {
 				}
 				selectedAgents.push(selectedAgent);
 			}
-			const requested = requestedInputs.map((item, index) => ({ ...item, agent: selectedAgents[index].name }));
+			const selectedRequests = requestedInputs.map((item, index) => ({ ...item, agent: selectedAgents[index].name }));
+			const activeJobLabels = jobs.list().filter((job) => !job.finishedAt).map((job) => job.label);
+			const assignedNames = assignSubagentNames(selectedRequests, activeJobLabels);
+			if (typeof assignedNames === "string") return {
+				content: [{ type: "text", text: assignedNames }],
+				details: makeDetails(mode)([]), isError: true,
+			};
+			const requested = selectedRequests.map((item, index) => ({ ...item, name: assignedNames[index]! }));
 			const referenceError = params.chain ? validateChainReferences(params.chain) : undefined;
 			if (referenceError) return {
 				content: [{ type: "text", text: referenceError }],
@@ -2412,6 +2508,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			let namesNeedRefresh = false;
 			if (agentScope === "project" || agentScope === "both") {
 				const requestedAgentNames = new Set(requested.map((item) => item.agent));
 
@@ -2497,6 +2594,7 @@ export default function (pi: ExtensionAPI) {
 							isError: true,
 						};
 					}
+					namesNeedRefresh = true;
 					const ok = await ctx.ui.confirm(approvalTitle, approvalBody);
 					if (!ok)
 						return {
@@ -2509,6 +2607,16 @@ export default function (pi: ExtensionAPI) {
 							details: makeDetails(mode)([]),
 						};
 				}
+			}
+
+			if (namesNeedRefresh) {
+				const finalNames = assignSubagentNames(selectedRequests,
+					jobs.list().filter((job) => !job.finishedAt).map((job) => job.label));
+				if (typeof finalNames === "string") return {
+					content: [{ type: "text", text: finalNames }],
+					details: makeDetails(mode)([]), isError: true,
+				};
+				for (const [index, item] of requested.entries()) item.name = finalNames[index]!;
 			}
 
 			// Capture dispatch configuration and permissions before detaching from this turn.
@@ -2564,6 +2672,7 @@ export default function (pi: ExtensionAPI) {
 							dispatchDefaults,
 							agents,
 							requested[i].agent,
+							requested[i].name,
 							taskWithContext,
 							step.cwd ?? params.cwd,
 							mergeDispatchOverrides(callOverrides, taskOverrides[i]),
@@ -2589,7 +2698,7 @@ export default function (pi: ExtensionAPI) {
 								content: [
 									{
 										type: "text",
-										text: `Chain stopped at step ${i + 1} (${displayUntrustedText(requested[i].agent)}): ${errorMsg}`,
+										text: `Chain stopped at step ${i + 1} (${subagentIdentity(result)}): ${errorMsg}`,
 									},
 								],
 								details: makeDetails("chain")(results),
@@ -2617,6 +2726,7 @@ export default function (pi: ExtensionAPI) {
 					// Initialize placeholder results
 					for (let i = 0; i < params.tasks.length; i++) {
 						allResults[i] = {
+							name: requested[i].name,
 							agent: requested[i].agent,
 							agentSource: "unknown",
 							task: params.tasks[i].task,
@@ -2651,7 +2761,8 @@ export default function (pi: ExtensionAPI) {
 									if (latest?.type === "toolCall") activity = ` ${latest.name} ${JSON.stringify(previewToolArguments(latest.args))}`;
 									else if (latest?.type === "text") activity = ` ${latest.text}`;
 								}
-								const line = `${index + 1}. ${escapeTerminalText(truncateOutput(r.agent, 64, "..."))} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
+								const identity = displayUntrustedText(terminalSubagentIdentity(r), 64);
+								const line = `${index + 1}. ${identity} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
 								return truncateOutput(line, 160, "...");
 							});
 							onUpdate({
@@ -2671,6 +2782,7 @@ export default function (pi: ExtensionAPI) {
 							dispatchDefaults,
 							agents,
 							requested[index].agent,
+							requested[index].name,
 							preamble === undefined ? t.task : `${preamble}\n\n${t.task}`,
 							t.cwd ?? params.cwd,
 							mergeDispatchOverrides(callOverrides, taskOverrides[index]),
@@ -2701,7 +2813,7 @@ export default function (pi: ExtensionAPI) {
 					const headings = results.map((r) => {
 						const status = isFailedResult(r)
 							? `failed${r.stopReason ? ` (${r.stopReason})` : ""}` : "completed";
-						return `### [${displayUntrustedText(truncateOutput(r.agent, 256, "..."))}] ${status}\n\n`;
+						return `### [${subagentIdentity(r)}] ${status}\n\n`;
 					});
 					const overhead = Buffer.byteLength(header + headings.join(separator));
 					const bodyBudget = Math.max(0, Math.floor((MODEL_TEXT_CAP - overhead) / results.length));
@@ -2725,6 +2837,7 @@ export default function (pi: ExtensionAPI) {
 						dispatchDefaults,
 						agents,
 						requested[0].agent,
+						requested[0].name,
 						preamble === undefined ? params.task : `${preamble}\n\n${params.task}`,
 						params.cwd,
 						callOverrides,
@@ -2745,7 +2858,7 @@ export default function (pi: ExtensionAPI) {
 							content: [
 								{
 									type: "text",
-									text: `Agent failed: ${errorMsg}`,
+									text: `Subagent ${subagentIdentity(result)} failed: ${errorMsg}`,
 								},
 							],
 							details: makeDetails("single")([result]),
@@ -2779,8 +2892,8 @@ export default function (pi: ExtensionAPI) {
 			signal?.throwIfAborted();
 			const label =
 				mode === "single"
-					? requested[0].agent
-					: `${mode}: ${requested.map((item) => item.agent).join(", ")}`;
+					? requested[0].name
+					: `${mode}: ${requested.map((item) => item.name).join(", ")}`;
 			const job = jobs.start(label, async (jobSignal, update) => boundResultText(
 				reportUsage(await run(jobSignal, (partial) => update(boundResultText(partial)))),
 			), { notify: params.notify });
@@ -2811,11 +2924,13 @@ export default function (pi: ExtensionAPI) {
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
 					const preview = previewChainTask(stringArg(step?.task, ""));
+					const name = previewSubagentName(step);
 					text +=
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
 						theme.fg("accent", previewAgentSelector(step)) +
+						(name ? theme.fg("muted", ` as ${name}`) : "") +
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
@@ -2829,17 +2944,20 @@ export default function (pi: ExtensionAPI) {
 				for (const t of args.tasks.slice(0, 3)) {
 					const task = stringArg(t?.task, "");
 					const preview = escapeTerminalText(task.length > 40 ? `${task.slice(0, 40)}...` : task);
-					text += `\n  ${theme.fg("accent", previewAgentSelector(t))}${theme.fg("dim", ` ${preview}`)}`;
+					const name = previewSubagentName(t);
+					text += `\n  ${theme.fg("accent", previewAgentSelector(t))}${name ? theme.fg("muted", ` as ${name}`) : ""}${theme.fg("dim", ` ${preview}`)}`;
 				}
 				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			const agentName = previewAgentSelector(args);
+			const displayName = previewSubagentName(args);
 			const task = stringArg(args.task);
 			const preview = escapeTerminalText(task.length > 60 ? `${task.slice(0, 60)}...` : task);
 			let text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
+				(displayName ? theme.fg("muted", ` as ${displayName}`) : "") +
 				theme.fg("muted", ` [${scope}]`);
 			text += `\n  ${theme.fg("dim", preview)}`;
 			return new Text(text, 0, 0);
@@ -2879,7 +2997,7 @@ export default function (pi: ExtensionAPI) {
 				if (expanded) {
 					const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
 					const container = new Container();
-					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+					let header = `${icon} ${theme.fg("toolTitle", theme.bold(terminalSubagentIdentity(r)))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
 					const failure = getFailureReason(r);
@@ -2913,7 +3031,7 @@ export default function (pi: ExtensionAPI) {
 					return container;
 				}
 
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold(terminalSubagentIdentity(r)))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (isError) text += `\n${theme.fg("error", `Error: ${previewEscapedText(getFailureReason(r))}`)}`;
 				else if (displayItems.items.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
@@ -2984,7 +3102,7 @@ export default function (pi: ExtensionAPI) {
 
 						container.addChild(new Spacer(1));
 						container.addChild(
-							new Text(`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
+							new Text(`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`, 0, 0),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", escapeTerminalText(r.task)), 0, 0));
 						const failure = getFailureReason(r);
@@ -3029,7 +3147,7 @@ export default function (pi: ExtensionAPI) {
 					const rIcon = r.exitCode === -1 ? theme.fg("warning", "⏳")
 						: isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages, 5);
-					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`;
 					const failure = getFailureReason(r);
 					if (failure) text += `\n${theme.fg("error", `Error: ${previewEscapedText(failure)}`)}`;
 					if (displayItems.items.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
@@ -3069,7 +3187,7 @@ export default function (pi: ExtensionAPI) {
 						const finalOutput = escapeTerminalText(getFinalOutput(r.messages));
 
 						container.addChild(new Spacer(1));
-						container.addChild(new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0));
+						container.addChild(new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`, 0, 0));
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", escapeTerminalText(r.task)), 0, 0));
 						const failure = getFailureReason(r);
 						if (failure) container.addChild(new Text(theme.fg("error", `Error: ${escapeTerminalText(truncateOutput(failure))}`), 0, 0));
@@ -3113,7 +3231,7 @@ export default function (pi: ExtensionAPI) {
 								? theme.fg("error", "✗")
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages, 5);
-					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`;
 					const failure = getFailureReason(r);
 					if (failure) text += `\n${theme.fg("error", `Error: ${previewEscapedText(failure)}`)}`;
 					if (displayItems.items.length === 0)

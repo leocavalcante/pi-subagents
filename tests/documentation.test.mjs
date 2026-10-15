@@ -263,6 +263,18 @@ test('README documents the agent configuration exposed by discovery', () => {
   assert.match(usage, /These listing-only limits do not change the paths used to launch agents/);
 });
 
+test('README documents generated and explicit subagent display names', () => {
+  const usage = section('Usage');
+  assert.match(usage, /optional `name` is a separate display name/);
+  assert.match(usage, /top-level `name` is not a batch default/);
+  assert.match(usage, /generated as `<agent> <adjective> <animal>`/);
+  assert.match(usage, /unique within a dispatch/);
+  assert.match(usage, /Duplicate explicit names are rejected/);
+  assert.match(usage, /`jobId` remains the opaque job identifier/);
+  assert.match(usage, /256 UTF-8 bytes/);
+  assert.match(usage, /Parallel \| `\{ tasks: \[\{ agent or agentTags, task, name\? \}, \.\.\.\] \}`/);
+});
+
 test('README gives concrete exact- and multi-tag discovery examples', () => {
   const usage = section('Usage');
   assert.match(usage, /### Filter by capability tag/);

@@ -220,9 +220,11 @@ The `subagent` tool accepts exactly one mode. Select each task's agent with eith
 
 | Mode | Parameters | Execution |
 | --- | --- | --- |
-| Single | `{ agent, task }` or `{ agentTags, task }` | One task |
-| Parallel | `{ tasks: [{ agent or agentTags, task }, ...] }` | Up to 8 tasks, up to 4 concurrent |
-| Chain | `{ chain: [{ agent or agentTags, task, id? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
+| Single | `{ agent, task, name? }` or `{ agentTags, task, name? }` | One task |
+| Parallel | `{ tasks: [{ agent or agentTags, task, name? }, ...] }` | Up to 8 tasks, up to 4 concurrent |
+| Chain | `{ chain: [{ agent or agentTags, task, id?, name? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
+
+`agent` and `agentTags` select the agent definition; optional `name` is a separate display name. Set it at the top level for a single task or on each parallel task/chain step; top-level `name` is not a batch default. Omitted names are generated as `<agent> <adjective> <animal>` (for example, `worker amber otter`). Names are assigned once, unique within a dispatch, and used in progress, results, and background job labels/output; `jobId` remains the opaque job identifier. Duplicate explicit names are rejected. Explicit names must be non-empty, well-formed Unicode, at most 256 UTF-8 bytes, and contain no terminal or bidirectional controls. Renderers make invisible formatting characters visible.
 
 Use top-level `preamble` to prepend the same rules to each child task in any mode:
 
