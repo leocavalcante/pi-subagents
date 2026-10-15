@@ -116,6 +116,7 @@ const MAX_RETAINED_JOBS = 32;
 const MAX_JOB_RECORDS = MAX_ACTIVE_JOBS + MAX_RETAINED_JOBS;
 const MAX_JOB_LABEL_BYTES = 1024;
 const MAX_JOB_DIAGNOSTIC_BYTES = 2048;
+const MAX_JOB_DIAGNOSTIC_LABEL_BYTES = 512;
 const MAX_JOB_AGENT_BYTES = 256;
 const MAX_SUBAGENT_NAME_BYTES = MAX_AGENT_NAME_BYTES + 32;
 const AUTO_NAME_ADJECTIVES = [
@@ -2095,7 +2096,7 @@ export default function (pi: ExtensionAPI) {
 				if (!task) return fail(!job.finishedAt
 					? `Task ${taskIndex + 1} is not finished; use action: wait.`
 					: "No retained task at this taskIndex. Inspect status for resultCount.", job);
-				if (task.exitCode === -1) return fail(`Task ${displayUntrustedText(task.name)} (${displayUntrustedText(task.agent)}) is still ${task.startedAtMs === undefined ? "queued" : "running"}; use action: wait.`, job);
+				if (task.exitCode === -1) return fail(`Task ${displayUntrustedText(task.name, MAX_JOB_DIAGNOSTIC_LABEL_BYTES)} (${displayUntrustedText(task.agent, MAX_JOB_DIAGNOSTIC_LABEL_BYTES)}) is still ${task.startedAtMs === undefined ? "queued" : "running"}; use action: wait.`, job);
 				try {
 					const stream: JobOutputStream = params.stream ?? "result";
 					const output = { ...pageResultOutput(task, params.offset ?? 0, params.limit ?? 16384, stream),

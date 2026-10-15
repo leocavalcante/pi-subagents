@@ -941,6 +941,31 @@ test('job listing renders untrusted labels literally and keeps raw metadata', as
   await finish(id);
 });
 
+test('pending background output bounds escaped labels to the error schema', async () => {
+  const agentName = '`'.repeat(MAX_AGENT_NAME_BYTES);
+  const agentFile = join(sandbox, 'agent/agents/backtick-name.md');
+  writeFileSync(agentFile, `---\nname: ${JSON.stringify(agentName)}\ndescription: Backtick-name test\n---\nPrompt.\n`);
+  let id;
+  try {
+    const started = await invoke('subagent', { background: true, notify: false, agent: agentName,
+      name: agentName, task: 'delay=3000 pending diagnostic labels' });
+    id = started.details.background.id;
+    await waitFor(async () => {
+      const job = await status(id);
+      return job.latest?.details?.results?.[0]?.startedAtMs !== undefined ? job : undefined;
+    });
+    const output = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 0 });
+    const error = output.structuredContent.error;
+    assert.equal(output.isError, true);
+    assert.ok(Buffer.byteLength(error, 'utf8') <= 2048, 'diagnostic must fit the declared error limit');
+    assert.match(error, /still running; use action: wait\.$/);
+    assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, output.structuredContent), true);
+  } finally {
+    if (id) await finish(id);
+    rmSync(agentFile, { force: true });
+  }
+});
+
 test('all foreground and background invocations share a four-process budget', async () => {
   const releaseFile = join(sandbox, 'process-budget.release');
   rmSync(releaseFile, { force: true });
