@@ -135,16 +135,8 @@ export class JobManager<T, Observation = never> {
 				// Keep finished entries in completion order, not launch order.
 				this.jobs.delete(snapshot.id);
 				this.jobs.set(snapshot.id, job);
-				if (!this.closed && snapshot.notify) {
-					try {
-						this.onComplete({ ...snapshot });
-					} catch (error) {
-						const delivery = `Completion delivery failed: ${describeThrown(error)}`;
-						snapshot.error = snapshot.error
-							? boundedDiagnostic(snapshot.error, 1023) + "\n" + boundedDiagnostic(delivery, 1024)
-							: boundedDiagnostic(delivery);
-					}
-				}
+				// Deliver the pre-retention result, so a follow-up keeps output that retention evicts.
+				const completed = { ...snapshot };
 				if (this.retention && snapshot.latest !== undefined) {
 					try {
 						job.retainedBytes = this.retention.measure(snapshot.latest);
@@ -156,6 +148,18 @@ export class JobManager<T, Observation = never> {
 					}
 				}
 				this.prune();
+				// A pending wait returns this result itself; a follow-up would repeat it.
+				const waited = job.waiters.size > 0 && !snapshot.outputEvicted;
+				if (!this.closed && snapshot.notify && !waited) {
+					try {
+						this.onComplete(completed);
+					} catch (error) {
+						const delivery = `Completion delivery failed: ${describeThrown(error)}`;
+						snapshot.error = snapshot.error
+							? boundedDiagnostic(snapshot.error, 1023) + "\n" + boundedDiagnostic(delivery, 1024)
+							: boundedDiagnostic(delivery);
+					}
+				}
 				for (const notify of job.waiters) notify();
 			}
 		});

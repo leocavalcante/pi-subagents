@@ -132,10 +132,12 @@ after(() => {
   rmSync(sandbox, { recursive: true, force: true });
 });
 
-test('subagent tool description warns that first-use Windows compilation is not timed', () => {
-  const description = tools.get('subagent').definition.description;
-  assert.match(description, /Windows, first-use supervisor compilation also happens before the deadline and has no independent timeout/);
-  assert.match(description, /canceling a caller detaches it but does not stop the shared compile/);
+test('tool definitions remain within the model-context byte budget', () => {
+  const bytes = ['subagent', 'subagent_agents', 'subagent_jobs'].reduce((total, name) => {
+    const { name: toolName, description, parameters } = tools.get(name).definition;
+    return total + Buffer.byteLength(JSON.stringify({ name: toolName, description, parameters }), 'utf8');
+  }, 0);
+  assert.ok(bytes <= 9121, `Tool definitions use ${bytes} UTF-8 bytes`);
 });
 
 test('background returns before completion, retains progress, and sends a follow-up', async () => {
@@ -165,7 +167,7 @@ test('background returns before completion, retains progress, and sends a follow
       return job.latest ? { latest: job.latest } : job.finishedAt ? { finished: job } : undefined;
     }, process.platform === 'win32' ? 60_000 : 15_000);
     assert.ok(firstUpdate.latest, `Background job finished before progress: ${firstUpdate.finished?.state ?? 'unknown'}${firstUpdate.finished?.error ? ` (${firstUpdate.finished.error})` : ''}`);
-    assert.match(firstUpdate.latest.content[0].text, /progress/);
+    assert.match(firstUpdate.latest.content[0].text, /progress|\(running\.\.\.\)/);
     const result = await finish(id);
     assert.equal(result.state, 'completed');
     assert.equal(messages.length, 1);
@@ -410,7 +412,7 @@ test('notify is a background-only boolean validated before project approval or e
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
 });
 
-test('wait returns a structured final snapshot without polling, extra delivery or billing', async () => {
+test('wait returns a structured final snapshot without polling, follow-up delivery or billing', async () => {
   const id = await launch({ task: 'delay=200 wait result' });
   const result = await invoke('subagent_jobs', { action: 'wait', jobId: id, timeoutMs: 5000 });
   assert.notEqual(result.isError, true);
@@ -419,11 +421,11 @@ test('wait returns a structured final snapshot without polling, extra delivery o
   assert.equal(result.structuredContent.job.state, 'completed');
   assert.match(result.content[0].text, /result: delay=200 wait result/);
   assert.equal(result.usage, undefined);
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 0, 'The pending wait replaces the automatic follow-up');
   assert.equal(Value.Check(tools.get('subagent_jobs').definition.outputSchema, result.structuredContent), true);
   const again = await invoke('subagent_jobs', { action: 'wait', jobId: id });
   assert.equal(again.structuredContent.timedOut, false);
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 0);
   const failed = await launch({ task: 'fail' });
   const failure = await invoke('subagent_jobs', { action: 'wait', jobId: failed, timeoutMs: 5000 });
   assert.notEqual(failure.isError, true, 'A failed job is not a failed inspection');
@@ -593,6 +595,32 @@ test('legacy tool-result deduplication is adjacent, exact, and backward-compatib
   const toolResults = distinct.details.results[0].messages.filter(message => message.role === 'toolResult');
   assert.equal(toolResults.length, 2, 'non-identical messages sharing a call ID remain distinct');
   assert.equal(toolResults[1].content[0].text, 'different legacy payload');
+});
+
+test('successful edit and write calls report deduplicated, bounded paths relative to the task cwd', async () => {
+  const childCwd = join(sandbox, 'changed-files-cwd');
+  mkdirSync(childCwd, { recursive: true });
+  const calls = [
+    { name: 'edit', path: 'src/one.ts' },
+    { name: 'write', path: 'src/two.ts' },
+    { name: 'edit', path: 'src/one.ts' },
+    { name: 'write', path: 'ignored.ts', failed: true },
+    { name: 'bash', path: 'not-tracked.ts' },
+    ...Array.from({ length: 49 }, (_, index) => ({ name: 'edit', path: `more/${index}.ts` })),
+  ];
+  const result = await invoke('subagent', {
+    agent: 'worker', task: `changed-files:${JSON.stringify(calls)}`, cwd: childCwd,
+  });
+  const task = result.details.results[0];
+  assert.deepEqual(task.changedFiles, [
+    join(childCwd, 'src/one.ts'), join(childCwd, 'src/two.ts'),
+    ...Array.from({ length: 48 }, (_, index) => join(childCwd, `more/${index}.ts`)),
+  ]);
+  assert.equal(task.changedFilesOmitted, 1);
+  const changedFilesLine = result.content[0].text.split('\n').find(line => line.startsWith('Changed files:'));
+  assert.match(changedFilesLine, /Changed files: .*src[\\/]one\.ts.*src[\\/]two\.ts.*\(\+1 more\)/);
+  assert.equal(changedFilesLine.includes('ignored.ts'), false);
+  assert.equal(changedFilesLine.includes('not-tracked.ts'), false);
 });
 
 test('background job metadata reports cumulative chain usage without billing inspections', async () => {
@@ -808,13 +836,69 @@ test('background chains substitute previous output and capture working directory
   assertSameDirectory(children[1].cwd, join(sandbox, 'project'));
 });
 
-test('parallel progress does not count running children as completed', async () => {
-  const started = await invoke('subagent', { background: true, tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=500 progress-check' })) });
+test('batch preambles reach parallel and chain children without changing recorded tasks', async () => {
+  const preamble = 'Shared rules: {previous} and {steps.named} stay literal.';
+  const single = await invoke('subagent', { agent: 'worker', task: 'single task', preamble });
+  assert.notEqual(single.isError, true);
+  assert.equal(single.details.results[0].task, 'single task');
+  assert.equal(traces().find(entry => entry.event === 'start').task, `${preamble}\n\nsingle task`);
+
+  writeFileSync(traceFile, '');
+  const parallel = await invoke('subagent', { preamble, tasks: [
+    { agent: 'worker', task: 'parallel one' },
+    { agent: 'worker', task: 'parallel two' },
+  ] });
+  assert.notEqual(parallel.isError, true);
+  assert.deepEqual(parallel.details.results.map(result => result.task), ['parallel one', 'parallel two']);
+  assert.deepEqual(traces().filter(entry => entry.event === 'start').map(entry => entry.task).sort(), [
+    `${preamble}\n\nparallel one`, `${preamble}\n\nparallel two`,
+  ]);
+
+  writeFileSync(traceFile, '');
+  const chain = await invoke('subagent', { preamble, chain: [
+    { agent: 'worker', task: 'first', id: 'named' },
+    { agent: 'worker', task: 'second {previous} {steps.named}' },
+  ] });
+  assert.notEqual(chain.isError, true);
+  const firstOutput = `result: ${preamble}\n\nfirst`;
+  assert.deepEqual(chain.details.results.map(result => result.task), ['first', `second ${firstOutput} ${firstOutput}`],
+    'Chain steps record their expanded task without the preamble');
+  assert.deepEqual(traces().filter(entry => entry.event === 'start').map(entry => entry.task), [
+    `${preamble}\n\nfirst`, `${preamble}\n\nsecond ${firstOutput} ${firstOutput}`,
+  ]);
+});
+
+test('parallel progress distinguishes running and queued tasks', async () => {
+  const started = await invoke('subagent', { background: true, concurrency: 2,
+    tasks: Array.from({ length: 4 }, () => ({ agent: 'worker', task: 'delay=3000 progress-check' })) });
   const id = started.details.background.id;
-  await waitFor(async () => (await status(id)).latest);
-  const progress = (await status(id)).latest;
-  assert.match(progress.content[0].text, /Parallel: 0\/4 done, 4 pending/);
+  const timeoutMs = process.platform === 'win32' ? 60_000 : 15_000;
+  // Wait for the stable state where both slots have spawned and the rest are queued.
+  const progress = await waitFor(async () => {
+    const latest = (await status(id)).latest;
+    return latest?.content[0].text.includes('Parallel: 0/4 done, 2 running, 2 queued') ? latest : undefined;
+  }, timeoutMs);
+  assert.match(progress.content[0].text, /1\. worker running [\d.]+s/);
+  assert.match(progress.content[0].text, /3\. worker queued\n4\. worker queued$/);
   assert.ok(progress.details.results.every(r => r.exitCode === -1));
+  assert.equal((await finish(id, timeoutMs)).state, 'completed');
+});
+
+test('background output is available per task before the job finishes', async () => {
+  const started = await invoke('subagent', { background: true, concurrency: 1, tasks: [
+    { agent: 'worker', task: 'first task output' },
+    { agent: 'worker', task: 'delay=1500 second task still running' },
+  ] });
+  const id = started.details.background.id;
+  await waitFor(async () => {
+    const latest = (await status(id)).latest;
+    return latest?.details.results[0]?.exitCode !== undefined && latest.details.results[0].exitCode !== -1;
+  });
+  const pending = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 1 });
+  assert.match(pending.content[0].text, /Task 2 is still (?:queued|running); use action: wait/);
+  const output = await invoke('subagent_jobs', { action: 'output', jobId: id, taskIndex: 0 });
+  assert.notEqual(output.isError, true);
+  assert.match(output.structuredContent.output.text, /first task output/);
   assert.equal((await finish(id)).state, 'completed');
 });
 
@@ -902,6 +986,48 @@ test('invalid or inapplicable concurrency limits fail before launching children'
     assert.equal((await invoke('subagent', { ...params, concurrency: 2 })).isError, true);
   }
   assert.equal(traces().length, 0);
+});
+
+test('PI_SUBAGENTS_MAX_PROCESSES sets the shared process limit and rejects invalid values', async () => {
+  const previous = process.env.PI_SUBAGENTS_MAX_PROCESSES;
+  const reload = async value => {
+    await shutdown();
+    process.env.PI_SUBAGENTS_MAX_PROCESSES = value;
+    const loaded = await loadExtensions([join(root, 'index.ts')], sandbox);
+    assert.deepEqual(loaded.errors, []);
+    loaded.runtime.sendMessage = (message, options) => messages.push({ message, options });
+    extension = loaded.extensions[0];
+    tools = extension.tools;
+  };
+  try {
+    for (const value of ['0', '9', '2.5', 'four']) {
+      process.env.PI_SUBAGENTS_MAX_PROCESSES = value;
+      const rejected = await loadExtensions([join(root, 'index.ts')], sandbox);
+      assert.match(JSON.stringify(rejected.errors), /PI_SUBAGENTS_MAX_PROCESSES must be an integer from 1 to 8/);
+    }
+
+    await reload('5');
+    assert.match(tools.get('subagent').definition.description, /Set concurrency to limit parallel tasks \(1 to 5\)/);
+    assert.equal((await invoke('subagent', { tasks: [{ agent: 'worker', task: 'x' }], concurrency: 5 })).isError, false);
+
+    await reload('2');
+    writeFileSync(traceFile, '');
+    const rejected = await invoke('subagent', { tasks: [{ agent: 'worker', task: 'x' }], concurrency: 3 });
+    assert.equal(rejected.isError, true);
+    assert.match(rejected.content[0].text, /from 1 to 2\./);
+    const result = await invoke('subagent', { tasks: Array.from({ length: 4 }, (_, i) => ({ agent: 'worker', task: `delay=150 limited-${i}` })) });
+    assert.equal(result.isError, false);
+    assert.equal(result.details.concurrency, 2);
+    let active = 0, peak = 0;
+    for (const entry of traces()) {
+      if (entry.event === 'start') peak = Math.max(peak, ++active);
+      if (entry.event === 'end') active--;
+    }
+    assert.equal(peak, 2);
+  } finally {
+    if (previous === undefined) delete process.env.PI_SUBAGENTS_MAX_PROCESSES;
+    else process.env.PI_SUBAGENTS_MAX_PROCESSES = previous;
+  }
 });
 
 test('canceling a serialized parallel job never starts its remaining tasks', async () => {
@@ -2462,6 +2588,13 @@ test('task input limits use UTF-8 bytes and reject oversized dispatches before a
 
   const atLimit = 'x'.repeat(maxTaskBytes);
   assert.equal(Value.Check(schema, { agent: 'worker', task: atLimit }), true);
+  const oversizedPreamble = 'x'.repeat(maxTaskBytes + 1);
+  const preambleError = await invoke('subagent', { agent: 'worker', task: 'small', preamble: oversizedPreamble });
+  assert.equal(preambleError.isError, true);
+  assert.match(preambleError.content[0].text, /4 MiB UTF-8 size limit/);
+  const combinedError = await invoke('subagent', { agent: 'worker', task: 'x'.repeat(maxTaskBytes - 1), preamble: 'a' });
+  assert.equal(combinedError.isError, true);
+  assert.match(combinedError.content[0].text, /4 MiB UTF-8 size limit/);
   const overDispatch = { tasks: Array.from({ length: 5 }, () => ({ agent: 'project', task: atLimit })),
     agentScope: 'project', background: true };
   assert.equal(Value.Check(schema, overDispatch), true);
@@ -2494,6 +2627,12 @@ test('delegated task text rejects unpaired surrogates before approval or job cre
     assert.equal(JSON.stringify(result).includes(unpaired), false);
     assert.equal(result.details.background, undefined);
   }
+  const invalidPreamble = await invoke('subagent', {
+    agent: 'project', task: 'valid', preamble: unpaired, agentScope: 'project', background: true,
+  }, context);
+  assert.equal(invalidPreamble.isError, true);
+  assert.match(invalidPreamble.content[0].text, /Preamble must contain well-formed Unicode/);
+  assert.equal(JSON.stringify(invalidPreamble).includes(unpaired), false);
   assert.equal(approvals, 0);
   assert.equal(traces().length, 0);
   assert.equal((await invoke('subagent_jobs', { action: 'list' })).structuredContent.jobs.length, 0);
@@ -2630,18 +2769,9 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     ['lookup-db.md', 'lookup-db', 'Database migration helper'],
     ['source-label-only.md', 'lookup-filename-only', 'Plain description'],
     ['lookup-tool.md', 'lookup-tool-agent', 'Configured transport helper', ['read', 'custom-shell']],
-    ['lookup-greek.md', 'lookup-greek', 'ΟΣ reviewer'],
-    ['lookup-sharp-s-name.md', 'straße-reviewer', 'German language reviewer'],
-    ['lookup-sharp-s-description.md', 'lookup-sharp-s-description', 'Straße compliance reviewer'],
-    ['lookup-long-s.md', 'lookup-long-s', 'ſtraße support reviewer'],
-    ['lookup-long-s-name.md', 'ſupport-reviewer', 'Long-s agent name'],
-    ['lookup-ligature.md', 'lookup-ligature', 'Oﬃce formatting specialist'],
-    ['lookup-beta-symbol.md', 'lookup-beta-symbol', 'ϐeta symbol reference'],
-    ['lookup-micro-sign.md', 'lookup-micro-sign', 'µm conversion guide'],
     ['lookup-cafe-composed.md', 'lookup-cafe-composed', 'Café tooling'],
     ['lookup-cafe-decomposed.md', 'lookup-cafe-decomposed', 'Cafe\u0301 assistant'],
     ['lookup-café-name.md', 'lookup-café-name', 'Canonical name search'],
-    ['lookup-unicode17-order.md', 'lookup-unicode17-order', 'a\u0315\u0300\u05ae\u1acf' + 'b'],
     ['lookup-model.md', 'lookup-model', 'Explicit model routing helper', undefined, 'vendor/custom-Reasoner', 'xhigh'],
     ['lookup-override.md', 'lookup-override', 'Secret token helper', ['custom-shell'], 'vendor/personal-secret', 'low', ['AWS_SECRET_ACCESS_KEY'], '/work/personal-runtime', 456000],
   ];
@@ -2664,18 +2794,6 @@ test('agent listing searches identity, capabilities, source filenames, and confi
   const projectOverride = join(sandbox, 'project/.pi/agents/lookup-override.md');
   writeFileSync(projectOverride, '---\nname: lookup-override\ndescription: Database project reviewer\ntools: [read]\ntags: [project-review]\nmodel: vendor/project-model\nthinking: max\nunsetEnv: [GITHUB_TOKEN]\ncwd: /work/project-runtime\ntimeoutMs: 654000\n---\nProject override instructions.\n');
   try {
-    const toolDescription = tools.get('subagent_agents').definition.description;
-    assert.match(toolDescription, /search names, descriptions, source filenames, capability tags, configured tools, environment filters, models, thinking settings, working directories, and deadlines/);
-    assert.match(toolDescription, /tag to filter by one exact, case-insensitive capability label, tags to require every listed exact label/);
-    assert.match(toolDescription, /Tags are bounded lowercase discovery labels; subagent can dispatch through agentTags when the all-tags match is unique/);
-    assert.match(toolDescription, /Tags do not configure child execution settings/);
-    assert.match(toolDescription, /definition filenames \(not parent directories\)/);
-    assert.match(toolDescription, /cwd paths/);
-    assert.match(toolDescription, /decimal timeoutMs values \(milliseconds\)/);
-    assert.match(toolDescription, /unsetEnv variable names/);
-    assert.match(toolDescription, /Reports invalid and duplicate definitions and agent-directory inspection failures/);
-    assert.match(toolDescription, /runtime-default tools, inherited cwd paths and model\/thinking settings, and unspecified deadlines are not inferred/);
-    assert.match(toolDescription, /environment variable values are never searched/);
     const schema = tools.get('subagent_agents').definition.outputSchema;
     const parameters = tools.get('subagent_agents').definition.parameters;
     assert.equal(Value.Check(parameters, { query: '  oAuTh ' }), true);
@@ -2853,42 +2971,6 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     assert.equal(projectTimeout.details.agents[0].timeoutMs, 654000,
       'a project deadline replaces the shadowed personal setting before search');
 
-    const greekMatch = await invoke('subagent_agents', { query: 'σ' });
-    assert.deepEqual(greekMatch.details.agents.map(agent => agent.name), ['lookup-greek'],
-      'Greek final sigma in stored text should match ordinary sigma in a query');
-
-    const sharpSNameMatch = await invoke('subagent_agents', { query: 'STRASSE-REVIEWER' });
-    assert.deepEqual(sharpSNameMatch.details.agents.map(agent => agent.name), ['straße-reviewer'],
-      'German sharp s in agent names should match `ss` in the query');
-
-    const sharpSDescriptionMatch = await invoke('subagent_agents', { query: 'STRASSE COMPLIANCE' });
-    assert.deepEqual(sharpSDescriptionMatch.details.agents.map(agent => agent.name), ['lookup-sharp-s-description'],
-      'German sharp s in descriptions should match `ss` in the query');
-
-    const capitalSharpSMatch = await invoke('subagent_agents', { query: 'STRAẞE COMPLIANCE' });
-    assert.deepEqual(capitalSharpSMatch.details.agents.map(agent => agent.name), ['lookup-sharp-s-description'],
-      'Capital sharp s in a query should match lowercase sharp s in descriptions');
-
-    const longSMatch = await invoke('subagent_agents', { query: 'STRASSE SUPPORT' });
-    assert.deepEqual(longSMatch.details.agents.map(agent => agent.name), ['lookup-long-s'],
-      'Unicode long s and sharp s should both fold to `s` and `ss`');
-
-    const longSNameMatch = await invoke('subagent_agents', { query: 'SUPPORT-REVIEWER' });
-    assert.deepEqual(longSNameMatch.details.agents.map(agent => agent.name), ['ſupport-reviewer'],
-      'Full case folding should also match names that contain long s');
-
-    const ligatureMatch = await invoke('subagent_agents', { query: 'OFFICE FORMATTING' });
-    assert.deepEqual(ligatureMatch.details.agents.map(agent => agent.name), ['lookup-ligature'],
-      'Unicode presentation ligatures should expand during full case folding');
-
-    const greekSymbolMatch = await invoke('subagent_agents', { query: 'βeta SYMBOL' });
-    assert.deepEqual(greekSymbolMatch.details.agents.map(agent => agent.name), ['lookup-beta-symbol'],
-      'Greek symbol variants should match their standard-letter case folds');
-
-    const microSignMatch = await invoke('subagent_agents', { query: 'μm conversion' });
-    assert.deepEqual(microSignMatch.details.agents.map(agent => agent.name), ['lookup-micro-sign'],
-      'The micro sign should match Greek mu under default Unicode case folding');
-
     const decomposedQuery = await invoke('subagent_agents', { query: 'cafe\u0301 tool' });
     assert.deepEqual(decomposedQuery.details.agents.map(agent => agent.name), ['lookup-cafe-composed'],
       'decomposed query text should match canonically equivalent composed metadata');
@@ -2896,12 +2978,6 @@ test('agent listing searches identity, capabilities, source filenames, and confi
     const composedQuery = await invoke('subagent_agents', { query: 'café ass' });
     assert.deepEqual(composedQuery.details.agents.map(agent => agent.name), ['lookup-cafe-decomposed'],
       'composed query text should match canonically equivalent decomposed metadata');
-
-    const unicode17CanonicalQuery = await invoke('subagent_agents', {
-      query: 'a\u05ae\u0300\u1acf\u0315' + 'b',
-    });
-    assert.deepEqual(unicode17CanonicalQuery.details.agents.map(agent => agent.name), ['lookup-unicode17-order'],
-      'Unicode 17 combining classes must match canonical equivalents even when Node ICU uses Unicode 16');
 
     const nameQuery = await invoke('subagent_agents', { query: 'lookup-cafe\u0301-name' });
     assert.deepEqual(nameQuery.details.agents.map(agent => agent.name), ['lookup-café-name'],
@@ -4754,7 +4830,7 @@ test('output pages reject active jobs and expose failed-job diagnoses after comp
   const id = await launch({ task: 'delay=10000 hold' });
   const active = await invoke('subagent_jobs', { action: 'output', jobId: id });
   assert.equal(active.isError, true);
-  assert.match(active.structuredContent.error, /finished job/);
+  assert.match(active.structuredContent.error, /not finished/);
   await waitFor(async () => (await status(id)).latest?.details?.results[0]?.messages?.length);
   const canceled = await invoke('subagent_jobs', { action: 'cancel', jobId: id });
   assert.equal(canceled.structuredContent.job.id, id);

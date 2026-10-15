@@ -1,6 +1,6 @@
 {
 	"name": "@leocavalcante/pi-subagents",
-	"version": "0.1.3",
+	"version": "0.2.0",
 	"description": "Delegate tasks to isolated Pi agents, singly, in parallel, or in a chain.",
 	"type": "module",
 	"license": "MIT",
@@ -28,7 +28,6 @@
 		"usage.ts",
 		"chain.ts",
 		"unicode.ts",
-		"unicode-normalization.ts",
 		"progress.ts",
 		"abort.ts",
 		"temporary-files.ts",
@@ -36,7 +35,6 @@
 		"windows-supervisor.cs",
 		"CONTRIBUTING.md",
 		"SECURITY.md",
-		"UNICODE-LICENSE.txt",
 		"LICENSE",
 		"README.md"
 	],

@@ -246,6 +246,14 @@ if (task === 'history-final-evicted') {
   trace({ event: 'end', task });
   process.exit(0);
 }
+if (task.startsWith('changed-files:')) {
+  const calls = JSON.parse(task.slice('changed-files:'.length));
+  const content = calls.map((call, index) => ({ type: 'toolCall', id: `file-${index}`, name: call.name ?? 'edit', arguments: { path: call.path } }));
+  console.log(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content, stopReason: 'toolUse' } }));
+  for (let index = 0; index < calls.length; index++) console.log(JSON.stringify({ type: 'message_end', message: {
+    role: 'toolResult', toolCallId: `file-${index}`, toolName: calls[index].name ?? 'edit', isError: calls[index].failed ?? false, content: [],
+  } }));
+}
 if (task === 'history-flood') for (let i = 0; i < 200; i++) emit(`history ${i}`);
 // The compact workload keeps finished-registry tests cheap; the larger fixture exercises per-task history eviction.
 const retentionRecordBytes = compactRetentionWorkload ? 1024 * 1024 : 3 * 1024 * 1024;
