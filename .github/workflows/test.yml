@@ -145,7 +145,7 @@ jobs:
       - run: npm pack --dry-run --ignore-scripts
 
   latest-pi:
-    name: Pi 1.2.0 compatibility
+    name: Pi 1.3.0 compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -157,16 +157,16 @@ jobs:
           node-version: "22.19.0"
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Install Pi 1.2.0 with its dependency closure
+      - name: Install Pi 1.3.0 with its dependency closure
         shell: bash
         run: |
-          prefix="$RUNNER_TEMP/pi-1.2.0"
+          prefix="$RUNNER_TEMP/pi-1.3.0"
           mkdir -p "$prefix"
           printf '{"private":true}\n' > "$prefix/package.json"
-          npm install --prefix "$prefix" --ignore-scripts --no-audit --no-fund --save-exact @earendil-works/pi-coding-agent@1.2.0
+          npm install --prefix "$prefix" --ignore-scripts --no-audit --no-fund --save-exact @earendil-works/pi-coding-agent@1.3.0
           rm -rf node_modules/@earendil-works/pi-coding-agent
           ln -s "$prefix/node_modules/@earendil-works/pi-coding-agent" node_modules/@earendil-works/pi-coding-agent
-      - name: Check against Pi 1.2.0
+      - name: Check against Pi 1.3.0
         run: npm run check
-      - name: Test against Pi 1.2.0
+      - name: Test against Pi 1.3.0
         run: npm test
