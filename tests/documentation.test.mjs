@@ -90,7 +90,7 @@ test('CI preserves the required Node, runner, Pi, and Node.js type coverage', ()
     'test the declared minimum Node.js version explicitly');
   assert.equal(packageJson.devDependencies['@types/node'], '22.20.5',
     'keep type checking aligned with the pinned Node.js 22 declarations');
-  assert.equal(packageJson.devDependencies['@earendil-works/pi-coding-agent'], '1.1.0',
+  assert.equal(packageJson.devDependencies['@earendil-works/pi-coding-agent'], '1.3.0',
     'the default CI run must test the current supported Pi runtime');
 
   const baseTest = workflow.indexOf('      - run: npm test');
@@ -121,18 +121,18 @@ test('CI preserves the required Node, runner, Pi, and Node.js type coverage', ()
   assert.ok(legacy11Job.includes('PI_PACKAGE_DIR: ${{ runner.temp }}/pi-1.1.0/node_modules/@earendil-works/pi-coding-agent'));
   assert.ok(legacy11Job.includes('node-version: "22.19.0"'));
   const latestJob = workflow.slice(latestJobStart);
-  const latestInstall = latestJob.indexOf('Install Pi 1.2.0 with its dependency closure');
-  const latestCheck = latestJob.indexOf('Check against Pi 1.2.0');
-  const latestTest = latestJob.indexOf('Test against Pi 1.2.0');
+  const latestInstall = latestJob.indexOf('Install Pi 1.3.0 with its dependency closure');
+  const latestCheck = latestJob.indexOf('Check against Pi 1.3.0');
+  const latestTest = latestJob.indexOf('Test against Pi 1.3.0');
   assert.ok(latestInstall >= 0 && latestInstall < latestCheck && latestCheck < latestTest,
-    'test Pi 1.2.0 with its dependency closure in a dedicated job');
-  assert.ok(latestJob.includes('@earendil-works/pi-coding-agent@1.2.0'));
+    'test Pi 1.3.0 with its dependency closure in a dedicated job');
+  assert.ok(latestJob.includes('@earendil-works/pi-coding-agent@1.3.0'));
   assert.ok(latestJob.includes('node-version: "22.19.0"'),
     'run the current Pi runtime on its declared minimum Node.js version');
   assert.match(contributing, /with Node\.js 22, 24, and 26 against Pi 1\.0\.4 and 1\.1\.0 paired with Pi Codemode 1\.1\.0/);
   assert.match(contributing, /upstream report/);
   assert.match(contributing, /Additional Ubuntu\/Node\.js 22\.19\.0 jobs test Pi 1\.0\.4 and Pi 1\.1\.0, each paired with Codemode 1\.1\.0 and its freshly resolved dependency closure/);
-  assert.match(contributing, /separate Ubuntu\/Node\.js 22\.19\.0 job also runs the type check and tests with Pi 1\.2\.0/);
+  assert.match(contributing, /separate Ubuntu\/Node\.js 22\.19\.0 job also runs the type check and tests with Pi 1\.3\.0/);
 });
 
 test('npm test uses automatic discovery so Node runner options and file paths can be forwarded', () => {
