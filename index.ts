@@ -138,6 +138,14 @@ import {
   trackTemporaryDirectory,
 } from "./temporary-files.ts";
 
+// noUncheckedIndexedAccess types every array read as possibly undefined. Loop
+// bounds and earlier validation guarantee these reads; keep them unchecked so
+// runtime behavior is exactly as before.
+function uncheckedAt<T>(values: readonly T[], index: number): T {
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- Unchecked read, as before noUncheckedIndexedAccess.
+  return values[index]!;
+}
+
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CHAIN_STEPS = 32;
 const DEFAULT_PROCESS_LIMIT = 4;
@@ -284,8 +292,8 @@ function preserveDisplayCharacter(
     return (
       index > 0 &&
       nextIndex < value.length &&
-      !JOINER_SEQUENCE_BOUNDARY.test(value[index - 1]) &&
-      !JOINER_SEQUENCE_BOUNDARY.test(value[nextIndex])
+      !JOINER_SEQUENCE_BOUNDARY.test(value.charAt(index - 1)) &&
+      !JOINER_SEQUENCE_BOUNDARY.test(value.charAt(nextIndex))
     );
   }
   // A for-of character always contains at least one UTF-16 code unit.
@@ -439,14 +447,13 @@ function assignSubagentNames(
 
   const combinations = AUTO_NAME_ADJECTIVES.length * AUTO_NAME_ANIMALS.length;
   for (const [index, request] of requests.entries()) {
-    // Keep the sparse-array check even though unchecked indexed access is disabled.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- names starts sparse and generated entries must be skipped.
+    // names starts sparse: skip requests that already have a name.
     if (names[index] !== undefined) continue;
     const start = randomInt(combinations);
     let assigned: string | undefined;
     for (let offset = 0; offset < combinations; offset++) {
       const candidateIndex = (start + offset) % combinations;
-      const candidate = `${request.agent} ${AUTO_NAME_ADJECTIVES[Math.floor(candidateIndex / AUTO_NAME_ANIMALS.length)]} ${AUTO_NAME_ANIMALS[candidateIndex % AUTO_NAME_ANIMALS.length]}`;
+      const candidate = `${request.agent} ${uncheckedAt(AUTO_NAME_ADJECTIVES, Math.floor(candidateIndex / AUTO_NAME_ANIMALS.length))} ${uncheckedAt(AUTO_NAME_ANIMALS, candidateIndex % AUTO_NAME_ANIMALS.length)}`;
       if (
         !used.has(candidate) &&
         !activeJobLabels.some((label) => label.includes(candidate))
@@ -835,7 +842,7 @@ function estimateJobBytes(result: JobResult): number {
 
 function getFinalOutput(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
+    const msg = uncheckedAt(messages, i);
     if (msg.role === "assistant") {
       // Use the last assistant message, not stale text from earlier turns.
       return msg.content
@@ -1009,7 +1016,7 @@ function truncateOutput(
   // Encode only enough of an oversized string to fill its bounded prefix.
   const bytes = Buffer.from(output.slice(0, end + 2), "utf8");
   // Do not split a multibyte character. The notice itself is inside the cap.
-  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
   return bytes.subarray(0, end).toString("utf8") + notice;
 }
 
@@ -1135,7 +1142,7 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
     while (true) {
       const current = nextIndex++;
       if (current >= items.length) return;
-      results[current] = await fn(items[current], current);
+      results[current] = await fn(uncheckedAt(items, current), current);
     }
   });
   // Wait for every worker to clean up even if one fails or is canceled.
@@ -1171,7 +1178,6 @@ async function writePromptToTempFile(
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
   const currentScript = process.argv[1];
   // Keep the runtime check for processes launched without an argv[1].
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Node may omit argv[1] at runtime.
   const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
   if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
     return { command: process.execPath, args: [currentScript, ...args] };
@@ -4022,13 +4028,13 @@ export default function (pi: ExtensionAPI) {
                 details: makeDetails(mode)([]),
                 isError: true,
               };
-            selectedAgent = matches[0];
+            selectedAgent = uncheckedAt(matches, 0);
           }
           selectedAgents.push(selectedAgent);
         }
         const selectedRequests = requestedInputs.map((item, index) => ({
           ...item,
-          agent: selectedAgents[index].name,
+          agent: uncheckedAt(selectedAgents, index).name,
         }));
         const activeJobLabels = jobs
           .list()
@@ -4046,7 +4052,7 @@ export default function (pi: ExtensionAPI) {
           };
         const requested = selectedRequests.map((item, index) => ({
           ...item,
-          name: assignedNames[index],
+          name: uncheckedAt(assignedNames, index),
         }));
         const referenceError = params.chain
           ? validateChainReferences(params.chain)
@@ -4059,7 +4065,11 @@ export default function (pi: ExtensionAPI) {
           };
         if (
           params.chain &&
-          !substituteChainContext(params.chain[0].task, "", new Map()).trim()
+          !substituteChainContext(
+            uncheckedAt(params.chain, 0).task,
+            "",
+            new Map(),
+          ).trim()
         ) {
           return {
             content: [
@@ -4116,7 +4126,7 @@ export default function (pi: ExtensionAPI) {
             isError: true,
           };
         }
-        const callOverrides = normalizedConfigurations[0];
+        const callOverrides = uncheckedAt(normalizedConfigurations, 0);
         const taskOverrides = normalizedConfigurations.slice(1);
         const deadlines = [
           params.timeoutMs,
@@ -4306,12 +4316,15 @@ export default function (pi: ExtensionAPI) {
             const workingDirectoriesByAgent = new Map<string, Set<string>>();
             for (let index = 0; index < requested.length; index++) {
               const agent = agents.find(
-                (candidate) => candidate.name === requested[index].agent,
+                (candidate) =>
+                  candidate.name === uncheckedAt(requested, index).agent,
               );
               if (agent?.source !== "project") continue;
               const directories =
                 workingDirectoriesByAgent.get(agent.name) ?? new Set<string>();
-              directories.add(effectiveResolvedWorkingDirectories[index]);
+              directories.add(
+                uncheckedAt(effectiveResolvedWorkingDirectories, index),
+              );
               workingDirectoriesByAgent.set(agent.name, directories);
             }
             const workingDirectories = Array.from(
@@ -4325,12 +4338,14 @@ export default function (pi: ExtensionAPI) {
             const environmentByAgent = new Map<string, Set<string>>();
             for (let index = 0; index < requested.length; index++) {
               const agent = agents.find(
-                (candidate) => candidate.name === requested[index].agent,
+                (candidate) =>
+                  candidate.name === uncheckedAt(requested, index).agent,
               );
               if (agent?.source !== "project") continue;
               const names =
                 environmentByAgent.get(agent.name) ?? new Set<string>();
-              for (const name of effectiveUnsetEnv[index]) names.add(name);
+              for (const name of uncheckedAt(effectiveUnsetEnv, index))
+                names.add(name);
               environmentByAgent.set(agent.name, names);
             }
             const filteredEnvironment = Array.from(
@@ -4344,7 +4359,8 @@ export default function (pi: ExtensionAPI) {
             const configurationByAgent = new Map<string, Set<string>>();
             for (let index = 0; index < requested.length; index++) {
               const agent = agents.find(
-                (candidate) => candidate.name === requested[index].agent,
+                (candidate) =>
+                  candidate.name === uncheckedAt(requested, index).agent,
               );
               if (agent?.source !== "project") continue;
               const overrides = mergeDispatchOverrides(
@@ -4352,8 +4368,8 @@ export default function (pi: ExtensionAPI) {
                 taskOverrides[index] ?? {},
               );
               const timeoutOverride =
-                requested[index].timeoutMs !== undefined
-                  ? requested[index].timeoutMs
+                uncheckedAt(requested, index).timeoutMs !== undefined
+                  ? uncheckedAt(requested, index).timeoutMs
                   : params.timeoutMs;
               const settings = resolveAgentSettings(
                 agent,
@@ -4453,7 +4469,7 @@ export default function (pi: ExtensionAPI) {
               isError: true,
             };
           for (const [index, item] of requested.entries())
-            item.name = finalNames[index];
+            item.name = uncheckedAt(finalNames, index);
         }
 
         // Capture dispatch configuration and permissions before detaching from this turn.
@@ -4469,7 +4485,7 @@ export default function (pi: ExtensionAPI) {
             const namedOutputs = new Map<string, string>();
 
             for (let i = 0; i < params.chain.length; i++) {
-              const step = params.chain[i];
+              const step = uncheckedAt(params.chain, i);
               const delimiterBytes = preamble === undefined ? 0 : 2;
               const remainingTaskBytes =
                 MAX_DISPATCH_TASK_BYTES - expandedTaskBytes - delimiterBytes;
@@ -4503,7 +4519,6 @@ export default function (pi: ExtensionAPI) {
                     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive partial-result access.
                     const currentResult = partial.details?.results[0];
                     // The bounded result list may be empty in a partial update.
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the empty-result guard.
                     if (currentResult) {
                       if (step.id !== undefined) currentResult.stepId = step.id;
                       const allResults = [...results, currentResult];
@@ -4530,11 +4545,14 @@ export default function (pi: ExtensionAPI) {
                 pool,
                 dispatchDefaults,
                 agents,
-                requested[i].agent,
-                requested[i].name,
+                uncheckedAt(requested, i).agent,
+                uncheckedAt(requested, i).name,
                 taskWithContext,
                 step.cwd ?? params.cwd,
-                mergeDispatchOverrides(callOverrides, taskOverrides[i]),
+                mergeDispatchOverrides(
+                  callOverrides,
+                  uncheckedAt(taskOverrides, i),
+                ),
                 step.timeoutMs !== undefined
                   ? step.timeoutMs
                   : params.timeoutMs,
@@ -4576,7 +4594,9 @@ export default function (pi: ExtensionAPI) {
               content: [
                 {
                   type: "text",
-                  text: getResultOutput(results[results.length - 1]),
+                  text: getResultOutput(
+                    uncheckedAt(results, results.length - 1),
+                  ),
                 },
               ],
               details: makeDetails("chain")(results),
@@ -4590,10 +4610,10 @@ export default function (pi: ExtensionAPI) {
             // Initialize placeholder results
             for (let i = 0; i < params.tasks.length; i++) {
               allResults[i] = {
-                name: requested[i].name,
-                agent: requested[i].agent,
+                name: uncheckedAt(requested, i).name,
+                agent: uncheckedAt(requested, i).agent,
                 agentSource: "unknown",
-                task: params.tasks[i].task,
+                task: uncheckedAt(params.tasks, i).task,
                 exitCode: -1, // -1 = running or waiting for a process slot
                 messages: [],
                 stderr: "",
@@ -4640,11 +4660,9 @@ export default function (pi: ExtensionAPI) {
                   if (state === "running") {
                     const latest = getDisplayItems(r.messages, 1).items[0];
                     // Keep the empty-message guard for incomplete streaming updates.
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive activity rendering.
                     if (latest?.type === "toolCall")
                       activity = ` ${latest.name} ${JSON.stringify(previewToolArguments(latest.args))}`;
                     // Keep the empty-message guard for incomplete streaming updates.
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive activity rendering.
                     else if (latest?.type === "text")
                       activity = ` ${latest.text}`;
                   }
@@ -4683,11 +4701,14 @@ export default function (pi: ExtensionAPI) {
                   pool,
                   dispatchDefaults,
                   agents,
-                  requested[index].agent,
-                  requested[index].name,
+                  uncheckedAt(requested, index).agent,
+                  uncheckedAt(requested, index).name,
                   preamble === undefined ? t.task : `${preamble}\n\n${t.task}`,
                   t.cwd ?? params.cwd,
-                  mergeDispatchOverrides(callOverrides, taskOverrides[index]),
+                  mergeDispatchOverrides(
+                    callOverrides,
+                    uncheckedAt(taskOverrides, index),
+                  ),
                   t.timeoutMs !== undefined ? t.timeoutMs : params.timeoutMs,
                   undefined,
                   signal,
@@ -4732,7 +4753,8 @@ export default function (pi: ExtensionAPI) {
             );
             const summaries = results.map(
               (r, i) =>
-                headings[i] + truncateOutput(getResultOutput(r), bodyBudget),
+                uncheckedAt(headings, i) +
+                truncateOutput(getResultOutput(r), bodyBudget),
             );
             return {
               content: [
@@ -4752,8 +4774,8 @@ export default function (pi: ExtensionAPI) {
               pool,
               dispatchDefaults,
               agents,
-              requested[0].agent,
-              requested[0].name,
+              uncheckedAt(requested, 0).agent,
+              uncheckedAt(requested, 0).name,
               preamble === undefined
                 ? params.task
                 : `${preamble}\n\n${params.task}`,
@@ -4813,7 +4835,7 @@ export default function (pi: ExtensionAPI) {
         signal?.throwIfAborted();
         const label =
           mode === "single"
-            ? requested[0].name
+            ? uncheckedAt(requested, 0).name
             : `${mode}: ${requested.map((item) => item.name).join(", ")}`;
         const job = jobs.start(
           label,
@@ -4861,7 +4883,6 @@ export default function (pi: ExtensionAPI) {
         for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
           const step = args.chain[i];
           // Keep optional access for malformed host-provided chain items.
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive item handling.
           const preview = previewChainTask(stringArg(step?.task, ""));
           const name = previewSubagentName(step);
           text +=
@@ -4921,7 +4942,6 @@ export default function (pi: ExtensionAPI) {
         const text = result.content[0];
         return new Text(
           // Keep the empty-content guard for malformed or incomplete host results.
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive result rendering.
           text?.type === "text" ? escapeTerminalText(text.text) : "(no output)",
           0,
           0,
@@ -4947,7 +4967,7 @@ export default function (pi: ExtensionAPI) {
       };
 
       if (details.mode === "single" && details.results.length === 1) {
-        const r = details.results[0];
+        const r = uncheckedAt(details.results, 0);
         const isError = isFailedResult(r);
         const icon =
           r.exitCode === -1
@@ -5375,7 +5395,6 @@ export default function (pi: ExtensionAPI) {
       const text = result.content[0];
       return new Text(
         // Keep the empty-content guard for malformed or incomplete host results.
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive result rendering.
         text?.type === "text" ? escapeTerminalText(text.text) : "(no output)",
         0,
         0,

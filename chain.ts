@@ -23,7 +23,6 @@ export function validateChainReferences(
     for (const match of step.task.matchAll(CONTEXT_PLACEHOLDERS)) {
       if (
         // The optional capture is absent for the {previous} placeholder.
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain the runtime distinction for this regex branch.
         match[1] !== undefined &&
         (!isValidChainId(match[1]) || !available.has(match[1]))
       ) {
@@ -90,7 +89,7 @@ export function substituteChainContextBounded(
       throw new Error("Chain placeholder position is unavailable.");
     if (start > templateOffset)
       joinBoundary(task.charCodeAt(templateOffset), task.charCodeAt(start - 1));
-    const id = match[1] as string | undefined;
+    const id = match[1];
     let replacement: string;
     let replacementBytes: number;
     if (id === undefined) {

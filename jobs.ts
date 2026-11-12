@@ -23,7 +23,7 @@ function boundedDiagnostic(text: string, limit = MAX_DIAGNOSTIC_BYTES): string {
     return bytes.toString("utf8");
   const notice = "\n[diagnostic truncated]";
   let end = limit - Buffer.byteLength(notice);
-  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
   return bytes.subarray(0, end).toString("utf8") + notice;
 }
 
