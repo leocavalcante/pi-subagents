@@ -39,6 +39,7 @@ try {
     paths.includes("windows-supervisor.cs"),
     "The Windows supervisor must ship",
   );
+  assert(paths.includes("CHANGELOG.md"), "The generated changelog must ship");
   assert(
     !paths.some((path) => /^(?:tests|\.github|docs|node_modules)\//.test(path)),
     "Tests, workflows, docs, and installed dependencies must not ship",

@@ -60,7 +60,7 @@ test("README contents links every section and subsection to its heading", () => 
 
 test("README quick start connects installation, agent setup, and a first delegation", () => {
   const quickStart = section("Quick start");
-  const npmInstall = `pi install npm:${packageJson.name}@${packageJson.version}`;
+  const npmInstall = `pi install npm:${packageJson.name}\n`;
   assert.ok(quickStart.includes(npmInstall));
   assert.ok(quickStart.includes("enter `/reload`"));
   assert.ok(
@@ -98,15 +98,23 @@ test("README documents the minimum Node.js version required by the package", () 
   );
 });
 
-test("README documents the published npm version and unreleased GitHub installation", () => {
+test("README installs the unpinned npm package and the unreleased GitHub version", () => {
   const installation = section("Installation");
-  const npmInstall = `pi install npm:${packageJson.name}@${packageJson.version}`;
+  const npmInstall = `pi install npm:${packageJson.name}\n`;
+  assert.ok(
+    installation.includes(npmInstall),
+    "install the unpinned package so Pi can update it",
+  );
+  assert.doesNotMatch(
+    installation,
+    /pi install npm:@leocavalcante\/pi-subagents@\d/,
+  );
   assert.ok(
     installation.includes(
-      `The npm package is published as version \`${packageJson.version}\``,
+      `pi remove npm:${packageJson.name}\npi install npm:${packageJson.name}\n`,
     ),
+    "tell users with a pinned install how to switch",
   );
-  assert.ok(installation.includes(npmInstall));
   assert.match(
     installation,
     /unreleased changes from the current GitHub `main` branch/,
@@ -139,18 +147,18 @@ test("README documents the published npm version and unreleased GitHub installat
   assert.match(installation, /pi install \.\n```/);
 });
 
-test("CONTRIBUTING documents the verified npm Trusted Publishing release", () => {
+test("CONTRIBUTING documents automated releases through npm Trusted Publishing", () => {
   assert.match(
     contributing,
     /bootstrapped manually on npm as version `0\.1\.0`/,
   );
   assert.match(
     contributing,
-    /version `0\.1\.1` was published through GitHub Actions using npm Trusted Publishing/,
+    /Versions `0\.1\.1` through `0\.2\.0` were published through GitHub Actions using npm Trusted Publishing/,
   );
   assert.match(
     contributing,
-    /provenance attestation identifies repository `leocavalcante\/pi-subagents`/,
+    /provenance attestations identify repository `leocavalcante\/pi-subagents`/,
   );
   assert.match(
     contributing,
@@ -163,11 +171,15 @@ test("CONTRIBUTING documents the verified npm Trusted Publishing release", () =>
   assert.match(contributing, /npm versions are immutable/);
   assert.match(
     contributing,
-    /release-triggered `publish\.yml` workflow is retired/,
+    /release-triggered `publish\.yml` workflow, which `cd\.yaml` replaces/,
   );
   assert.match(
     contributing,
-    /Releases are moving to automated publishing from `main`; nothing publishes until that is in place/,
+    /`\.github\/workflows\/cd\.yaml` runs CI on pushes to `main`, then semantic-release publishes releasable changes through npm Trusted Publishing with provenance/,
+  );
+  assert.match(
+    contributing,
+    /npm@12 trust github @leocavalcante\/pi-subagents/,
   );
   assert.doesNotMatch(
     contributing,

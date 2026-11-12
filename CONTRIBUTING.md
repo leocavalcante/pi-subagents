@@ -32,8 +32,48 @@ The project-agent hard-link rejection test runs on every platform. On Windows, t
 
 ## Releasing
 
-GitHub Actions tests every pull request. The release-triggered `publish.yml` workflow is retired because it called the deleted `test.yml`. Releases are moving to automated publishing from `main`; nothing publishes until that is in place. Do not create a GitHub release expecting it to publish this package. npm versions cannot be overwritten.
+Do not edit the development version, create release tags, or publish from your machine. `.github/workflows/cd.yaml` runs CI on pushes to `main`, then semantic-release publishes releasable changes through npm Trusted Publishing with provenance.
 
-The package was bootstrapped manually on npm as version `0.1.0`; version `0.1.1` was published through GitHub Actions using npm Trusted Publishing. Its npm provenance attestation identifies repository `leocavalcante/pi-subagents`, workflow `.github/workflows/publish.yml`, and release tag `v0.1.1`, confirming the historical OIDC publish path. Do not repeat the bootstrap or attempt to republish any version already in the registry; npm versions are immutable. For additional account security, an authorized npm publisher should verify that npm's publishing-access settings require two-factor authentication and disallow tokens. These account-level settings are not visible in public registry metadata. When automated publishing from `main` is in place, it will use npm Trusted Publishing without an npm token.
+- `feat` releases a minor version; `fix`, `perf`, and `revert` release a patch.
+- `docs(readme)` releases a patch so npm and the Pi gallery receive README changes.
+- Breaking changes release a minor while the package is below 1.0. Remove that override when releasing 1.0.
+- CI, toolchain, and maintainer-documentation changes do not release.
 
-Do not bump the package version or try to publish manually while automated publishing is being prepared.
+The version in `package.json` stays `0.0.0-development`. semantic-release updates only its temporary workspace; it never commits back to `main`. git-cliff generates both the GitHub release notes and the `CHANGELOG.md` shipped in the package. Run `bun run changelog` to preview the history locally.
+
+The release job uses Node.js 24 and the OIDC-capable npm CLI installed with `@semantic-release/npm`. Lifecycle scripts are disabled during publishing.
+
+### One-time publisher setup
+
+The package already exists on npm. Do not repeat the bootstrap or attempt to republish any version already in the registry; npm versions are immutable.
+
+1. Ensure the workflow is named `cd.yaml`, with a release job in the GitHub environment `npm`.
+2. Log into npm interactively and move the trusted publisher from the retired `publish.yml` workflow to `cd.yaml` (npm 12 shown because older global CLIs may not support `trust`):
+
+   ```sh
+   npm login
+   npx --yes npm@12 trust list @leocavalcante/pi-subagents
+   npx --yes npm@12 trust revoke @leocavalcante/pi-subagents --id <publish.yml entry id>
+   npx --yes npm@12 trust github @leocavalcante/pi-subagents \
+     --file cd.yaml --repo leocavalcante/pi-subagents --env npm --allow-publish
+   ```
+
+3. npm's publishing-access settings require two-factor authentication and disallow tokens. Do not create an `NPM_TOKEN` secret.
+4. The GitHub `npm` environment permits deployment from `main` only.
+5. After the first automated release, verify the package version, provenance, and update notes:
+
+   ```sh
+   npm view @leocavalcante/pi-subagents version dist.attestations
+   ```
+
+### Recovering a partial release
+
+Check npm before retrying a failed release. semantic-release pushes the tag before publishing, so a normal re-run may consider that version released already.
+
+- **The version is absent from npm:** investigate the failure. An administrator may delete only the failed release tag and re-run CD on `main` once publishing is fixed.
+- **The version exists on npm:** do not delete its tag or try to republish it. Verify provenance, restore any missing GitHub release from that tag, and release a new version for package fixes.
+- **Publication succeeded but provenance is missing:** treat this as a release failure. Investigate OIDC and publish a new attested version; existing npm versions cannot be repaired by republishing.
+
+### History
+
+The package was bootstrapped manually on npm as version `0.1.0`, without provenance. Versions `0.1.1` through `0.2.0` were published through GitHub Actions using npm Trusted Publishing; their provenance attestations identify repository `leocavalcante/pi-subagents` and the release-triggered `publish.yml` workflow, which `cd.yaml` replaces.
