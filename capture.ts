@@ -123,9 +123,13 @@ export class JsonLineCapture {
     private onLine: (line: string) => void,
     private onOverflow: () => void,
     private limit = MAX_JSON_RECORD_BYTES,
-    private onInvalidUtf8: () => void = () => {},
+    private onInvalidUtf8: () => void = () => {
+      // No action is needed unless the caller supplies an invalid-UTF-8 hook.
+    },
     private maxRecords = MAX_CHILD_JSON_RECORDS,
-    private onRecordLimit: () => void = () => {},
+    private onRecordLimit: () => void = () => {
+      // No action is needed unless the caller supplies a record-limit hook.
+    },
   ) {
     positiveLimit(limit);
     positiveLimit(maxRecords);
@@ -139,7 +143,7 @@ export class JsonLineCapture {
       throw new Error("JSON capture chunks must keep a consistent encoding.");
     this.mode = mode;
     if (isText) this.appendText(chunk as string);
-    else this.appendBytes(chunk as Buffer);
+    else this.appendBytes(chunk);
   }
 
   private clearRecord(): void {
@@ -181,7 +185,11 @@ export class JsonLineCapture {
           fragment === undefined
             ? undefined
             : Buffer.byteLength(fragment, "utf8");
-        if (bytes === undefined || bytes > remaining) {
+        if (
+          fragment === undefined ||
+          bytes === undefined ||
+          bytes > remaining
+        ) {
           this.clearRecord();
           this.discarding = true;
           this.onOverflow();
@@ -284,7 +292,7 @@ export class JsonLineCapture {
 
 /** Keep recent complete messages without changing aggregate usage accounting. */
 export class MessageCapture<T> {
-  private entries: Array<{ message: T; bytes: number }> = [];
+  private entries: { message: T; bytes: number }[] = [];
   private bytes = 0;
   dropped = 0;
 
@@ -312,6 +320,8 @@ export class MessageCapture<T> {
       this.entries.length >= this.countLimit ||
       bytes > this.byteLimit - this.bytes
     ) {
+      // The validated positive count limit and over-capacity condition imply an entry exists.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the bounded FIFO eviction without adding a runtime branch.
       this.bytes -= this.entries.shift()!.bytes;
       this.dropped++;
     }

@@ -87,7 +87,7 @@ test("silent jobs preserve progress, results, retention and waiters without comp
   );
   assert.equal((await jobs.wait(thrown.id, 1000)).job.error, "silent failure");
   assert.equal(delivered.length, 0);
-  const normal = jobs.start("default notification", async () => "ok");
+  jobs.start("default notification", async () => "ok");
   await tick();
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].notify, true);

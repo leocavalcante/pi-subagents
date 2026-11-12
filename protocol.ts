@@ -146,7 +146,7 @@ export function parseChildEvent(line: string): unknown {
         throw new RangeError("Subagent JSON nesting exceeded 128 levels.");
       if (++structuralTokens > MAX_JSON_STRUCTURE_TOKENS) {
         throw new RangeError(
-          `Subagent JSON structure exceeded ${MAX_JSON_STRUCTURE_TOKENS} tokens.`,
+          `Subagent JSON structure exceeded ${String(MAX_JSON_STRUCTURE_TOKENS)} tokens.`,
         );
       }
     } else if (code === 93 || code === 125) depth--;
@@ -154,7 +154,7 @@ export function parseChildEvent(line: string): unknown {
       // Comma or colon outside strings.
       if (++structuralTokens > MAX_JSON_STRUCTURE_TOKENS) {
         throw new RangeError(
-          `Subagent JSON structure exceeded ${MAX_JSON_STRUCTURE_TOKENS} tokens.`,
+          `Subagent JSON structure exceeded ${String(MAX_JSON_STRUCTURE_TOKENS)} tokens.`,
         );
       }
     }

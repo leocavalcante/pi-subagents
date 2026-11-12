@@ -27,6 +27,7 @@ import type { Message, Usage } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ToolDefinition,
+  type ThemeColor,
   getMarkdownTheme,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
@@ -235,7 +236,7 @@ function readProcessLimit(): number {
   const limit = Number(value);
   if (!/^\d+$/.test(value) || limit < 1 || limit > MAX_PROCESS_LIMIT) {
     throw new Error(
-      `${PROCESS_LIMIT_ENV} must be an integer from 1 to ${MAX_PROCESS_LIMIT}.`,
+      `${PROCESS_LIMIT_ENV} must be an integer from 1 to ${String(MAX_PROCESS_LIMIT)}.`,
     );
   }
   return limit;
@@ -256,9 +257,11 @@ const MAX_DISPATCH_TASK_BYTES = 16 * 1024 * 1024;
 const MAX_DISPATCH_HISTORY_BYTES = 32 * 1024 * 1024;
 // With Unicode regex mode, these ranges match lone surrogates without splitting valid pairs.
 const UNSAFE_DISPLAY_CHARACTERS =
+  // eslint-disable-next-line no-control-regex -- escape terminal controls from untrusted display text.
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|[\uDC00-\uDFFF]/gu;
 const PRESERVED_DISPLAY_CHARACTERS = /^(?:\u200c|\u200d)$/u;
 const JOINER_SEQUENCE_BOUNDARY =
+  // eslint-disable-next-line no-control-regex -- detect whitespace and control boundaries around preserved joiners.
   /^[\s\u0000-\u001f\u007f-\u009f\u200c\u200d]$/u;
 const EMOJI_OR_IDEOGRAPH_VARIATION_BASE =
   /^(?:\p{Emoji}|\p{Unified_Ideograph})$/u;
@@ -266,6 +269,7 @@ const IDEOGRAPHIC_VARIATION_BASE = /^\p{Unified_Ideograph}$/u;
 const EMOJI_TAG_FLAG_SEQUENCES =
   /\u{1f3f4}\u{e0067}\u{e0062}(?:\u{e0065}\u{e006e}\u{e0067}|\u{e0073}\u{e0063}\u{e0074}|\u{e0077}\u{e006c}\u{e0073})\u{e007f}/gu;
 const UNSAFE_TERMINAL_TEXT_CHARACTERS =
+  // eslint-disable-next-line no-control-regex -- escape terminal control and formatting characters before rendering.
   /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff\p{Default_Ignorable_Code_Point}]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|[\uDC00-\uDFFF]/gu;
 const MAX_TERMINAL_ESCAPE_EXPANSION = 64 * 1024;
 
@@ -280,10 +284,12 @@ function preserveDisplayCharacter(
     return (
       index > 0 &&
       nextIndex < value.length &&
-      !JOINER_SEQUENCE_BOUNDARY.test(value[index - 1]!) &&
-      !JOINER_SEQUENCE_BOUNDARY.test(value[nextIndex]!)
+      !JOINER_SEQUENCE_BOUNDARY.test(value[index - 1]) &&
+      !JOINER_SEQUENCE_BOUNDARY.test(value[nextIndex])
     );
   }
+  // A for-of character always contains at least one UTF-16 code unit.
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- codePointAt is defined for each iterated character.
   const codePoint = character.codePointAt(0)!;
   if (
     codePoint < 0xfe00 ||
@@ -303,6 +309,8 @@ function preserveDisplayCharacter(
       previousIndex--;
   }
   if (previousIndex < 0) return false;
+  // previousIndex is moved back to the start of a code point within the string.
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- the index is in range by construction.
   const previous = String.fromCodePoint(value.codePointAt(previousIndex)!);
   // Bare or misplaced variation selectors are default-ignorable and can make
   // distinct metadata look identical; preserve them only beside a relevant base.
@@ -316,6 +324,8 @@ function escapeDisplaySegment(value: string): string {
     UNSAFE_DISPLAY_CHARACTERS,
     (character, index: number) => {
       if (preserveDisplayCharacter(character, value, index)) return character;
+      // A regular-expression match is a non-empty character from the source string.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- codePointAt is defined for each matched character.
       const codePoint = character.codePointAt(0)!;
       const hex = codePoint.toString(16).padStart(4, "0");
       return codePoint > 0xffff ? `\\u{${hex}}` : `\\u${hex}`;
@@ -327,7 +337,7 @@ function escapeTerminalControls(value: string): string {
   let escaped = "";
   let start = 0;
   for (const match of value.matchAll(EMOJI_TAG_FLAG_SEQUENCES)) {
-    const matchStart = match.index!;
+    const matchStart = match.index;
     escaped += escapeDisplaySegment(value.slice(start, matchStart)) + match[0];
     start = matchStart + match[0].length;
   }
@@ -346,6 +356,8 @@ function escapeTerminalText(value: string): string {
       (character, index: number) => {
         if (preserveDisplayCharacter(character, segment, index))
           return character;
+        // A regular-expression match is a non-empty character from the source string.
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- codePointAt is defined for each matched character.
         const codePoint = character.codePointAt(0)!;
         const hex = codePoint.toString(16).padStart(4, "0");
         const escaped = codePoint > 0xffff ? `\\u{${hex}}` : `\\u${hex}`;
@@ -359,7 +371,7 @@ function escapeTerminalText(value: string): string {
   let escaped = "";
   let start = 0;
   for (const match of value.matchAll(EMOJI_TAG_FLAG_SEQUENCES)) {
-    const matchStart = match.index!;
+    const matchStart = match.index;
     escaped += escapeSegment(value.slice(start, matchStart)) + match[0];
     start = matchStart + match[0].length;
   }
@@ -409,7 +421,7 @@ function previewSubagentName(value: unknown): string | undefined {
 }
 
 function assignSubagentNames(
-  requests: ReadonlyArray<{ agent: string; name?: unknown }>,
+  requests: readonly { agent: string; name?: unknown }[],
   activeJobLabels: readonly string[] = [],
 ): string[] | string {
   const names = new Array<string>(requests.length);
@@ -417,7 +429,7 @@ function assignSubagentNames(
   for (const [index, request] of requests.entries()) {
     if (request.name === undefined) continue;
     if (typeof request.name !== "string" || !isSafeAgentName(request.name)) {
-      return `Subagent name must be non-empty, at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, contain well-formed Unicode, and contain no terminal or bidirectional controls.`;
+      return `Subagent name must be non-empty, at most ${String(MAX_AGENT_NAME_BYTES)} UTF-8 bytes, contain well-formed Unicode, and contain no terminal or bidirectional controls.`;
     }
     if (used.has(request.name))
       return `Subagent names must be unique within a dispatch; duplicate name: ${displayUntrustedText(request.name)}.`;
@@ -427,6 +439,8 @@ function assignSubagentNames(
 
   const combinations = AUTO_NAME_ADJECTIVES.length * AUTO_NAME_ANIMALS.length;
   for (const [index, request] of requests.entries()) {
+    // Keep the sparse-array check even though unchecked indexed access is disabled.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- names starts sparse and generated entries must be skipped.
     if (names[index] !== undefined) continue;
     const start = randomInt(combinations);
     let assigned: string | undefined;
@@ -472,13 +486,13 @@ function taskByteLength(task: string): number {
 }
 
 function taskSizeError(): string {
-  return `Task exceeds the ${MAX_TASK_BYTES / (1024 * 1024)} MiB UTF-8 size limit.`;
+  return `Task exceeds the ${String(MAX_TASK_BYTES / (1024 * 1024))} MiB UTF-8 size limit.`;
 }
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
   if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 1000000) return `${String(Math.round(count / 1000))}k`;
   return `${(count / 1000000).toFixed(1)}M`;
 }
 
@@ -496,7 +510,7 @@ function formatUsageStats(
 ): string {
   const parts: string[] = [];
   if (usage.turns)
-    parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
+    parts.push(`${String(usage.turns)} turn${usage.turns > 1 ? "s" : ""}`);
   if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
   if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
   if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
@@ -523,7 +537,7 @@ function previewToolArguments(
   args: Record<string, unknown>,
   depth = 0,
 ): Record<string, unknown> {
-  const preview: Record<string, unknown> = Object.create(null);
+  const preview = Object.create(null) as Record<string, unknown>;
   let entries = 0;
   for (const key in args) {
     if (!Object.hasOwn(args, key)) continue;
@@ -543,13 +557,15 @@ function previewToolValue(value: unknown, depth: number): unknown {
     return truncateOutput(value, MAX_TOOL_PREVIEW_STRING_BYTES, "…");
   if (value === null || typeof value !== "object") return value;
   if (depth >= MAX_TOOL_PREVIEW_DEPTH)
-    return Array.isArray(value) ? `[${value.length} items]` : "{…}";
+    return Array.isArray(value) ? `[${String(value.length)} items]` : "{…}";
   if (Array.isArray(value)) {
     const preview = value
       .slice(0, MAX_TOOL_PREVIEW_ENTRIES)
       .map((item) => previewToolValue(item, depth + 1));
     if (value.length > MAX_TOOL_PREVIEW_ENTRIES)
-      preview.push(`… ${value.length - MAX_TOOL_PREVIEW_ENTRIES} more items`);
+      preview.push(
+        `… ${String(value.length - MAX_TOOL_PREVIEW_ENTRIES)} more items`,
+      );
     return preview;
   }
   return previewToolArguments(value as Record<string, unknown>, depth);
@@ -558,7 +574,7 @@ function previewToolValue(value: unknown, depth: number): unknown {
 function formatToolCall(
   toolName: string,
   args: Record<string, unknown>,
-  themeFg: (color: any, text: string) => string,
+  themeFg: (color: ThemeColor, text: string) => string,
 ): string {
   const shortenPath = (p: string) => {
     const home = os.homedir();
@@ -592,7 +608,7 @@ function formatToolCall(
         const endLine = limit !== undefined ? startLine + limit - 1 : "";
         text += themeFg(
           "warning",
-          `:${startLine}${endLine ? `-${endLine}` : ""}`,
+          `:${String(startLine)}${endLine ? `-${String(endLine)}` : ""}`,
         );
       }
       return themeFg("muted", "read ") + text;
@@ -608,7 +624,7 @@ function formatToolCall(
         let lines = 1;
         for (let i = 0; i < content.length; i++)
           if (content.charCodeAt(i) === 10) lines++;
-        if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
+        if (lines > 1) text += themeFg("dim", ` (${String(lines)} lines)`);
       }
       return text;
     }
@@ -646,6 +662,8 @@ function formatToolCall(
     }
     default: {
       // Bound nested keys and values before stringify; child JSON records can be up to 8 MiB.
+      // JSON.stringify's object result is non-nullish for this object; retain the existing fallback explicitly.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve the serialization fallback.
       const argsStr = JSON.stringify(previewToolArguments(args)) ?? "{}";
       const preview = escapeTerminalText(truncateOutput(argsStr, 256, "..."));
       const displayName = escapeTerminalText(
@@ -758,6 +776,8 @@ function hasUnexpectedToolParameters(
 function reportUsage(result: JobResult): JobResult {
   try {
     const usage = sumUsage(
+      // Retain optional/fallback handling for malformed or legacy host results.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the existing defensive result access.
       (result.details?.results ?? []).flatMap((task) =>
         task.reportedUsage ? [task.reportedUsage] : [],
       ),
@@ -796,9 +816,13 @@ function estimateJobBytes(result: JobResult): number {
       sum + Buffer.byteLength(part.type === "text" ? part.text : part.data),
     0,
   );
+  // Retain optional/fallback handling for malformed or legacy host results.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the existing defensive result access.
   for (const task of result.details?.results ?? []) {
     bytes +=
       (task.capture?.retainedMessageBytes ?? 0) +
+      // Preserve fallback labels for malformed or older retained results.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the existing fallback.
       Buffer.byteLength(task.name ?? task.agent) +
       Buffer.byteLength(task.task) +
       Buffer.byteLength(task.stderr);
@@ -868,13 +892,16 @@ function formatFailureContext(result: SingleResult): string {
   if (context) {
     parts.push(`event=${context.eventType}`);
     if (context.role) parts.push(`role=${context.role}`);
-    if (context.record !== undefined) parts.push(`record=${context.record}`);
+    if (context.record !== undefined)
+      parts.push(`record=${String(context.record)}`);
     if (context.lastStopReason)
       parts.push(`lastStopReason=${context.lastStopReason}`);
   }
   if (result.processExitCode !== undefined) {
     parts.push(
-      `processExitCode=${result.processExitCode === null ? "null" : result.processExitCode}`,
+      // Preserve the distinction between an explicit null and an unexpected undefined.
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- the ternary's undefined behavior is intentional.
+      `processExitCode=${String(result.processExitCode === null ? "null" : result.processExitCode)}`,
     );
   }
   return `[Failure context: ${parts.join("; ")}]`;
@@ -898,7 +925,7 @@ function getCaptureNotice(result: SingleResult): string {
   const notices: string[] = [];
   if (result.capture?.messagesDropped)
     notices.push(
-      `${result.capture.messagesDropped} messages omitted from captured history.`,
+      `${String(result.capture.messagesDropped)} messages omitted from captured history.`,
     );
   if (result.capture?.finalAssistantMessageDropped)
     notices.push(
@@ -908,7 +935,7 @@ function getCaptureNotice(result: SingleResult): string {
     notices.push("stderr capture truncated at 64 KiB.");
   if (result.capture?.stdoutTruncated)
     notices.push(
-      `stdout capture stopped at ${MAX_CHILD_STDOUT_BYTES / (1024 * 1024)} MiB.`,
+      `stdout capture stopped at ${String(MAX_CHILD_STDOUT_BYTES / (1024 * 1024))} MiB.`,
     );
   if (result.capture?.inheritedPipesClosed)
     notices.push("Inherited output pipes were closed after the child exited.");
@@ -919,7 +946,9 @@ function getResultOutput(result: SingleResult): string {
   const failed = isFailedResult(result);
   const partial = isPartialResult(result);
   const output = failed
-    ? result.errorMessage ||
+    ? // Empty diagnostics intentionally fall back to the next source.
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- preserve || semantics for empty strings.
+      result.errorMessage ||
       result.stderr ||
       getFinalOutput(result.messages) ||
       getFailureReason(result)
@@ -935,7 +964,7 @@ function getResultOutput(result: SingleResult): string {
   if (notice) sections.push(notice);
   if (result.changedFiles?.length) {
     const omitted = result.changedFilesOmitted
-      ? ` (+${result.changedFilesOmitted} more)`
+      ? ` (+${String(result.changedFilesOmitted)} more)`
       : "";
     sections.push(
       `Changed files: ${result.changedFiles.map((filePath) => displayUntrustedText(filePath)).join(", ")}${omitted}`,
@@ -1024,9 +1053,11 @@ function previewChainTask(task: string): string {
 function getFailureReason(result: SingleResult): string {
   if (!isFailedResult(result)) return "";
   return (
+    // Empty diagnostics intentionally fall back to the next source.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- preserve || semantics for empty strings.
     result.errorMessage ||
     result.stderr ||
-    `Subagent failed (${result.stopReason ?? `exit code ${result.exitCode}`}).`
+    `Subagent failed (${result.stopReason ?? `exit code ${String(result.exitCode)}`}).`
   );
 }
 
@@ -1047,8 +1078,11 @@ function boundResultText(result: JobResult): JobResult {
 
 type DisplayItem =
   | { type: "text"; text: string }
-  | { type: "toolCall"; name: string; args: Record<string, any> };
-type DisplayItems = { items: DisplayItem[]; omitted: number };
+  | { type: "toolCall"; name: string; args: Record<string, unknown> };
+interface DisplayItems {
+  items: DisplayItem[];
+  omitted: number;
+}
 
 /** Collect display items in order, retaining only the newest bounded suffix when requested. */
 function getDisplayItems(messages: Message[], limit?: number): DisplayItems {
@@ -1068,7 +1102,11 @@ function getDisplayItems(messages: Message[], limit?: number): DisplayItems {
       for (const part of msg.content) {
         if (part.type === "text") add({ type: "text", text: part.text });
         else if (part.type === "toolCall") {
-          add({ type: "toolCall", name: part.name, args: part.arguments });
+          add({
+            type: "toolCall",
+            name: part.name,
+            args: part.arguments,
+          });
         }
       }
     }
@@ -1089,9 +1127,11 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 ): Promise<TOut[]> {
   if (items.length === 0) return [];
   const limit = Math.max(1, Math.min(concurrency, items.length));
-  const results: TOut[] = new Array(items.length);
+  const results = new Array<TOut>(items.length);
   let nextIndex = 0;
   const workers = new Array(limit).fill(null).map(async () => {
+    // Each worker exits when the shared index reaches the item count.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the intentional worker loop.
     while (true) {
       const current = nextIndex++;
       if (current >= items.length) return;
@@ -1101,6 +1141,7 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
   // Wait for every worker to clean up even if one fails or is canceled.
   const settled = await Promise.allSettled(workers);
   const failure = settled.find((r) => r.status === "rejected");
+  // Keep a defensive guard for malformed Promise.allSettled results.
   if (failure?.status === "rejected") throw failure.reason;
   return results;
 }
@@ -1129,6 +1170,8 @@ async function writePromptToTempFile(
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
   const currentScript = process.argv[1];
+  // Keep the runtime check for processes launched without an argv[1].
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Node may omit argv[1] at runtime.
   const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
   if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
     return { command: process.execPath, args: [currentScript, ...args] };
@@ -1148,8 +1191,13 @@ type WindowsSupervisorState = SharedAbortableOperationState<string>;
 const windowsSupervisorKey = Symbol.for(
   "@leocavalcante/pi-subagents/windows-supervisor",
 );
-const windowsSupervisorState = ((globalThis as any)[windowsSupervisorKey] ??=
-  {}) as WindowsSupervisorState;
+const windowsSupervisorRegistry = globalThis as unknown as Record<
+  PropertyKey,
+  unknown
+>;
+const windowsSupervisorState = (windowsSupervisorRegistry[
+  windowsSupervisorKey
+] ??= {}) as WindowsSupervisorState;
 
 async function buildWindowsSupervisor(): Promise<string> {
   let directory: string | undefined;
@@ -1194,14 +1242,14 @@ async function buildWindowsSupervisor(): Promise<string> {
           },
         },
       );
-      compiler.once("error", () =>
-        reject(new Error("Windows process supervisor compilation failed.")),
-      );
-      compiler.once("close", (code) =>
-        code === 0
-          ? resolve()
-          : reject(new Error("Windows process supervisor compilation failed.")),
-      );
+      compiler.once("error", () => {
+        reject(new Error("Windows process supervisor compilation failed."));
+      });
+      compiler.once("close", (code) => {
+        if (code === 0) resolve();
+        else
+          reject(new Error("Windows process supervisor compilation failed."));
+      });
     });
     const stat = await fs.promises.stat(outputPath);
     if (!stat.isFile() || stat.size < 1 || stat.size > 4 * 1024 * 1024)
@@ -1244,7 +1292,10 @@ async function getChildInvocation(
 function createChildEnvironment(unsetEnv: string[]): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (process.platform !== "win32") {
-    for (const name of unsetEnv) delete env[name];
+    for (const name of unsetEnv) {
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- unsetEnv must remove exactly the requested inherited keys.
+      delete env[name];
+    }
   }
   // Apply the internal recursion guard after filtering; it is not caller-controlled.
   env[SUBAGENT_NESTING_DEPTH_ENV] = String(getSubagentNestingDepth() + 1);
@@ -1405,7 +1456,6 @@ async function runSingleAgent(
   }
 
   let tmpPromptDir: string | null = null;
-  let tmpPromptPath: string | null = null;
 
   const currentResult: SingleResult = {
     name: displayName,
@@ -1440,6 +1490,8 @@ async function runSingleAgent(
     const resolved = path.resolve(resolvedCwd, filePath);
     if (changedFiles.has(resolved)) return;
     changedFiles.add(resolved);
+    // Preserve the undefined-only initialization rather than treating explicit null as missing.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- keep the original malformed-state behavior.
     if (currentResult.changedFiles === undefined)
       currentResult.changedFiles = [];
     if (currentResult.changedFiles.length < MAX_CHANGED_FILES)
@@ -1450,12 +1502,12 @@ async function runSingleAgent(
   }
   if (resolvedCwd.length > MAX_WORKING_DIRECTORY_LENGTH) {
     currentResult.exitCode = 1;
-    currentResult.errorMessage = `Resolved working directory exceeds the ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code-unit limit.`;
+    currentResult.errorMessage = `Resolved working directory exceeds the ${String(MAX_WORKING_DIRECTORY_LENGTH)} UTF-16 code-unit limit.`;
     return currentResult;
   }
   if (model !== undefined && !isSafeModelSelector(model)) {
     currentResult.exitCode = 1;
-    currentResult.errorMessage = `Resolved model selector must be well-formed Unicode, no longer than ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes, and contain no control characters.`;
+    currentResult.errorMessage = `Resolved model selector must be well-formed Unicode, no longer than ${String(MAX_MODEL_SELECTOR_BYTES)} UTF-8 bytes, and contain no control characters.`;
     return currentResult;
   }
   if (task.length <= MAX_TASK_BYTES && !isWellFormedUnicode(task)) {
@@ -1478,7 +1530,9 @@ async function runSingleAgent(
   const progressLimiter = new ProgressUpdateLimiter();
   let progressPending = false;
   // Avoid rebuilding the bounded message array for each accepted child event.
-  let refreshMessageSnapshot = () => {};
+  let refreshMessageSnapshot = () => {
+    // No history snapshot exists until the child process starts.
+  };
   const sendUpdate = () => {
     refreshMessageSnapshot();
     onUpdate?.({
@@ -1511,8 +1565,7 @@ async function runSingleAgent(
     if (agent.systemPrompt.trim()) {
       const tmp = await writePromptToTempFile(agent.systemPrompt);
       tmpPromptDir = tmp.dir;
-      tmpPromptPath = tmp.filePath;
-      args.push("--append-system-prompt", tmpPromptPath);
+      args.push("--append-system-prompt", tmp.filePath);
     }
 
     // Prompt creation awaits I/O; cancellation may have arrived since acquisition.
@@ -1636,7 +1689,7 @@ async function runSingleAgent(
         if (!line.trim()) return;
         const adjacentToolResultRecord = previousToolResultRecord;
         previousToolResultRecord = undefined;
-        let event: any;
+        let event: unknown;
         try {
           event = parseChildEvent(line);
         } catch (error) {
@@ -1658,71 +1711,76 @@ async function runSingleAgent(
           );
           return;
         }
+        const eventRecord = event as Record<string, unknown>;
+        const eventType = eventRecord.type;
+        const message = eventRecord.message;
+        const messageRecord = isToolParameterObject(message)
+          ? message
+          : undefined;
+        const messageRole = messageRecord?.role;
         const isMessageEnd =
-          event.type === "message_end" || event.type === "tool_result_end";
+          eventType === "message_end" || eventType === "tool_result_end";
         if (
           isMessageEnd &&
-          (!event.message ||
-            typeof event.message !== "object" ||
-            Array.isArray(event.message) ||
-            typeof event.message.role !== "string")
+          (!message ||
+            typeof message !== "object" ||
+            Array.isArray(message) ||
+            typeof messageRole !== "string")
         ) {
           setProtocolError(
             "Invalid subagent JSON event: malformed message.",
-            event.type === "tool_result_end"
-              ? "tool_result_end"
-              : "message_end",
+            eventType === "tool_result_end" ? "tool_result_end" : "message_end",
             record,
-            event.message?.role,
+            messageRole,
           );
           return;
         }
-        if (
-          event.type === "tool_result_end" &&
-          event.message.role !== "toolResult"
-        ) {
+        if (eventType === "tool_result_end" && messageRole !== "toolResult") {
           setProtocolError(
             "Invalid subagent JSON event: tool result event must contain a tool result message.",
             "tool_result_end",
             record,
-            event.message.role,
+            messageRole,
           );
           return;
         }
-        if (isMessageEnd && isCapturedMessageRole(event.message.role)) {
+        if (isMessageEnd && isCapturedMessageRole(messageRole)) {
           const error =
-            event.message.role === "assistant"
-              ? assistantMessageError(event.message)
-              : event.message.role === "toolResult"
-                ? toolResultMessageError(event.message)
-                : userMessageError(event.message);
+            messageRole === "assistant"
+              ? assistantMessageError(message)
+              : messageRole === "toolResult"
+                ? toolResultMessageError(message)
+                : userMessageError(message);
           if (error) {
             setProtocolError(
               `Invalid subagent JSON event: ${error}.`,
-              event.type === "tool_result_end"
+              eventType === "tool_result_end"
                 ? "tool_result_end"
                 : "message_end",
               record,
-              event.message.role,
+              messageRole,
             );
             return;
           }
         }
 
-        if (
-          event.type === "message_end" &&
-          isCapturedMessageRole(event.message.role)
-        ) {
-          const msg = event.message as Message;
+        if (eventType === "message_end" && isCapturedMessageRole(messageRole)) {
+          const msg = message as Message;
           if (msg.role === "assistant") {
             for (const part of msg.content) {
+              const toolArguments = (
+                part as {
+                  arguments?: Record<string, unknown> | null | undefined;
+                }
+              ).arguments;
+              const filePath = toolArguments?.path;
               if (
                 part.type === "toolCall" &&
                 (part.name === "edit" || part.name === "write") &&
                 typeof part.id === "string" &&
-                typeof part.arguments?.path === "string"
+                typeof filePath === "string"
               ) {
-                pendingFileCalls.set(part.id, part.arguments.path);
+                pendingFileCalls.set(part.id, filePath);
               }
             }
           } else if (msg.role === "toolResult") {
@@ -1766,9 +1824,16 @@ async function runSingleAgent(
             isDeepStrictEqual(adjacentToolResultRecord.message, msg);
           if (!duplicateLegacyCopy) {
             const retained = history.push(msg, Buffer.byteLength(line, "utf8"));
-            if (msg.role === "assistant")
+            if (msg.role === "assistant") {
+              // The capture object was initialized before event processing.
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
               currentResult.capture!.finalAssistantMessageDropped = !retained;
+            }
+            // The capture object was initialized before event processing.
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
             currentResult.capture!.messagesDropped = history.dropped;
+            // The capture object was initialized before event processing.
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
             currentResult.capture!.retainedMessageBytes = history.retainedBytes;
           }
           if (msg.role === "toolResult")
@@ -1778,19 +1843,24 @@ async function runSingleAgent(
             lastAssistantMessage = msg;
             currentResult.usage.turns++;
             const usage = msg.usage;
+            // Keep guards for malformed messages from the child protocol despite SDK types.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve runtime usage validation.
             if (usage)
               currentResult.usage.contextTokens =
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain the missing-token fallback.
                 usage.totalTokens ?? normalizeUsage(usage).totalTokens;
             if (!currentResult.model && msg.model)
               currentResult.model = msg.model;
+            // Preserve the existing empty-string check for malformed protocol messages.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the runtime stop-reason guard.
             if (msg.stopReason) currentResult.stopReason = msg.stopReason;
             currentResult.errorMessage = msg.errorMessage;
           }
           emitUpdate();
         }
 
-        if (event.type === "tool_result_end" && event.message) {
-          const msg = event.message as Extract<Message, { role: "toolResult" }>;
+        if (eventType === "tool_result_end" && message) {
+          const msg = message as Extract<Message, { role: "toolResult" }>;
           const filePath = pendingFileCalls.get(msg.toolCallId);
           pendingFileCalls.delete(msg.toolCallId);
           if (!msg.isError && filePath !== undefined)
@@ -1800,7 +1870,11 @@ async function runSingleAgent(
             isDeepStrictEqual(adjacentToolResultRecord.message, msg);
           if (!duplicateCanonicalCopy) {
             history.push(msg, Buffer.byteLength(line, "utf8"));
+            // The capture object was initialized before event processing.
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
             currentResult.capture!.messagesDropped = history.dropped;
+            // The capture object was initialized before event processing.
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
             currentResult.capture!.retainedMessageBytes = history.retainedBytes;
             emitUpdate();
           }
@@ -1813,7 +1887,7 @@ async function runSingleAgent(
         () => {
           const record = ++recordPosition;
           setProtocolError(
-            `Subagent JSON record exceeded ${MAX_JSON_RECORD_BYTES / (1024 * 1024)} MiB; oversized record discarded.`,
+            `Subagent JSON record exceeded ${String(MAX_JSON_RECORD_BYTES / (1024 * 1024))} MiB; oversized record discarded.`,
             "oversized_record",
             record,
           );
@@ -1831,7 +1905,7 @@ async function runSingleAgent(
         () => {
           const record = ++recordPosition;
           setProtocolError(
-            `Subagent JSON record count exceeded ${MAX_CHILD_JSON_RECORDS}; remaining output discarded.`,
+            `Subagent JSON record count exceeded ${String(MAX_CHILD_JSON_RECORDS)}; remaining output discarded.`,
             "record_limit",
             record,
           );
@@ -1840,11 +1914,15 @@ async function runSingleAgent(
       );
       const stdout = new BoundedByteStream(
         MAX_CHILD_STDOUT_BYTES,
-        (chunk) => reader.append(chunk),
+        (chunk) => {
+          reader.append(chunk);
+        },
         () => {
+          // The capture object was initialized before event processing.
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
           currentResult.capture!.stdoutTruncated = true;
           setProtocolError(
-            `Subagent stdout exceeded ${MAX_CHILD_STDOUT_BYTES / (1024 * 1024)} MiB; remaining output discarded.`,
+            `Subagent stdout exceeded ${String(MAX_CHILD_STDOUT_BYTES / (1024 * 1024))} MiB; remaining output discarded.`,
             "stdout_limit",
           );
           terminateGroup();
@@ -1870,10 +1948,14 @@ async function runSingleAgent(
 
       // Keep stdout as bytes so malformed UTF-8 cannot be silently replaced.
       proc.stderr.setEncoding("utf8");
-      proc.stdout.on("data", (data: Buffer) => stdout.append(data));
+      proc.stdout.on("data", (data: Buffer) => {
+        stdout.append(data);
+      });
       proc.stderr.on("data", (data: string) => {
         stderr.append(data);
         currentResult.stderr = stderr.text;
+        // The capture object was initialized before event processing.
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
         currentResult.capture!.stderrTruncated = stderr.truncated;
       });
 
@@ -1885,6 +1967,8 @@ async function runSingleAgent(
         // drain window, then clean up descendants and close our pipe ends.
         drainTimer = setTimeout(() => {
           if (closed) return;
+          // The capture object was initialized before event processing.
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the original capture-property access.
           currentResult.capture!.inheritedPipesClosed = true;
           terminateGroup();
           closePipes();
@@ -1937,7 +2021,9 @@ async function runSingleAgent(
 
       // Pi prepends piped stdin to the prompt. This avoids OS argv size limits.
       // Early startup failures can close stdin; close/error above own the result.
-      proc.stdin.on("error", () => {});
+      proc.stdin.on("error", () => {
+        // Early pipe closure is intentionally ignored; close owns cleanup and the result.
+      });
       proc.stdin.end(`Task: ${task}`);
       if (signal?.aborted) killProc();
       else signal?.addEventListener("abort", killProc, { once: true });
@@ -1945,9 +2031,11 @@ async function runSingleAgent(
 
     if (lastAssistantMessage) {
       // Later captured messages can evict an assistant message that was initially retained.
-      currentResult.capture!.finalAssistantMessageDropped =
+      currentResult.capture.finalAssistantMessageDropped =
         !history.messages.includes(lastAssistantMessage);
     }
+    // These flags are updated from child-process callbacks, which type analysis cannot observe here.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve abort and timeout checks after asynchronous process events.
     if (exitCode === 0 && !wasAborted && !timedOut && !protocolError) {
       if (currentResult.usage.turns === 0) {
         setProtocolError(
@@ -1964,14 +2052,24 @@ async function runSingleAgent(
     const finalAssistantMessageDropped =
       exitCode === 0 &&
       !protocolError &&
+      // Timeout may be set by an asynchronous process event.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve callback-updated timeout state.
       !timedOut &&
+      // Keep optional access for malformed or legacy capture state.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive capture access.
       currentResult.capture?.finalAssistantMessageDropped;
+    // Preserve failures set by child-process callbacks despite static narrowing.
     currentResult.exitCode =
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- protocol, timeout, and capture state are callback-updated.
       protocolError || timedOut || finalAssistantMessageDropped ? 1 : exitCode;
+    // Timeout is set by a child-process callback.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain the callback-updated timeout marker.
     if (timedOut) currentResult.timedOut = true;
     const failureCauses = [
+      // Timeout is set by a child-process callback.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain the callback-updated timeout diagnostic.
       timedOut
-        ? `Subagent timed out after ${effectiveTimeoutMs} ms.`
+        ? `Subagent timed out after ${String(effectiveTimeoutMs)} ms.`
         : undefined,
       protocolError,
       finalAssistantMessageDropped
@@ -1980,14 +2078,18 @@ async function runSingleAgent(
     ];
     if (failureCauses.some(Boolean))
       currentResult.errorMessage = failureCauses.filter(Boolean).join(" ");
+    // Abort state is updated from the cancellation callback.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve the callback-updated abort state.
     if (wasAborted)
-      throw signal && signal.reason !== undefined
+      throw signal?.reason !== undefined
         ? signal.reason
         : new Error("Subagent was aborted");
     return currentResult;
   } catch (error) {
     // Cancellation still aborts the whole operation. Only pre-spawn failures
     // become task results; do not disguise unrelated execution errors as setup.
+    // childCreated is set by asynchronous spawn events.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve errors after child creation and cancellation.
     if (signal?.aborted || childCreated) throw error;
     if (error instanceof ProcessPoolCapacityError) {
       currentResult.exitCode = 1;
@@ -2409,6 +2511,8 @@ const JobResponseSchema = Type.Object({
 
 function summarizeJobUsage(result: JobResult | undefined): Usage | undefined {
   const reports =
+    // Keep optional access for malformed retained host results.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve the existing result guard.
     result?.details?.results.flatMap((task) =>
       task.reportedUsage ? [task.reportedUsage] : [],
     ) ?? [];
@@ -2504,6 +2608,8 @@ export default function (pi: ExtensionAPI) {
     },
     (result) =>
       Boolean(result.isError) ||
+      // Keep boolean normalization and defensive details access.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition, @typescript-eslint/no-unnecessary-type-conversion -- preserve the original boolean aggregation.
       Boolean(result.details?.results.some(isFailedResult)),
     MAX_ACTIVE_JOBS,
     MAX_RETAINED_JOBS,
@@ -2576,7 +2682,7 @@ export default function (pi: ExtensionAPI) {
           Type.Integer({
             minimum: 1,
             maximum: MAX_AGENT_LISTING_PAGE_SIZE,
-            description: `Maximum number of definitions to return, from 1 to ${MAX_AGENT_LISTING_PAGE_SIZE}. Default: ${MAX_AGENT_LISTING_PAGE_SIZE}.`,
+            description: `Maximum number of definitions to return, from 1 to ${String(MAX_AGENT_LISTING_PAGE_SIZE)}. Default: ${String(MAX_AGENT_LISTING_PAGE_SIZE)}.`,
           }),
         ),
       },
@@ -2592,18 +2698,18 @@ export default function (pi: ExtensionAPI) {
               description: Type.String({
                 minLength: 1,
                 maxLength: MAX_AGENT_DESCRIPTION_BYTES,
-                description: `At most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
+                description: `At most ${String(MAX_AGENT_DESCRIPTION_BYTES)} UTF-8 bytes.`,
               }),
               source: StringEnum(["user", "project"] as const),
               filePath: Type.String({
                 maxLength: MAX_AGENT_LISTING_PATH_BYTES,
-                description: `At most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; longer paths are marked as truncated.`,
+                description: `At most ${String(MAX_AGENT_LISTING_PATH_BYTES)} UTF-8 bytes; longer paths are marked as truncated.`,
               }),
               model: Type.Optional(
                 Type.String({
                   minLength: 1,
                   maxLength: MAX_MODEL_SELECTOR_BYTES,
-                  description: `At most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes.`,
+                  description: `At most ${String(MAX_MODEL_SELECTOR_BYTES)} UTF-8 bytes.`,
                 }),
               ),
               thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
@@ -2629,7 +2735,7 @@ export default function (pi: ExtensionAPI) {
                   {
                     maxItems: MAX_AGENT_TAG_COUNT,
                     uniqueItems: true,
-                    description: `Lowercase capability labels; maximum ${MAX_AGENT_TAG_COUNT} tags, ${MAX_AGENT_TAG_BYTES} bytes per tag, and ${MAX_AGENT_TAG_LIST_BYTES} bytes total.`,
+                    description: `Lowercase capability labels; maximum ${String(MAX_AGENT_TAG_COUNT)} tags, ${String(MAX_AGENT_TAG_BYTES)} bytes per tag, and ${String(MAX_AGENT_TAG_LIST_BYTES)} bytes total.`,
                   },
                 ),
               ),
@@ -2639,7 +2745,7 @@ export default function (pi: ExtensionAPI) {
                   {
                     maxItems: MAX_AGENT_UNSET_ENV_COUNT,
                     uniqueItems: true,
-                    description: `Inherited child environment variable names to remove; values are never listed. Maximum ${MAX_AGENT_UNSET_ENV_COUNT} names and ${MAX_AGENT_UNSET_ENV_BYTES} bytes.`,
+                    description: `Inherited child environment variable names to remove; values are never listed. Maximum ${String(MAX_AGENT_UNSET_ENV_COUNT)} names and ${String(MAX_AGENT_UNSET_ENV_BYTES)} bytes.`,
                   },
                 ),
               ),
@@ -2650,7 +2756,7 @@ export default function (pi: ExtensionAPI) {
                 Type.String({
                   minLength: 1,
                   maxLength: MAX_AGENT_LISTING_PATH_BYTES,
-                  description: `Agent default child working directory, relative to the parent session unless absolute; at most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes in listing output. Longer paths are marked as truncated.`,
+                  description: `Agent default child working directory, relative to the parent session unless absolute; at most ${String(MAX_AGENT_LISTING_PATH_BYTES)} UTF-8 bytes in listing output. Longer paths are marked as truncated.`,
                 }),
               ),
             },
@@ -2671,7 +2777,7 @@ export default function (pi: ExtensionAPI) {
         projectAgentsDir: Type.Union([
           Type.String({
             maxLength: MAX_AGENT_LISTING_PATH_BYTES,
-            description: `At most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; longer paths are marked as truncated.`,
+            description: `At most ${String(MAX_AGENT_LISTING_PATH_BYTES)} UTF-8 bytes; longer paths are marked as truncated.`,
           }),
           Type.Null(),
         ]),
@@ -2680,12 +2786,12 @@ export default function (pi: ExtensionAPI) {
             {
               filePath: Type.String({
                 maxLength: MAX_AGENT_LISTING_PATH_BYTES,
-                description: `At most ${MAX_AGENT_LISTING_PATH_BYTES} UTF-8 bytes; longer paths are marked as truncated.`,
+                description: `At most ${String(MAX_AGENT_LISTING_PATH_BYTES)} UTF-8 bytes; longer paths are marked as truncated.`,
               }),
               source: StringEnum(["user", "project"] as const),
               message: Type.String({
                 maxLength: MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES,
-                description: `At most ${MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES} UTF-8 bytes; longer messages are marked as truncated.`,
+                description: `At most ${String(MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES)} UTF-8 bytes; longer messages are marked as truncated.`,
               }),
             },
             { additionalProperties: false },
@@ -2701,6 +2807,8 @@ export default function (pi: ExtensionAPI) {
       idempotentHint: true,
       openWorldHint: false,
     },
+    // Keep async: Pi's tool definition expects Promise-returning execute handlers.
+    // eslint-disable-next-line @typescript-eslint/require-await -- preserve the host tool callback signature.
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const emptyListing = (
         agentScope: AgentScope = "user",
@@ -2743,7 +2851,7 @@ export default function (pi: ExtensionAPI) {
         (typeof requestedName !== "string" || !isSafeAgentName(requestedName))
       ) {
         return fail(
-          `name must be a valid agent name of at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes without terminal or bidirectional controls.`,
+          `name must be a valid agent name of at most ${String(MAX_AGENT_NAME_BYTES)} UTF-8 bytes without terminal or bidirectional controls.`,
           emptyListing(agentScope),
         );
       }
@@ -2754,7 +2862,7 @@ export default function (pi: ExtensionAPI) {
           !isSafeAgentSearchQuery(requestedQuery))
       ) {
         return fail(
-          `query must be valid Unicode, contain non-whitespace text, and be at most ${MAX_AGENT_SEARCH_QUERY_BYTES} UTF-8 bytes without terminal or bidirectional controls.`,
+          `query must be valid Unicode, contain non-whitespace text, and be at most ${String(MAX_AGENT_SEARCH_QUERY_BYTES)} UTF-8 bytes without terminal or bidirectional controls.`,
           emptyListing(agentScope),
         );
       }
@@ -2765,7 +2873,7 @@ export default function (pi: ExtensionAPI) {
           : normalizeAgentTag(requestedTag);
       if (requestedTag !== undefined && tag === undefined) {
         return fail(
-          `tag must be a valid ASCII label of at most ${MAX_AGENT_TAG_BYTES} bytes, beginning with a letter or digit.`,
+          `tag must be a valid ASCII label of at most ${String(MAX_AGENT_TAG_BYTES)} bytes, beginning with a letter or digit.`,
           emptyListing(agentScope),
         );
       }
@@ -2776,7 +2884,7 @@ export default function (pi: ExtensionAPI) {
           tags = parseAgentTags(requestedTags);
         } catch {
           return fail(
-            `tags must be an array of 1-${MAX_AGENT_TAG_COUNT} valid ASCII labels totaling at most ${MAX_AGENT_TAG_LIST_BYTES} bytes.`,
+            `tags must be an array of 1-${String(MAX_AGENT_TAG_COUNT)} valid ASCII labels totaling at most ${String(MAX_AGENT_TAG_LIST_BYTES)} bytes.`,
             emptyListing(agentScope),
           );
         }
@@ -2814,7 +2922,7 @@ export default function (pi: ExtensionAPI) {
         offset > MAX_AGENT_FILES * 2
       ) {
         return fail(
-          `offset must be an integer between 0 and ${MAX_AGENT_FILES * 2}.`,
+          `offset must be an integer between 0 and ${String(MAX_AGENT_FILES * 2)}.`,
           emptyListing(agentScope),
         );
       }
@@ -2830,7 +2938,7 @@ export default function (pi: ExtensionAPI) {
         limit > MAX_AGENT_LISTING_PAGE_SIZE
       ) {
         return fail(
-          `limit must be an integer between 1 and ${MAX_AGENT_LISTING_PAGE_SIZE}.`,
+          `limit must be an integer between 1 and ${String(MAX_AGENT_LISTING_PAGE_SIZE)}.`,
           emptyListing(agentScope, offset),
         );
       }
@@ -2869,6 +2977,8 @@ export default function (pi: ExtensionAPI) {
               tool.normalize("NFC").toLowerCase().includes(normalizedQuery),
             ) ??
               false) ||
+            // Preserve the undefined-only check; do not change behavior for malformed null values.
+            // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- retain the exact null handling.
             (agent.cwd !== undefined &&
               agent.cwd
                 .normalize("NFC")
@@ -2883,11 +2993,15 @@ export default function (pi: ExtensionAPI) {
                 .normalize("NFC")
                 .toLowerCase()
                 .includes(normalizedQuery)) ||
+            // Preserve the undefined-only check; do not change behavior for malformed null values.
+            // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- retain the exact null handling.
             (agent.model !== undefined &&
               agent.model
                 .normalize("NFC")
                 .toLowerCase()
                 .includes(normalizedQuery)) ||
+            // Preserve the undefined-only check; do not change behavior for malformed null values.
+            // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- retain the exact null handling.
             (agent.thinking !== undefined &&
               agent.thinking
                 .normalize("NFC")
@@ -2955,7 +3069,7 @@ export default function (pi: ExtensionAPI) {
               `tools=${displayUntrustedText(a.tools.length ? a.tools.join(",") : "none")}`,
             a.unsetEnv &&
               `unsetEnv=${displayUntrustedText(a.unsetEnv.length ? a.unsetEnv.join(",") : "none")}`,
-            a.timeoutMs !== undefined && `timeoutMs=${a.timeoutMs}`,
+            a.timeoutMs !== undefined && `timeoutMs=${String(a.timeoutMs)}`,
             a.cwd !== undefined && `cwd=${displayUntrustedText(a.cwd)}`,
           ]
             .filter(Boolean)
@@ -2983,9 +3097,11 @@ export default function (pi: ExtensionAPI) {
               ? `Results with all tags ${tags.map((tag) => `"${tag}"`).join(", ")}: `
               : "";
       const continuation =
-        nextOffset === null ? "" : ` Continue with offset ${nextOffset}.`;
+        nextOffset === null
+          ? ""
+          : ` Continue with offset ${String(nextOffset)}.`;
       const pageLabel = pageAgents.length
-        ? `${filterLabel}Agents ${offset + 1}-${offset + pageAgents.length} of ${totalAgents}.${continuation}`
+        ? `${filterLabel}Agents ${String(offset + 1)}-${String(offset + pageAgents.length)} of ${String(totalAgents)}.${continuation}`
         : totalAgents === 0
           ? query !== undefined
             ? `No agents matching "${displayUntrustedText(query)}" found.`
@@ -2996,7 +3112,7 @@ export default function (pi: ExtensionAPI) {
                 : exactName === undefined
                   ? "No subagents found."
                   : `No agent named ${displayUntrustedText(exactName)} found.`
-          : `No agents at offset ${offset}; ${totalAgents} total.`;
+          : `No agents at offset ${String(offset)}; ${String(totalAgents)} total.`;
       const details = {
         agentScope,
         agents: pageAgents,
@@ -3137,7 +3253,7 @@ export default function (pi: ExtensionAPI) {
           params.jobId.length > JOB_ID_MAX_LENGTH)
       ) {
         return fail(
-          `jobId must be a string no longer than ${JOB_ID_MAX_LENGTH} characters.`,
+          `jobId must be a string no longer than ${String(JOB_ID_MAX_LENGTH)} characters.`,
         );
       }
       if (
@@ -3148,7 +3264,7 @@ export default function (pi: ExtensionAPI) {
           params.timeoutMs > MAX_JOB_WAIT_MS)
       ) {
         return fail(
-          `timeoutMs applies only to action: wait and must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`,
+          `timeoutMs applies only to action: wait and must be an integer between 1 and ${String(MAX_JOB_WAIT_MS)}.`,
         );
       }
       if (
@@ -3168,6 +3284,8 @@ export default function (pi: ExtensionAPI) {
       if (
         params.stream !== undefined &&
         params.stream !== "result" &&
+        // Keep validation for untyped host payloads even though the SDK schema currently narrows this literal.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain the invalid-stream guard.
         params.stream !== "stderr"
       ) {
         return fail('stream must be "result" or "stderr".');
@@ -3206,13 +3324,15 @@ export default function (pi: ExtensionAPI) {
       if (action === "clear") {
         const cleared = jobs.clearFinished();
         return reply(
-          `Cleared ${cleared} finished job record(s). Active jobs are unchanged.`,
+          `Cleared ${String(cleared)} finished job record(s). Active jobs are unchanged.`,
           { cleared },
           { cleared },
         );
       }
       if (action === "list") {
         const listed = jobs.list();
+        // Exclude bulky latest results without changing object-rest cloning semantics.
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars -- latest is intentionally excluded from status snapshots.
         const snapshots = listed.map(({ latest: _latest, ...job }) => job);
         const metadata = listed.map((job) =>
           jobMetadata(job, jobs.getObservation(job.id)),
@@ -3279,21 +3399,25 @@ export default function (pi: ExtensionAPI) {
         const taskIndex =
           params.stepId === undefined
             ? (params.taskIndex ?? 0)
-            : (job.latest?.details?.results.findIndex(
+            : // Keep defensive access for malformed or legacy job snapshots.
+              // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain optional latest/details access.
+              (job.latest?.details?.results.findIndex(
                 (result) => result.stepId === params.stepId,
               ) ?? -1);
         if (taskIndex < 0)
           return fail(
             !job.finishedAt
-              ? `Chain step "${params.stepId}" is not finished; use action: wait.`
-              : `No retained chain step named "${params.stepId}". Inspect status for resultCount.`,
+              ? `Chain step "${String(params.stepId)}" is not finished; use action: wait.`
+              : `No retained chain step named "${String(params.stepId)}". Inspect status for resultCount.`,
             job,
           );
+        // Keep defensive access for malformed or legacy job snapshots.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain optional latest/details access.
         const task = job.latest?.details?.results[taskIndex];
         if (!task)
           return fail(
             !job.finishedAt
-              ? `Task ${taskIndex + 1} is not finished; use action: wait.`
+              ? `Task ${String(taskIndex + 1)} is not finished; use action: wait.`
               : "No retained task at this taskIndex. Inspect status for resultCount.",
             job,
           );
@@ -3314,6 +3438,8 @@ export default function (pi: ExtensionAPI) {
             stream,
             taskIndex,
             name: truncateOutput(
+              // Keep fallback labels for older or malformed job records.
+              // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve the existing name fallback.
               task.name ?? task.agent,
               MAX_SUBAGENT_NAME_BYTES,
               "...",
@@ -3339,12 +3465,12 @@ export default function (pi: ExtensionAPI) {
           const cursor =
             output.nextOffset === null
               ? "end"
-              : `nextOffset=${output.nextOffset}`;
+              : `nextOffset=${String(output.nextOffset)}`;
           const streamLabel = stream === "stderr" ? " stderr" : "";
           const safeName = displayUntrustedText(output.name);
           const safeAgent = displayUntrustedText(output.agent);
           return reply(
-            `${job.id} task ${taskIndex} [${safeName} (${safeAgent})]${streamLabel} bytes ${output.offset}/${output.totalBytes} (${cursor})\n\n${output.text}`,
+            `${job.id} task ${String(taskIndex)} [${safeName} (${safeAgent})]${streamLabel} bytes ${String(output.offset)}/${String(output.totalBytes)} (${cursor})\n\n${output.text}`,
             metadata,
             { job: metadata, output },
           );
@@ -3377,26 +3503,38 @@ export default function (pi: ExtensionAPI) {
       );
     },
 
+    // Pi supplies this parameter to every renderer callback, but this renderer does not use it.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- preserve the Pi callback signature.
     renderCall(args, theme, _context) {
       const action = escapeTerminalControls(
+        // Retain optional access at the host renderer boundary.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive argument handling.
         truncateOutput(stringArg(args?.action), 64, "..."),
       );
       const jobId =
+        // Retain optional access at the host renderer boundary.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive argument handling.
         typeof args?.jobId === "string"
           ? escapeTerminalControls(truncateOutput(args.jobId, 128, "..."))
           : "";
       const stepId =
+        // Retain optional access at the host renderer boundary.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive argument handling.
         typeof args?.stepId === "string"
           ? escapeTerminalControls(truncateOutput(args.stepId, 64, "..."))
           : "";
+      // Retain optional access at the host renderer boundary.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive argument handling.
       const requestedTaskIndex = args?.taskIndex;
       const taskIndex =
         typeof requestedTaskIndex === "number" &&
         Number.isSafeInteger(requestedTaskIndex) &&
         requestedTaskIndex >= 0
-          ? ` task ${requestedTaskIndex}`
+          ? ` task ${String(requestedTaskIndex)}`
           : "";
       const selection = stepId ? ` step ${stepId}` : taskIndex;
+      // Retain optional access at the host renderer boundary.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive argument handling.
       const stream = args?.stream === "stderr" ? " stderr" : "";
       return new Text(
         theme.fg("toolTitle", theme.bold("subagent_jobs ")) +
@@ -3431,7 +3569,7 @@ export default function (pi: ExtensionAPI) {
       "Optional preamble text is prepended to every child task.",
       "Select agents by name or unique agentTags; name labels results. Discover with subagent_agents.",
       "Set timeoutMs for per-child runtime deadline; null disables it.",
-      `Set concurrency to limit parallel tasks (1 to ${processLimit}).`,
+      `Set concurrency to limit parallel tasks (1 to ${String(processLimit)}).`,
       "Override model, thinking, tools, or unsetEnv per task.",
       "Background runs return a job ID; results arrive unless notify is false. Use subagent_jobs to wait, inspect, or cancel.",
       "Default scope is user; project agents require trust approval.",
@@ -3496,11 +3634,15 @@ export default function (pi: ExtensionAPI) {
           params.task !== undefined;
         const modeCount =
           Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+        // Number.isInteger is the existing runtime guard; the casts are erased by TypeScript.
         const concurrency =
           Number.isInteger(params.concurrency) &&
-          params.concurrency! >= 1 &&
-          params.concurrency! <= processLimit
-            ? params.concurrency!
+          // eslint-disable-next-line @typescript-eslint/non-nullable-type-assertion-style -- preserve exact guard behavior with an erased cast.
+          (params.concurrency as number) >= 1 &&
+          // eslint-disable-next-line @typescript-eslint/non-nullable-type-assertion-style -- preserve exact guard behavior with an erased cast.
+          (params.concurrency as number) <= processLimit
+            ? // eslint-disable-next-line @typescript-eslint/non-nullable-type-assertion-style -- preserve exact guard behavior with an erased cast.
+              (params.concurrency as number)
             : processLimit;
 
         const makeDetails =
@@ -3611,7 +3753,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `Too many ${hasChain ? "chain steps" : "parallel tasks"} (${batch.length}). Max is ${taskLimit}.`,
+                text: `Too many ${hasChain ? "chain steps" : "parallel tasks"} (${String(batch.length)}). Max is ${String(taskLimit)}.`,
               },
             ],
             details: makeDetails(mode)([]),
@@ -3629,7 +3771,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `concurrency applies only to parallel mode and must be an integer from 1 to ${processLimit}.`,
+                text: `concurrency applies only to parallel mode and must be an integer from 1 to ${String(processLimit)}.`,
               },
             ],
             details: makeDetails(mode)([]),
@@ -3637,9 +3779,12 @@ export default function (pi: ExtensionAPI) {
           };
         }
         const requestedInputs = hasChain
-          ? params.chain!
+          ? // Mode validation above establishes the selected array is present.
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the validated chain input without a runtime fallback.
+            params.chain!
           : hasTasks
-            ? params.tasks!
+            ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- preserve the validated task input without a runtime fallback.
+              params.tasks!
             : [
                 {
                   name: params.name,
@@ -3656,6 +3801,8 @@ export default function (pi: ExtensionAPI) {
               ];
         if (
           !requestedInputs.length ||
+          // Keep validation for malformed host tool payloads despite the SDK type.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve optional access on each requested input.
           requestedInputs.some((item) => typeof item?.task !== "string")
         ) {
           return {
@@ -3714,6 +3861,8 @@ export default function (pi: ExtensionAPI) {
           };
         let submittedTaskBytes = preamble === undefined ? 0 : preambleBytes;
         for (const item of requestedInputs) {
+          // The validation above guarantees a string task; this assertion is erased at runtime.
+          // eslint-disable-next-line @typescript-eslint/non-nullable-type-assertion-style -- avoid a forbidden non-null assertion.
           const task = item.task as string;
           if (task.length <= MAX_TASK_BYTES && !isWellFormedUnicode(task))
             return {
@@ -3762,7 +3911,7 @@ export default function (pi: ExtensionAPI) {
               content: [
                 {
                   type: "text",
-                  text: `Combined task text exceeds the ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB UTF-8 size limit.`,
+                  text: `Combined task text exceeds the ${String(MAX_DISPATCH_TASK_BYTES / (1024 * 1024))} MiB UTF-8 size limit.`,
                 },
               ],
               details: makeDetails(mode)([]),
@@ -3797,7 +3946,7 @@ export default function (pi: ExtensionAPI) {
                 content: [
                   {
                     type: "text",
-                    text: `Agent name must be at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, contain no terminal or bidirectional controls, and be well-formed Unicode.`,
+                    text: `Agent name must be at most ${String(MAX_AGENT_NAME_BYTES)} UTF-8 bytes, contain no terminal or bidirectional controls, and be well-formed Unicode.`,
                   },
                 ],
                 details: makeDetails(mode)([]),
@@ -3829,7 +3978,7 @@ export default function (pi: ExtensionAPI) {
                 content: [
                   {
                     type: "text",
-                    text: `agentTags must be an array of 1-${MAX_AGENT_TAG_COUNT} valid ASCII labels totaling at most ${MAX_AGENT_TAG_LIST_BYTES} bytes.`,
+                    text: `agentTags must be an array of 1-${String(MAX_AGENT_TAG_COUNT)} valid ASCII labels totaling at most ${String(MAX_AGENT_TAG_LIST_BYTES)} bytes.`,
                   },
                 ],
                 details: makeDetails(mode)([]),
@@ -3848,7 +3997,7 @@ export default function (pi: ExtensionAPI) {
                 isError: true,
               };
             const matches = agents.filter((agent) =>
-              requiredTags!.every((tag) => agent.tags?.includes(tag) ?? false),
+              requiredTags.every((tag) => agent.tags?.includes(tag) ?? false),
             );
             const tagLabel = requiredTags.map((tag) => `"${tag}"`).join(", ");
             if (matches.length === 0)
@@ -3897,7 +4046,7 @@ export default function (pi: ExtensionAPI) {
           };
         const requested = selectedRequests.map((item, index) => ({
           ...item,
-          name: assignedNames[index]!,
+          name: assignedNames[index],
         }));
         const referenceError = params.chain
           ? validateChainReferences(params.chain)
@@ -3936,14 +4085,14 @@ export default function (pi: ExtensionAPI) {
                 !isSafeModelSelector(item.model)) ||
               (item.thinking !== undefined &&
                 item.thinking !== null &&
-                !THINKING_LEVELS.includes(item.thinking as ThinkingLevel)),
+                !THINKING_LEVELS.includes(item.thinking)),
           )
         ) {
           return {
             content: [
               {
                 type: "text",
-                text: `model must be a non-empty selector of at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes without control characters and contain well-formed Unicode; thinking must be one of: ${THINKING_LEVELS.join(", ")}.`,
+                text: `model must be a non-empty selector of at most ${String(MAX_MODEL_SELECTOR_BYTES)} UTF-8 bytes without control characters and contain well-formed Unicode; thinking must be one of: ${THINKING_LEVELS.join(", ")}.`,
               },
             ],
             details: makeDetails(mode)([]),
@@ -3986,7 +4135,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`,
+                text: `timeoutMs must be an integer between 1 and ${String(MAX_TIMEOUT_MS)}.`,
               },
             ],
             details: makeDetails(mode)([]),
@@ -4019,7 +4168,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `cwd must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.`,
+                text: `cwd must not exceed ${String(MAX_WORKING_DIRECTORY_LENGTH)} UTF-16 code units.`,
               },
             ],
             details: makeDetails(mode)([]),
@@ -4056,7 +4205,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `Resolved cwd must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.`,
+                text: `Resolved cwd must not exceed ${String(MAX_WORKING_DIRECTORY_LENGTH)} UTF-16 code units.`,
               },
             ],
             details: makeDetails(mode)([]),
@@ -4078,6 +4227,8 @@ export default function (pi: ExtensionAPI) {
         let effectiveUnsetEnv: string[][];
         try {
           effectiveUnsetEnv = requested.map((item, index) => {
+            // Agent existence was checked during dispatch validation.
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- retain the preflight resolution invariant.
             const agent = agents.find(
               (candidate) => candidate.name === item.agent,
             )!;
@@ -4112,7 +4263,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `Nested subagent delegation is limited to ${MAX_SUBAGENT_NESTING_DEPTH} levels; this process is already at the limit.`,
+                text: `Nested subagent delegation is limited to ${String(MAX_SUBAGENT_NESTING_DEPTH)} levels; this process is already at the limit.`,
               },
             ],
             details: makeDetails(mode)([]),
@@ -4131,6 +4282,8 @@ export default function (pi: ExtensionAPI) {
             .filter((a): a is AgentConfig => a?.source === "project");
 
           if (projectAgentsRequested.length > 0 && !ctx.isProjectTrusted()) {
+            // Keep optional UI access for hosts with partial context objects.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive UI capability detection.
             if (!ctx.hasUI || typeof ctx.ui?.confirm !== "function") {
               return {
                 content: [
@@ -4216,7 +4369,7 @@ export default function (pi: ExtensionAPI) {
                   content: [
                     {
                       type: "text",
-                      text: `Effective model selector for ${displayUntrustedText(agent.name)} is invalid or exceeds ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes. No agents were launched.`,
+                      text: `Effective model selector for ${displayUntrustedText(agent.name)} is invalid or exceeds ${String(MAX_MODEL_SELECTOR_BYTES)} UTF-8 bytes. No agents were launched.`,
                     },
                   ],
                   details: makeDetails(mode)([]),
@@ -4236,7 +4389,7 @@ export default function (pi: ExtensionAPI) {
               const timeout =
                 settings.timeoutMs === undefined
                   ? "unbounded"
-                  : `${settings.timeoutMs} ms`;
+                  : `${String(settings.timeoutMs)} ms`;
               const summary = `model=${model}; thinking=${thinking}; initial tools=${tools}; timeout=${timeout}`;
               const summaries =
                 configurationByAgent.get(agent.name) ?? new Set<string>();
@@ -4263,7 +4416,7 @@ export default function (pi: ExtensionAPI) {
                 content: [
                   {
                     type: "text",
-                    text: `Project-agent approval details exceed the ${MAX_PROJECT_APPROVAL_BYTES / 1024} KiB limit. No agents were launched; reduce the requested tasks or their configuration and retry.`,
+                    text: `Project-agent approval details exceed the ${String(MAX_PROJECT_APPROVAL_BYTES / 1024)} KiB limit. No agents were launched; reduce the requested tasks or their configuration and retry.`,
                   },
                 ],
                 details: makeDetails(mode)([]),
@@ -4300,7 +4453,7 @@ export default function (pi: ExtensionAPI) {
               isError: true,
             };
           for (const [index, item] of requested.entries())
-            item.name = finalNames[index]!;
+            item.name = finalNames[index];
         }
 
         // Capture dispatch configuration and permissions before detaching from this turn.
@@ -4333,7 +4486,7 @@ export default function (pi: ExtensionAPI) {
               const expandedTaskTooLarge = boundedTask === undefined;
               const expandedTaskError =
                 expandedTaskTooLarge && remainingTaskBytes < MAX_TASK_BYTES
-                  ? `Expanded chain task exceeds the remaining ${remainingTaskBytes} UTF-8 bytes of the ${MAX_DISPATCH_TASK_BYTES / (1024 * 1024)} MiB per-dispatch task limit.`
+                  ? `Expanded chain task exceeds the remaining ${String(remainingTaskBytes)} UTF-8 bytes of the ${String(MAX_DISPATCH_TASK_BYTES / (1024 * 1024))} MiB per-dispatch task limit.`
                   : undefined;
               // Keep only the bounded template in the failed result if expansion would exceed the cap.
               const expandedTask = boundedTask ?? step.task;
@@ -4346,7 +4499,11 @@ export default function (pi: ExtensionAPI) {
               const chainUpdate: OnUpdateCallback | undefined = onUpdate
                 ? (partial) => {
                     // Combine completed results with current streaming result
+                    // Keep optional access for partial host updates.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive partial-result access.
                     const currentResult = partial.details?.results[0];
+                    // The bounded result list may be empty in a partial update.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the empty-result guard.
                     if (currentResult) {
                       if (step.id !== undefined) currentResult.stepId = step.id;
                       const allResults = [...results, currentResult];
@@ -4404,7 +4561,7 @@ export default function (pi: ExtensionAPI) {
                   content: [
                     {
                       type: "text",
-                      text: `Chain stopped at step ${i + 1} (${subagentIdentity(result)}): ${errorMsg}`,
+                      text: `Chain stopped at step ${String(i + 1)} (${subagentIdentity(result)}): ${errorMsg}`,
                     },
                   ],
                   details: makeDetails("chain")(results),
@@ -4428,7 +4585,7 @@ export default function (pi: ExtensionAPI) {
 
           if (params.tasks && params.tasks.length > 0) {
             // Track all results for streaming updates
-            const allResults: SingleResult[] = new Array(params.tasks.length);
+            const allResults = new Array<SingleResult>(params.tasks.length);
 
             // Initialize placeholder results
             for (let i = 0; i < params.tasks.length; i++) {
@@ -4475,13 +4632,19 @@ export default function (pi: ExtensionAPI) {
                             : "completed";
                   const elapsed =
                     state === "running"
-                      ? ` ${((performance.now() - r.startedAtMs!) / 1000).toFixed(1)}s`
+                      ? // State is derived from startedAtMs immediately above.
+                        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- retain the established running-state invariant.
+                        ` ${((performance.now() - r.startedAtMs!) / 1000).toFixed(1)}s`
                       : "";
                   let activity = "";
                   if (state === "running") {
                     const latest = getDisplayItems(r.messages, 1).items[0];
+                    // Keep the empty-message guard for incomplete streaming updates.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive activity rendering.
                     if (latest?.type === "toolCall")
                       activity = ` ${latest.name} ${JSON.stringify(previewToolArguments(latest.args))}`;
+                    // Keep the empty-message guard for incomplete streaming updates.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive activity rendering.
                     else if (latest?.type === "text")
                       activity = ` ${latest.text}`;
                   }
@@ -4489,14 +4652,14 @@ export default function (pi: ExtensionAPI) {
                     terminalSubagentIdentity(r),
                     64,
                   );
-                  const line = `${index + 1}. ${identity} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
+                  const line = `${String(index + 1)}. ${identity} ${state}${elapsed}${activity ? `: ${escapeTerminalText(activity.trim())}` : ""}`;
                   return truncateOutput(line, 160, "...");
                 });
                 onUpdate({
                   content: [
                     {
                       type: "text",
-                      text: `Parallel: ${done}/${results.length} done, ${running} running, ${queued} queued\n${lines.join("\n")}`,
+                      text: `Parallel: ${String(done)}/${String(results.length)} done, ${String(running)} running, ${String(queued)} queued\n${lines.join("\n")}`,
                     },
                   ],
                   details: makeDetails("parallel")(results),
@@ -4530,6 +4693,8 @@ export default function (pi: ExtensionAPI) {
                   signal,
                   // Per-task update callback
                   (partial) => {
+                    // Keep optional access and the empty-results guard for partial host updates.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive partial-result handling.
                     if (partial.details?.results[0]) {
                       allResults[index] = partial.details.results[0];
                       emitParallelUpdate();
@@ -4550,7 +4715,7 @@ export default function (pi: ExtensionAPI) {
             const successCount = results.filter(
               (r) => !isFailedResult(r),
             ).length;
-            const header = `Parallel: ${successCount}/${results.length} succeeded\n\n`;
+            const header = `Parallel: ${String(successCount)}/${String(results.length)} succeeded\n\n`;
             const separator = "\n\n---\n\n";
             const headings = results.map((r) => {
               const status = isFailedResult(r)
@@ -4655,9 +4820,9 @@ export default function (pi: ExtensionAPI) {
           async (jobSignal, update) =>
             boundResultText(
               reportUsage(
-                await run(jobSignal, (partial) =>
-                  update(boundResultText(partial)),
-                ),
+                await run(jobSignal, (partial) => {
+                  update(boundResultText(partial));
+                }),
               ),
             ),
           { notify: params.notify },
@@ -4681,6 +4846,8 @@ export default function (pi: ExtensionAPI) {
       },
     ),
 
+    // Pi supplies this parameter to every renderer callback, but this renderer does not use it.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- preserve the Pi callback signature.
     renderCall(args, theme, _context) {
       const scopeText = `${stringArg(args.agentScope, "user")}${args.background ? ", background" : ""}${args.background && args.notify === false ? ", silent" : ""}`;
       const scope = escapeTerminalControls(
@@ -4689,22 +4856,24 @@ export default function (pi: ExtensionAPI) {
       if (Array.isArray(args.chain) && args.chain.length > 0) {
         let text =
           theme.fg("toolTitle", theme.bold("subagent ")) +
-          theme.fg("accent", `chain (${args.chain.length} steps)`) +
+          theme.fg("accent", `chain (${String(args.chain.length)} steps)`) +
           theme.fg("muted", ` [${scope}]`);
         for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
           const step = args.chain[i];
+          // Keep optional access for malformed host-provided chain items.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive item handling.
           const preview = previewChainTask(stringArg(step?.task, ""));
           const name = previewSubagentName(step);
           text +=
             "\n  " +
-            theme.fg("muted", `${i + 1}.`) +
+            theme.fg("muted", `${String(i + 1)}.`) +
             " " +
             theme.fg("accent", previewAgentSelector(step)) +
             (name ? theme.fg("muted", ` as ${name}`) : "") +
             theme.fg("dim", ` ${preview}`);
         }
         if (args.chain.length > 3)
-          text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
+          text += `\n  ${theme.fg("muted", `... +${String(args.chain.length - 3)} more`)}`;
         return new Text(text, 0, 0);
       }
       if (Array.isArray(args.tasks) && args.tasks.length > 0) {
@@ -4712,10 +4881,12 @@ export default function (pi: ExtensionAPI) {
           theme.fg("toolTitle", theme.bold("subagent ")) +
           theme.fg(
             "accent",
-            `parallel (${args.tasks.length} tasks, limit ${Number.isInteger(args.concurrency) ? args.concurrency : processLimit})`,
+            `parallel (${String(args.tasks.length)} tasks, limit ${String(Number.isInteger(args.concurrency) ? args.concurrency : processLimit)})`,
           ) +
           theme.fg("muted", ` [${scope}]`);
         for (const t of args.tasks.slice(0, 3)) {
+          // Keep optional access for malformed host-provided parallel items.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive item handling.
           const task = stringArg(t?.task, "");
           const preview = escapeTerminalText(
             task.length > 40 ? `${task.slice(0, 40)}...` : task,
@@ -4724,7 +4895,7 @@ export default function (pi: ExtensionAPI) {
           text += `\n  ${theme.fg("accent", previewAgentSelector(t))}${name ? theme.fg("muted", ` as ${name}`) : ""}${theme.fg("dim", ` ${preview}`)}`;
         }
         if (args.tasks.length > 3)
-          text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
+          text += `\n  ${theme.fg("muted", `... +${String(args.tasks.length - 3)} more`)}`;
         return new Text(text, 0, 0);
       }
       const agentName = previewAgentSelector(args);
@@ -4742,11 +4913,15 @@ export default function (pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
+    // Pi supplies this parameter to every renderer callback, but this renderer does not use it.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- preserve the Pi callback signature.
     renderResult(result, { expanded }, theme, _context) {
       const details = result.details as SubagentDetails | undefined;
       if (!details || details.results.length === 0) {
         const text = result.content[0];
         return new Text(
+          // Keep the empty-content guard for malformed or incomplete host results.
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive result rendering.
           text?.type === "text" ? escapeTerminalText(text.text) : "(no output)",
           0,
           0,
@@ -4758,7 +4933,7 @@ export default function (pi: ExtensionAPI) {
       const renderDisplayItems = ({ items, omitted }: DisplayItems) => {
         let text = "";
         if (omitted > 0)
-          text += theme.fg("muted", `... ${omitted} earlier items\n`);
+          text += theme.fg("muted", `... ${String(omitted)} earlier items\n`);
         for (const item of items) {
           if (item.type === "text") {
             const textPreview = expanded ? item.text : previewText(item.text);
@@ -4934,7 +5109,7 @@ export default function (pi: ExtensionAPI) {
                 theme.fg("toolTitle", theme.bold("chain ")) +
                 theme.fg(
                   "accent",
-                  `${successCount}/${details.results.length} steps`,
+                  `${String(successCount)}/${String(details.results.length)} steps`,
                 ),
               0,
               0,
@@ -4954,7 +5129,7 @@ export default function (pi: ExtensionAPI) {
             container.addChild(new Spacer(1));
             container.addChild(
               new Text(
-                `${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`,
+                `${theme.fg("muted", `─── Step ${String(r.step)}: `) + theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`,
                 0,
                 0,
               ),
@@ -5031,7 +5206,10 @@ export default function (pi: ExtensionAPI) {
           icon +
           " " +
           theme.fg("toolTitle", theme.bold("chain ")) +
-          theme.fg("accent", `${successCount}/${details.results.length} steps`);
+          theme.fg(
+            "accent",
+            `${String(successCount)}/${String(details.results.length)} steps`,
+          );
         for (const r of details.results) {
           const rIcon =
             r.exitCode === -1
@@ -5040,7 +5218,7 @@ export default function (pi: ExtensionAPI) {
                 ? theme.fg("error", "✗")
                 : theme.fg("success", "✓");
           const displayItems = getDisplayItems(r.messages, 5);
-          text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`;
+          text += `\n\n${theme.fg("muted", `─── Step ${String(r.step)}: `)}${theme.fg("accent", terminalSubagentIdentity(r))} ${rIcon}`;
           const failure = getFailureReason(r);
           if (failure)
             text += `\n${theme.fg("error", `Error: ${previewEscapedText(failure)}`)}`;
@@ -5071,8 +5249,8 @@ export default function (pi: ExtensionAPI) {
             ? theme.fg("warning", "◐")
             : theme.fg("success", "✓");
         const status = isRunning
-          ? `${successCount + failCount}/${details.results.length} done, ${running} pending`
-          : `${successCount}/${details.results.length} tasks`;
+          ? `${String(successCount + failCount)}/${String(details.results.length)} done, ${String(running)} pending`
+          : `${String(successCount)}/${String(details.results.length)} tasks`;
 
         if (expanded && !isRunning) {
           const container = new Container();
@@ -5196,6 +5374,8 @@ export default function (pi: ExtensionAPI) {
 
       const text = result.content[0];
       return new Text(
+        // Keep the empty-content guard for malformed or incomplete host results.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve defensive result rendering.
         text?.type === "text" ? escapeTerminalText(text.text) : "(no output)",
         0,
         0,

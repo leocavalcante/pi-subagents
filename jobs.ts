@@ -9,7 +9,7 @@ export const MAX_PENDING_JOB_WAITS = 32;
 export class JobWaiterCapacityError extends Error {
   constructor() {
     super(
-      `Too many concurrent job waits; at most ${MAX_PENDING_JOB_WAITS} may be pending. Retry when a wait completes. The job is unaffected.`,
+      `Too many concurrent job waits; at most ${String(MAX_PENDING_JOB_WAITS)} may be pending. Retry when a wait completes. The job is unaffected.`,
     );
     this.name = "JobWaiterCapacityError";
   }
@@ -30,6 +30,8 @@ function boundedDiagnostic(text: string, limit = MAX_DIAGNOSTIC_BYTES): string {
 function describeThrown(error: unknown): string {
   try {
     return boundedDiagnostic(
+      // Preserve coercion if a custom Error exposes a non-string message at runtime.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- keep the existing arbitrary-value conversion.
       error instanceof Error ? String(error.message) : String(error),
     );
   } catch {
@@ -113,7 +115,7 @@ export class JobManager<T, Observation = never> {
     ).length;
     if (active >= this.maxActive)
       throw new Error(
-        `Too many active background jobs. Max is ${this.maxActive}.`,
+        `Too many active background jobs. Max is ${String(this.maxActive)}.`,
       );
     const snapshot: JobSnapshot<T> = {
       id: randomUUID(),
@@ -166,6 +168,8 @@ export class JobManager<T, Observation = never> {
           try {
             job.retainedBytes = this.retention.measure(snapshot.latest);
             if (!Number.isFinite(job.retainedBytes) || job.retainedBytes < 0)
+              // This is caught below so invalid measurement still evicts output during finalization.
+              // eslint-disable-next-line no-unsafe-finally -- keep retention validation inside the existing finalization cleanup.
               throw new Error("Invalid retention measurement.");
             if (job.retainedBytes > this.retention.maxBytes)
               this.evictOutput(job);
@@ -224,7 +228,7 @@ export class JobManager<T, Observation = never> {
       timeoutMs > MAX_JOB_WAIT_MS
     ) {
       throw new RangeError(
-        `timeoutMs must be an integer between 1 and ${MAX_JOB_WAIT_MS}.`,
+        `timeoutMs must be an integer between 1 and ${String(MAX_JOB_WAIT_MS)}.`,
       );
     }
     signal?.throwIfAborted();
@@ -255,8 +259,10 @@ export class JobManager<T, Observation = never> {
       };
       const abort = () => {
         cleanup();
+        // Preserve explicit abort reasons, including non-Error values.
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- abort reasons are part of the caller-facing contract.
         reject(
-          signal && signal.reason !== undefined
+          signal?.reason !== undefined
             ? signal.reason
             : new Error("Job wait aborted."),
         );
@@ -359,7 +365,7 @@ export class JobManager<T, Observation = never> {
 export class ProcessPoolCapacityError extends Error {
   constructor(maxWaiters: number) {
     super(
-      `Subagent process queue is full (maximum ${maxWaiters} waiting tasks); retry after current work completes.`,
+      `Subagent process queue is full (maximum ${String(maxWaiters)} waiting tasks); retry after current work completes.`,
     );
     this.name = "ProcessPoolCapacityError";
   }
@@ -367,7 +373,7 @@ export class ProcessPoolCapacityError extends Error {
 
 export class ProcessPool {
   private active = 0;
-  private waiters: Array<() => void> = [];
+  private waiters: (() => void)[] = [];
 
   constructor(
     private limit: number,
@@ -393,8 +399,10 @@ export class ProcessPool {
         };
         const abort = () => {
           this.waiters = this.waiters.filter((w) => w !== grant);
+          // Preserve explicit abort reasons, including non-Error values.
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- abort reasons are part of the caller-facing contract.
           reject(
-            signal && signal.reason !== undefined
+            signal?.reason !== undefined
               ? signal.reason
               : new Error("Process request canceled."),
           );

@@ -9,23 +9,25 @@ export function isValidChainId(value: unknown): value is string {
 
 /** Named outputs can only come from earlier steps; validate the complete request before dispatch. */
 export function validateChainReferences(
-  steps: ReadonlyArray<{ id?: unknown; task: string }>,
+  steps: readonly { id?: unknown; task: string }[],
 ): string | undefined {
   const available = new Set<string>();
   for (const [index, step] of steps.entries()) {
     if (step.id !== undefined) {
       if (!isValidChainId(step.id)) {
-        return `Invalid chain step ID at step ${index + 1}. Use 1–64 characters: a leading ASCII letter, then letters, digits, underscores, or hyphens.`;
+        return `Invalid chain step ID at step ${String(index + 1)}. Use 1–64 characters: a leading ASCII letter, then letters, digits, underscores, or hyphens.`;
       }
       if (available.has(step.id))
-        return `Duplicate chain step ID at step ${index + 1}. IDs must be unique.`;
+        return `Duplicate chain step ID at step ${String(index + 1)}. IDs must be unique.`;
     }
     for (const match of step.task.matchAll(CONTEXT_PLACEHOLDERS)) {
       if (
+        // The optional capture is absent for the {previous} placeholder.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- retain the runtime distinction for this regex branch.
         match[1] !== undefined &&
         (!isValidChainId(match[1]) || !available.has(match[1]))
       ) {
-        return `Invalid chain output reference at step ${index + 1}. Reference an ID from an earlier step.`;
+        return `Invalid chain output reference at step ${String(index + 1)}. Reference an ID from an earlier step.`;
       }
     }
     if (typeof step.id === "string") available.add(step.id);
@@ -42,6 +44,7 @@ export function substituteChainContext(
   return task.replace(
     CONTEXT_PLACEHOLDERS,
     (_match, id: string | undefined) => {
+      // The capture group is absent for {previous}; retain that runtime branch.
       if (id === undefined) return previous;
       const output = outputs.get(id);
       if (output === undefined)
@@ -81,6 +84,8 @@ export function substituteChainContextBounded(
   };
   for (const match of task.matchAll(CONTEXT_PLACEHOLDERS)) {
     const start = match.index;
+    // Keep the runtime guard for non-standard or malformed RegExp match objects.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve the missing-index fallback.
     if (start === undefined)
       throw new Error("Chain placeholder position is unavailable.");
     if (start > templateOffset)

@@ -8,7 +8,8 @@ interface TemporaryDirectoryCleanupState {
 const temporaryDirectoryCleanupKey = Symbol.for(
   "@leocavalcante/pi-subagents/temporary-directory-cleanup",
 );
-const temporaryDirectoryCleanupState = ((globalThis as any)[
+const globalRegistry = globalThis as unknown as Record<PropertyKey, unknown>;
+const temporaryDirectoryCleanupState = (globalRegistry[
   temporaryDirectoryCleanupKey
 ] ??= {
   directories: new Set<string>(),

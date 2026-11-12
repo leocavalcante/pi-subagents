@@ -45,12 +45,16 @@ export function createAbortableDeferred<T>(): AbortableDeferred<T> {
       if (outcome)
         return outcome.ok
           ? Promise.resolve(outcome.value)
-          : Promise.reject(outcome.reason);
+          : // Preserve arbitrary rejection reasons from the shared operation.
+            // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- callers may reject with non-Error values.
+            Promise.reject(outcome.reason);
       return new Promise<T>((resolve, reject) => {
         const waiter: DeferredWaiter<T> = { resolve, reject, signal };
         if (signal) {
           waiter.onAbort = () => {
             removeWaiter(waiter);
+            // Preserve the explicit abort reason, including non-Error values.
+            // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- abort reasons are part of the caller-facing contract.
             reject(
               signal.reason !== undefined
                 ? signal.reason
@@ -86,13 +90,17 @@ export function waitForSharedOperation<T>(
       try {
         compilation = start();
       } catch (error) {
+        // Preserve the exact value thrown by a synchronous start() implementation.
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- rethrowing a non-Error value must remain observable.
         compilation = Promise.reject(error);
       }
     }
     state.promise = compilation;
     compilation.then(
-      (value) => deferred.resolve(value),
-      (error) => {
+      (value) => {
+        deferred.resolve(value);
+      },
+      (error: unknown) => {
         if (state.deferred === deferred) {
           state.promise = undefined;
           state.deferred = undefined;
@@ -112,9 +120,13 @@ export function waitWithAbort<T>(
   if (!signal) return promise;
   signal.throwIfAborted();
   return new Promise<T>((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
     const onAbort = () => {
       cleanup();
+      // Preserve the explicit abort reason, including non-Error values.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- abort reasons are part of the caller-facing contract.
       reject(
         signal.reason !== undefined
           ? signal.reason
@@ -127,8 +139,10 @@ export function waitWithAbort<T>(
         cleanup();
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         cleanup();
+        // Preserve the exact rejection reason from the original operation.
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the returned race preserves arbitrary Promise rejection values.
         reject(error);
       },
     );
