@@ -39,21 +39,28 @@
 		"README.md"
 	],
 	"scripts": {
-		"check": "tsc -p tsconfig.json",
-		"test": "node --test"
+		"check": "tsc -p tsconfig.json && tsc -p tests && tsc -p .github/scripts",
+		"test": "bun run test:bun && bun run test:node",
+		"test:bun": "bun test --timeout 30000",
+		"test:node": "node --import jiti/register --test --test-concurrency=1 \"tests/*.node-test.ts\" \"tests/*.node-test.mjs\"",
+		"check:package": "publint && node .github/scripts/check-package.mjs",
+		"verify": "bun run check && bun run test && bun run check:package && bun audit --audit-level=high"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "1.3.0",
+		"@earendil-works/pi-coding-agent": "1.5.2",
+		"@types/bun": "1.4.4",
 		"@types/node": "22.20.5",
 		"jiti": "2.7.0",
-		"typescript": "7.0.2"
-	},
-	"overrides": {
-		"undici": "8.12.3"
+		"publint": "0.3.25",
+		"typescript": "6.0.3",
+		"yaml": "2.9.1"
 	},
 	"engines": {
-		"node": ">=22.19.0"
+		"node": ">=22.19.0",
+		"pi": ">=1.0.4"
 	},
+	"packageManager": "bun@1.4.4",
+	"trustedDependencies": [],
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",
 		"@earendil-works/pi-ai": "*",

@@ -1,40 +1,59 @@
 version: 2
 updates:
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: /
     schedule:
       interval: weekly
       day: monday
       time: "09:00"
-      timezone: UTC
+      timezone: Etc/UTC
     open-pull-requests-limit: 5
     versioning-strategy: increase
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "fix(deps)"
+      prefix-development: "chore(deps)"
+    cooldown:
+      default-days: 7
+      exclude: ["@earendil-works/*"]
     ignore:
       - dependency-name: "@types/node"
-        update-types:
-          - version-update:semver-major
+        update-types: [version-update:semver-major]
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
     groups:
-      npm-non-major:
-        dependency-type: development
+      pi:
+        patterns: ["@earendil-works/*", typebox]
+      lint:
         patterns:
-          - "*"
-        update-types:
-          - minor
-          - patch
-
+          [
+            eslint,
+            "@eslint/*",
+            typescript-eslint,
+            prettier,
+            eslint-config-prettier,
+          ]
+      release:
+        patterns:
+          [
+            semantic-release,
+            "@semantic-release/*",
+            "conventional-changelog-*",
+            git-cliff,
+          ]
+      dev:
+        dependency-type: development
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
       time: "09:00"
-      timezone: UTC
-    open-pull-requests-limit: 5
+      timezone: Etc/UTC
     commit-message:
       prefix: "ci(deps)"
+    cooldown:
+      default-days: 7
     groups:
-      github-actions:
-        patterns:
-          - "*"
+      actions:
+        patterns: ["*"]

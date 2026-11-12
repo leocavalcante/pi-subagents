@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
+import { parse } from 'yaml';
 
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const contributing = readFileSync(new URL('../CONTRIBUTING.md', import.meta.url), 'utf8');
-const testWorkflow = readFileSync(new URL('../.github/workflows/test.yml', import.meta.url), 'utf8');
-const codeqlWorkflow = readFileSync(new URL('../.github/workflows/codeql.yml', import.meta.url), 'utf8');
+const ciWorkflow = readFileSync(new URL('../.github/workflows/ci.yaml', import.meta.url), 'utf8');
+const workflowChecks = readFileSync(new URL('../.github/scripts/check-workflows.sh', import.meta.url), 'utf8');
+const ci = parse(ciWorkflow);
+const piPins = JSON.parse(readFileSync(new URL('../.github/scripts/pi-pins.json', import.meta.url), 'utf8'));
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function section(title) {
@@ -77,68 +80,78 @@ test('CONTRIBUTING documents the verified npm Trusted Publishing release', () =>
   assert.match(contributing, /provenance attestation identifies repository `leocavalcante\/pi-subagents`/);
   assert.match(contributing, /Do not repeat the bootstrap or attempt to republish any version already in the registry/);
   assert.match(contributing, /publishing-access settings require two-factor authentication and disallow tokens/);
-  assert.match(contributing, /to a version not yet published on npm/);
+  assert.match(contributing, /npm versions are immutable/);
+  assert.match(contributing, /release-triggered `publish\.yml` workflow is retired/);
+  assert.match(contributing, /Releases are moving to automated publishing from `main`; nothing publishes until that is in place/);
   assert.doesNotMatch(contributing, /npm publish --access public --provenance=false/);
 });
 
-test('CI preserves the required Node, runner, Pi, and Node.js type coverage', () => {
-  const workflow = testWorkflow.replace(/\r\n/g, '\n');
-  assert.match(workflow, /os: \[ubuntu-latest, ubuntu-26\.04, macos-latest, windows-latest\]/,
-    'keep the temporary Ubuntu 26 row and existing platform coverage until migration is confirmed');
-  assert.match(workflow, /node: \[22, 24, 26\]/);
-  assert.ok(workflow.includes(`node: "${packageJson.engines.node.slice(2)}"`),
-    'test the declared minimum Node.js version explicitly');
-  assert.equal(packageJson.devDependencies['@types/node'], '22.20.5',
-    'keep type checking aligned with the pinned Node.js 22 declarations');
-  assert.equal(packageJson.devDependencies['@earendil-works/pi-coding-agent'], '1.3.0',
-    'the default CI run must test the current supported Pi runtime');
+test('CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and package checks', () => {
+  assert.deepEqual(Object.keys(ci.jobs).sort(), [
+    'canary-report', 'node', 'package', 'pi-1-1', 'pi-canary', 'pi-min', 'required', 'static', 'test',
+  ]);
+  assert.equal(packageJson.engines.node, '>=22.19.0');
+  assert.equal(packageJson.engines.pi, '>=1.0.4');
+  assert.equal(packageJson.devDependencies['@types/node'], '22.20.5');
+  assert.equal(packageJson.devDependencies['@earendil-works/pi-coding-agent'], '1.5.2');
+  assert.equal(packageJson.packageManager, 'bun@1.4.4');
+  assert.deepEqual(packageJson.trustedDependencies, []);
 
-  const baseTest = workflow.indexOf('      - run: npm test');
-  const legacyInstall = workflow.indexOf('Install Pi 1.0.4 for compatibility checks');
-  const legacyCheck = workflow.indexOf('Check against Pi 1.0.4');
-  const legacyTest = workflow.indexOf('Test against Pi 1.0.4');
-  assert.ok(baseTest >= 0 && baseTest < legacyInstall && legacyInstall < legacyCheck && legacyCheck < legacyTest,
-    'test the pinned current Pi runtime before swapping in Pi 1.0.4 for compatibility');
-  assert.ok(workflow.includes('npm pack --silent @earendil-works/pi-codemode@1.1.0'),
-    'pair Pi 1.0.4 with the Codemode release that exports the API its loader imports');
-  const legacyClosureJobStart = workflow.indexOf('\n  legacy-pi:');
-  const legacy11JobStart = workflow.indexOf('\n  legacy-pi-1-1:');
-  const latestJobStart = workflow.indexOf('\n  latest-pi:');
-  assert.ok(legacyClosureJobStart >= 0 && legacy11JobStart > legacyClosureJobStart && latestJobStart > legacy11JobStart,
-    'test Pi 1.0.4 and Pi 1.1.0 with fresh dependency closures in separate jobs');
-  const legacyClosureJob = workflow.slice(legacyClosureJobStart, legacy11JobStart);
-  assert.ok(legacyClosureJob.includes('Install Pi 1.0.4 with compatible Codemode and fresh dependencies'));
-  assert.ok(legacyClosureJob.includes('@earendil-works/pi-codemode@1.1.0'));
-  assert.ok(legacyClosureJob.includes('cp -a "$prefix/node_modules" node_modules'));
-  assert.ok(legacyClosureJob.includes('PI_PACKAGE_DIR: ${{ runner.temp }}/pi-1.0.4/node_modules/@earendil-works/pi-coding-agent'));
-  assert.ok(legacyClosureJob.includes('node-version: "22.19.0"'));
-  const legacy11Job = workflow.slice(legacy11JobStart, latestJobStart);
-  assert.ok(legacy11Job.includes('Pi 1.1.0 fresh-install compatibility'));
-  assert.ok(legacy11Job.includes('Install Pi 1.1.0 with compatible Codemode and fresh dependencies'));
-  assert.ok(legacy11Job.includes('@earendil-works/pi-coding-agent@1.1.0'));
-  assert.ok(legacy11Job.includes('@earendil-works/pi-codemode@1.1.0'));
-  assert.ok(legacy11Job.includes('cp -a "$prefix/node_modules" node_modules'));
-  assert.ok(legacy11Job.includes('PI_PACKAGE_DIR: ${{ runner.temp }}/pi-1.1.0/node_modules/@earendil-works/pi-coding-agent'));
-  assert.ok(legacy11Job.includes('node-version: "22.19.0"'));
-  const latestJob = workflow.slice(latestJobStart);
-  const latestInstall = latestJob.indexOf('Install Pi 1.3.0 with its dependency closure');
-  const latestCheck = latestJob.indexOf('Check against Pi 1.3.0');
-  const latestTest = latestJob.indexOf('Test against Pi 1.3.0');
-  assert.ok(latestInstall >= 0 && latestInstall < latestCheck && latestCheck < latestTest,
-    'test Pi 1.3.0 with its dependency closure in a dedicated job');
-  assert.ok(latestJob.includes('@earendil-works/pi-coding-agent@1.3.0'));
-  assert.ok(latestJob.includes('node-version: "22.19.0"'),
-    'run the current Pi runtime on its declared minimum Node.js version');
-  assert.match(contributing, /with Node\.js 22, 24, and 26 against Pi 1\.0\.4 and 1\.1\.0 paired with Pi Codemode 1\.1\.0/);
-  assert.match(contributing, /upstream report/);
-  assert.match(contributing, /Additional Ubuntu\/Node\.js 22\.19\.0 jobs test Pi 1\.0\.4 and Pi 1\.1\.0, each paired with Codemode 1\.1\.0 and its freshly resolved dependency closure/);
-  assert.match(contributing, /separate Ubuntu\/Node\.js 22\.19\.0 job also runs the type check and tests with Pi 1\.3\.0/);
+  const required = ci.jobs.required;
+  assert.equal(required.if, 'always()');
+  assert.deepEqual([...required.needs].sort(), Object.keys(ci.jobs).filter(name => name !== 'required').sort());
+  assert.match(required.steps.map(step => step.run ?? '').join('\n'), /result !== "success"/);
+  assert.match(ciWorkflow, /os: \[ubuntu-24\.04, macos-15, windows-2025\]/);
+  assert.equal(ci.jobs.test['runs-on'], '${{ matrix.os }}');
+  assert.ok(ci.jobs.test.steps.some(step => step.run === 'bun run test'),
+    'all three operating systems run both test lanes');
+  assert.equal(packageJson.scripts.test, 'bun run test:bun && bun run test:node');
+  assert.match(packageJson.scripts['test:node'], /tests\/\*\.node-test\.ts/);
+  assert.match(packageJson.scripts['test:node'], /tests\/\*\.node-test\.mjs/);
+  assert.match(packageJson.scripts['test:node'], /--test-concurrency=1/);
+
+  assert.match(ciWorkflow, /node: \[22\.19\.0, 22, 24, 26\]/);
+  assert.equal(ci.jobs.node['runs-on'], 'ubuntu-24.04');
+  assert.equal(ci.jobs.node.steps.at(-1).run, 'bun run test:node');
+  assert.ok(ci.jobs.node.steps.some(step => step.with?.['node-version'] === '${{ matrix.node }}'));
+
+  assert.equal(ci.jobs['pi-min'].steps.find(step => step.run?.includes('install-pi.ts'))?.run,
+    'bun .github/scripts/install-pi.ts min');
+  assert.deepEqual(piPins, {
+    '1.0.4': { '@earendil-works/pi-codemode': '1.1.0' },
+    '1.1.0': { '@earendil-works/pi-codemode': '1.1.0' },
+  });
+  assert.equal(ci.jobs['pi-1-1'].name, 'Pi 1.1.0');
+  assert.ok(ci.jobs['pi-1-1'].steps.some(step => step.run === 'bun .github/scripts/install-pi.ts 1.1.0'));
+  assert.ok(ci.jobs['pi-1-1'].steps.some(step => step.run === 'bun run test'));
+
+  const verify = packageJson.scripts.verify;
+  for (const command of ['bun run check', 'bun run test', 'bun run check:package', 'bun audit --audit-level=high']) {
+    assert.ok(verify.includes(command), `verify must run ${command}`);
+  }
+  assert.ok(ci.jobs.static.steps.some(step => step.run === 'bun run check'));
+  assert.ok(ci.jobs.static.steps.some(step => step.run === 'bun audit --audit-level=high'));
+  assert.ok(ci.jobs.package.steps.some(step => step.run === 'bun run check:package'));
+  assert.ok(ci.jobs.test.steps.some(step => step.run === 'bun run test'));
+
+  for (const workflow of [ciWorkflow, readFileSync(new URL('../.github/workflows/pr-title.yaml', import.meta.url), 'utf8')]) {
+    for (const [, action, sha] of workflow.matchAll(/uses:\s+([\w.-]+\/[\w.-]+)@([^\s#]+)/g)) {
+      assert.match(sha, /^[0-9a-f]{40}$/, `${action} must be pinned to a full commit SHA`);
+    }
+  }
+  assert.match(contributing, /Node\.js tests on 22\.19\.0, 22, 24, and 26/);
+  assert.match(contributing, /POSIX process-group cleanup on both Linux and macOS/);
+  assert.match(contributing, /Job Object containment/);
 });
 
-test('npm test uses automatic discovery so Node runner options and file paths can be forwarded', () => {
-  assert.equal(packageJson.scripts.test, 'node --test');
-  assert.match(contributing, /`npm test -- tests\/paging\.test\.mjs`/);
-  assert.match(contributing, /`npm test -- --test-name-pattern='agentTags dispatch'`/);
+test('CONTRIBUTING documents Bun commands and the temporary Node.js test lane', () => {
+  assert.match(contributing, /bun install --frozen-lockfile/);
+  assert.match(contributing, /bun audit --audit-level=high/);
+  assert.match(contributing, /bun run check/);
+  assert.match(contributing, /bun run test/);
+  assert.match(contributing, /tests\/paging\.node-test\.mjs/);
+  assert.match(contributing, /node --import jiti\/register --test --test-concurrency=1/);
+  assert.match(contributing, /agentTags dispatch/);
 });
 
 test('npm package includes required runtime support files', () => {
@@ -168,53 +181,25 @@ test('npm package includes the full local dependency closure of its extension en
   }
 });
 
-function assertActionlintDocumentationMatchesWorkflow(workflowSource) {
-  const workflow = workflowSource.replace(/\r\n/g, '\n');
-  const version = workflow.match(/^\s+version=(\d+\.\d+\.\d+)$/m)?.[1];
-  const ignores = [...workflow.matchAll(/^\s+-ignore '([^']+)'/gm)].map(([, ignore]) => ignore);
-  assert.ok(version, 'CI must pin the actionlint version');
-  assert.deepEqual(ignores, ['label "ubuntu-26\\.04" is unknown\\.'],
-    'the Ubuntu 26 runner-label catalog diagnostic must be the sole ignored actionlint diagnostic');
-  const [ignore] = ignores;
-  const invocation = `"$RUNNER_TEMP/actionlint" \\\n            -ignore '${ignore}' \\\n            .github/workflows/*.yml`;
-  assert.ok(workflow.includes(invocation), 'CI must invoke actionlint on the workflow files with the scoped ignore');
-  assert.ok(contributing.includes(`actionlint v${version}`));
-  assert.ok(contributing.includes(`actionlint -ignore '${ignore}' .github/workflows/*.yml`));
-  assert.match(contributing, /keep the explicit `ubuntu-26\.04` matrix row until GitHub's runner migration is confirmed/);
-}
-
-test('CodeQL scans the C# Windows supervisor and preserves the JavaScript check name', () => {
-  const workflow = codeqlWorkflow.replace(/\r\n/g, '\n');
-  assert.match(workflow, /^  analyze:\n    name: Analyze JavaScript and TypeScript$/m);
-  assert.match(workflow, /^          languages: javascript-typescript$/m);
-
-  const csharpJobMarker = '  analyze-csharp:\n';
-  const csharpJobStart = workflow.indexOf(csharpJobMarker);
-  assert.notEqual(csharpJobStart, -1, 'CodeQL must define a separate C# analysis job');
-  const csharpJobTail = workflow.slice(csharpJobStart + csharpJobMarker.length);
-  const nextJobStart = csharpJobTail.search(/^  \S/m);
-  const csharpJob = nextJobStart === -1 ? csharpJobTail : csharpJobTail.slice(0, nextJobStart);
-
-  assert.match(csharpJob, /^    name: Analyze C#$/m);
-  assert.match(csharpJob, /^    permissions:\n      actions: read\n      contents: read\n      security-events: write$/m);
-  assert.match(csharpJob, /^          languages: csharp\n          build-mode: none$/m);
-  assert.match(csharpJob, /^      - uses: github\/codeql-action\/analyze@/m);
-
-  assert.match(workflow, /^  push:\n    branches:\n      - main$/m);
-  assert.match(workflow, /^  pull_request:\n    branches:\n      - main$/m);
-  assert.match(workflow, /^  schedule:\n    - cron:/m);
+test('CI uses the pinned workflow-validation tools and retires the custom CodeQL workflow', () => {
+  assert.match(workflowChecks, /actionlint_1\.7\.12_linux_amd64\.tar\.gz/);
+  assert.match(workflowChecks, /gitleaks_8\.30\.1_linux_x64\.tar\.gz/);
+  assert.match(workflowChecks, /"\$directory\/actionlint" \.github\/workflows\/\*\.yaml/);
+  assert.match(workflowChecks, /"\$directory\/gitleaks" git --redact --no-banner/);
+  assert.equal(existsSync(new URL('../.github/workflows/codeql.yml', import.meta.url)), false);
 });
 
-test('CONTRIBUTING documents the sole narrowly scoped actionlint ignore used by CI', () => {
-  assertActionlintDocumentationMatchesWorkflow(testWorkflow);
-  assertActionlintDocumentationMatchesWorkflow(testWorkflow.replace(/\r?\n/g, '\r\n'));
+test('CONTRIBUTING documents the pinned workflow-validation script', () => {
+  assert.match(contributing, /bash \.github\/scripts\/check-workflows\.sh/);
+  assert.match(contributing, /actionlint v1\.7\.12/);
+  assert.match(contributing, /gitleaks v8\.30\.1/);
 });
 
 test('CONTRIBUTING explains how Windows process containment is validated', () => {
   assert.match(contributing, /Windows-only integration tests also verify Job Object containment on cancellation, deadlines, and normal leader exit/);
   assert.match(contributing, /bare Pi executable names resolve through PATH instead of being shadowed by the task working directory/);
   assert.match(contributing, /source compilation alone does not validate this behavior—rely on Windows CI/);
-  assert.match(contributing, /type check and tests on Linux, macOS, and Windows with Node\.js 22, 24, and 26/);
+  assert.match(contributing, /both test lanes on Linux, macOS, and Windows with Node\.js 24/);
   assert.match(contributing, /POSIX process-group cleanup on both Linux and macOS/);
 });
 
