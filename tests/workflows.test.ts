@@ -69,10 +69,7 @@ test("the development toolchain is Bun but runtime sources do not import Bun API
   for (const file of readdirSync(new URL("../", import.meta.url)).filter(
     (file) => file.endsWith(".ts"),
   )) {
-    const source = readFileSync(
-      new URL(`../${file}`, import.meta.url),
-      "utf8",
-    );
+    const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
     assert.doesNotMatch(
       source,
       /(?:from\s*|import\s*\()\s*["']bun(?::[^"']*)?["']/,

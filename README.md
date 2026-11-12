@@ -57,6 +57,7 @@ Then save a personal agent definition as `~/.pi/agent/agents/reviewer.md`:
 name: reviewer
 description: Review code and report actionable findings
 ---
+
 Review the requested code without changing files. Report findings with file and line references.
 ```
 
@@ -203,7 +204,10 @@ All tag filters run after scope precedence and before pagination. Continue with 
 Instead of copying an exact name from discovery results, pass `agentTags` with the `subagent` tool. It uses the same case-insensitive all-tags intersection; duplicates are ignored. The selector must match exactly one in-scope agent. No match or an ambiguous match is reported without launching a child; add tags to disambiguate or pass `agent` explicitly. Scope precedence is applied first, and normal project-agent trust approval still applies to the selected definition.
 
 ```json
-{ "agentTags": ["security", "code-review"], "task": "Review the authentication code without changing files." }
+{
+  "agentTags": ["security", "code-review"],
+  "task": "Review the authentication code without changing files."
+}
 ```
 
 Parallel task entries and chain steps can each use `agentTags` instead of `agent`, so a batch can mix exact names and unique capability selectors.
@@ -218,21 +222,24 @@ Use a chain: worker reviews the code, then worker evaluates the findings.
 
 The `subagent` tool accepts exactly one mode. Select each task's agent with either an exact `agent` name or `agentTags`, an array of exact capability labels that must all match. Selection applies after scope precedence and dispatch requires exactly one matching definition: no match or multiple matches fail before any child starts. Project-agent trust approval still applies to the resolved definition. Empty arrays, blank tasks, partial single-task parameters, and unknown agents are rejected before any child starts:
 
-| Mode | Parameters | Execution |
-| --- | --- | --- |
-| Single | `{ agent, task, name? }` or `{ agentTags, task, name? }` | One task |
-| Parallel | `{ tasks: [{ agent or agentTags, task, name? }, ...] }` | Up to 8 tasks, up to 4 concurrent |
-| Chain | `{ chain: [{ agent or agentTags, task, id?, name? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
+| Mode     | Parameters                                                   | Execution                                                                |
+| -------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| Single   | `{ agent, task, name? }` or `{ agentTags, task, name? }`     | One task                                                                 |
+| Parallel | `{ tasks: [{ agent or agentTags, task, name? }, ...] }`      | Up to 8 tasks, up to 4 concurrent                                        |
+| Chain    | `{ chain: [{ agent or agentTags, task, id?, name? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
 
 `agent` and `agentTags` select the agent definition; optional `name` is a separate display name. Set it at the top level for a single task or on each parallel task/chain step; top-level `name` is not a batch default. Omitted names are generated as `<agent> <adjective> <animal>` (for example, `worker amber otter`). Names are assigned once, unique within a dispatch, and used in progress, results, and background job labels/output; `jobId` remains the opaque job identifier. Duplicate explicit names are rejected. Explicit names must be non-empty, well-formed Unicode, at most 256 UTF-8 bytes, and contain no terminal or bidirectional controls. Renderers make invisible formatting characters visible.
 
 Use top-level `preamble` to prepend the same rules to each child task in any mode:
 
 ```json
-{ "preamble": "Do not modify files. Report concise findings.", "tasks": [
-  { "agent": "worker", "task": "Review authentication." },
-  { "agent": "worker", "task": "Review the related tests." }
-] }
+{
+  "preamble": "Do not modify files. Report concise findings.",
+  "tasks": [
+    { "agent": "worker", "task": "Review authentication." },
+    { "agent": "worker", "task": "Review the related tests." }
+  ]
+}
 ```
 
 The preamble is prepended with a blank line, counts once toward the dispatch-wide task limit, and is not included in recorded task text. In chains, task references are substituted before the preamble is added, so placeholders in the preamble remain literal.
@@ -252,9 +259,20 @@ Give a chain step an optional `id` to reuse its output in any later step:
 ```json
 {
   "chain": [
-    { "id": "review", "agent": "worker", "task": "Review the authentication code without changing files." },
-    { "id": "tests", "agent": "worker", "task": "Inspect the tests without changing files." },
-    { "agent": "worker", "task": "Compare the code review with the test findings. Review: {steps.review}\nTests: {steps.tests}" }
+    {
+      "id": "review",
+      "agent": "worker",
+      "task": "Review the authentication code without changing files."
+    },
+    {
+      "id": "tests",
+      "agent": "worker",
+      "task": "Inspect the tests without changing files."
+    },
+    {
+      "agent": "worker",
+      "task": "Compare the code review with the test findings. Review: {steps.review}\nTests: {steps.tests}"
+    }
   ]
 }
 ```
@@ -306,7 +324,11 @@ The child Pi process inherits the parent environment by default. Set `unsetEnv` 
 {
   "agent": "worker",
   "task": "Inspect the repository without using cloud credentials.",
-  "unsetEnv": ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+  "unsetEnv": [
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN"
+  ]
 }
 ```
 
@@ -418,7 +440,9 @@ In a codemode script:
 
 ```js
 const result = await tools.subagent_jobs({
-  action: "wait", jobId: "<job ID>", timeoutMs: 30000
+  action: "wait",
+  jobId: "<job ID>",
+  timeoutMs: 30000,
 });
 if (result.error) throw new Error(result.error);
 return { state: result.job.state, timedOut: result.timedOut };
@@ -437,13 +461,22 @@ Job operations also return structured data to codemode scripts. List returns `{ 
 For a finished task (the overall job need not have finished):
 
 ```js
-const result = await tools.subagent_jobs({ action: "output", jobId: "<job ID>", taskIndex: 0 });
+const result = await tools.subagent_jobs({
+  action: "output",
+  jobId: "<job ID>",
+  taskIndex: 0,
+});
 if (result.error) throw new Error(result.error);
 text(result.output.text);
 store("next-output-offset", result.output.nextOffset);
 
 // Inspect bounded stderr instead of the default final-result stream.
-const logs = await tools.subagent_jobs({ action: "output", jobId: "<job ID>", taskIndex: 0, stream: "stderr" });
+const logs = await tools.subagent_jobs({
+  action: "output",
+  jobId: "<job ID>",
+  taskIndex: 0,
+  stream: "stderr",
+});
 if (logs.error) throw new Error(logs.error);
 text(logs.output.text);
 ```

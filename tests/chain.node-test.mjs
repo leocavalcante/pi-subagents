@@ -1,70 +1,179 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
-import { jiti } from './pi-runtime.mjs';
-const { isValidChainId, validateChainReferences, substituteChainContext, substituteChainContextBounded } = await jiti.import('../chain.ts');
+import assert from "node:assert/strict";
+import test from "node:test";
+import { jiti } from "./pi-runtime.mjs";
+const {
+  isValidChainId,
+  validateChainReferences,
+  substituteChainContext,
+  substituteChainContextBounded,
+} = await jiti.import("../chain.ts");
 
-test('chain step IDs share one strict validator for references and output lookup', () => {
-  for (const id of ['a', 'Step_1', 'x-y', 'A'.repeat(64)]) assert.equal(isValidChainId(id), true);
-  for (const id of ['', '1step', 'step name', 'x'.repeat(65), undefined, null, 42]) assert.equal(isValidChainId(id), false);
+test("chain step IDs share one strict validator for references and output lookup", () => {
+  for (const id of ["a", "Step_1", "x-y", "A".repeat(64)])
+    assert.equal(isValidChainId(id), true);
+  for (const id of [
+    "",
+    "1step",
+    "step name",
+    "x".repeat(65),
+    undefined,
+    null,
+    42,
+  ])
+    assert.equal(isValidChainId(id), false);
 });
 
-test('named references accept only earlier unique IDs with a bounded identifier format', () => {
-  assert.equal(validateChainReferences([{ id: 'review-1', task: 'first' }, { task: '{steps.review-1} {previous}' }]), undefined);
-  assert.equal(validateChainReferences([{ id: 'constructor', task: 'first' }, { task: '{steps.constructor}' }]), undefined);
+test("named references accept only earlier unique IDs with a bounded identifier format", () => {
+  assert.equal(
+    validateChainReferences([
+      { id: "review-1", task: "first" },
+      { task: "{steps.review-1} {previous}" },
+    ]),
+    undefined,
+  );
+  assert.equal(
+    validateChainReferences([
+      { id: "constructor", task: "first" },
+      { task: "{steps.constructor}" },
+    ]),
+    undefined,
+  );
   for (const chain of [
-    [{ id: '', task: 'first' }], [{ id: 'x'.repeat(65), task: 'first' }], [{ id: 42, task: 'first' }],
-    [{ id: 'bad.id', task: 'first' }], [{ id: 'same', task: 'first' }, { id: 'same', task: 'second' }],
-    [{ id: 'self', task: '{steps.self}' }], [{ task: '{steps.future}' }, { id: 'future', task: 'second' }],
-    [{ task: '{steps.unknown}' }], [{ task: '{steps.}' }], [{ task: '{steps.invalid name}' }],
-  ]) assert.ok(validateChainReferences(chain));
+    [{ id: "", task: "first" }],
+    [{ id: "x".repeat(65), task: "first" }],
+    [{ id: 42, task: "first" }],
+    [{ id: "bad.id", task: "first" }],
+    [
+      { id: "same", task: "first" },
+      { id: "same", task: "second" },
+    ],
+    [{ id: "self", task: "{steps.self}" }],
+    [{ task: "{steps.future}" }, { id: "future", task: "second" }],
+    [{ task: "{steps.unknown}" }],
+    [{ task: "{steps.}" }],
+    [{ task: "{steps.invalid name}" }],
+  ])
+    assert.ok(validateChainReferences(chain));
 });
 
-test('bounded substitution counts UTF-8 bytes and retains literal one-pass behavior', () => {
-  const namedOutput = '$& {previous}';
-  const outputs = new Map([['first', namedOutput]]);
-  assert.equal(substituteChainContextBounded('{steps.first}', '', outputs, Buffer.byteLength(namedOutput)), namedOutput);
-  assert.equal(substituteChainContextBounded('{previous}', '€', new Map(), 3), '€');
-  assert.equal(substituteChainContextBounded('{previous}', '€', new Map(), 2), undefined);
-  const high = '\uD83D';
-  const low = '\uDE00';
-  assert.equal(Buffer.byteLength(high + low, 'utf8'), 4);
-  assert.equal(substituteChainContextBounded(`${high}{previous}`, low, new Map(), 4), high + low);
-  assert.throws(() => substituteChainContextBounded('x', '', new Map(), -1), /byte limit/);
+test("bounded substitution counts UTF-8 bytes and retains literal one-pass behavior", () => {
+  const namedOutput = "$& {previous}";
+  const outputs = new Map([["first", namedOutput]]);
+  assert.equal(
+    substituteChainContextBounded(
+      "{steps.first}",
+      "",
+      outputs,
+      Buffer.byteLength(namedOutput),
+    ),
+    namedOutput,
+  );
+  assert.equal(
+    substituteChainContextBounded("{previous}", "€", new Map(), 3),
+    "€",
+  );
+  assert.equal(
+    substituteChainContextBounded("{previous}", "€", new Map(), 2),
+    undefined,
+  );
+  const high = "\uD83D";
+  const low = "\uDE00";
+  assert.equal(Buffer.byteLength(high + low, "utf8"), 4);
+  assert.equal(
+    substituteChainContextBounded(`${high}{previous}`, low, new Map(), 4),
+    high + low,
+  );
+  assert.throws(
+    () => substituteChainContextBounded("x", "", new Map(), -1),
+    /byte limit/,
+  );
 });
 
-test('bounded substitution matches exact UTF-8 budgets across adjacent and empty replacements', () => {
+test("bounded substitution matches exact UTF-8 budgets across adjacent and empty replacements", () => {
   const cases = [
-    ['café/{previous}/😀/{steps.review}/終', '東京', new Map([['review', '💻 done']])],
-    ['{steps.first}{steps.second}{previous}', 'Z', new Map([['first', '東'], ['second', '🛰️']])],
-    ['α{steps.empty}{previous}終', '', new Map([['empty', '']])],
-    ['😀{steps.repeat}{steps.repeat}é', '', new Map([['repeat', '終']])],
-    ['{steps.payload}|{previous}', "$'€", new Map([['payload', '{previous} $& 😀']])],
+    [
+      "café/{previous}/😀/{steps.review}/終",
+      "東京",
+      new Map([["review", "💻 done"]]),
+    ],
+    [
+      "{steps.first}{steps.second}{previous}",
+      "Z",
+      new Map([
+        ["first", "東"],
+        ["second", "🛰️"],
+      ]),
+    ],
+    ["α{steps.empty}{previous}終", "", new Map([["empty", ""]])],
+    ["😀{steps.repeat}{steps.repeat}é", "", new Map([["repeat", "終"]])],
+    [
+      "{steps.payload}|{previous}",
+      "$'€",
+      new Map([["payload", "{previous} $& 😀"]]),
+    ],
   ];
 
   for (const [template, previous, outputs] of cases) {
     const expanded = substituteChainContext(template, previous, outputs);
-    const requiredBytes = Buffer.byteLength(expanded, 'utf8');
+    const requiredBytes = Buffer.byteLength(expanded, "utf8");
     for (let maxBytes = 0; maxBytes <= requiredBytes + 1; maxBytes++) {
-      const actual = substituteChainContextBounded(template, previous, outputs, maxBytes);
-      assert.equal(actual, maxBytes >= requiredBytes ? expanded : undefined,
-        `template ${JSON.stringify(template)} at ${maxBytes} of ${requiredBytes} bytes`);
+      const actual = substituteChainContextBounded(
+        template,
+        previous,
+        outputs,
+        maxBytes,
+      );
+      assert.equal(
+        actual,
+        maxBytes >= requiredBytes ? expanded : undefined,
+        `template ${JSON.stringify(template)} at ${maxBytes} of ${requiredBytes} bytes`,
+      );
     }
   }
 });
 
-test('oversized repeated context is rejected without materializing the expanded string', () => {
-  const template = '{steps.large}'.repeat(100_000);
-  const largeOutput = 'x'.repeat(4 * 1024 * 1024);
-  const result = substituteChainContextBounded(template, '', new Map([['large', largeOutput]]), 4 * 1024 * 1024);
+test("oversized repeated context is rejected without materializing the expanded string", () => {
+  const template = "{steps.large}".repeat(100_000);
+  const largeOutput = "x".repeat(4 * 1024 * 1024);
+  const result = substituteChainContextBounded(
+    template,
+    "",
+    new Map([["large", largeOutput]]),
+    4 * 1024 * 1024,
+  );
   assert.equal(result, undefined);
 });
 
-test('substitution is literal, one-pass, and keeps unrelated brace syntax unchanged', () => {
-  const output = '$& $$ $` $\' {previous} {steps.other}';
-  const outputs = new Map([['first', output], ['other', 'must not expand inserted text'], ['constructor', 'safe']]);
-  assert.equal(substituteChainContext('{steps.first}|{previous}|{steps.first}|{thing}', 'last', outputs), `${output}|last|${output}|{thing}`);
-  assert.equal(substituteChainContext('{steps.constructor}', '', outputs), 'safe');
-  assert.equal(substituteChainContext('{steps.empty}', 'not empty', new Map([['empty', '']])), '');
-  assert.equal(substituteChainContext('{previous}', '', new Map()), '');
-  assert.throws(() => substituteChainContext('{steps.missing}', '', outputs), /unavailable/);
+test("substitution is literal, one-pass, and keeps unrelated brace syntax unchanged", () => {
+  const output = "$& $$ $` $' {previous} {steps.other}";
+  const outputs = new Map([
+    ["first", output],
+    ["other", "must not expand inserted text"],
+    ["constructor", "safe"],
+  ]);
+  assert.equal(
+    substituteChainContext(
+      "{steps.first}|{previous}|{steps.first}|{thing}",
+      "last",
+      outputs,
+    ),
+    `${output}|last|${output}|{thing}`,
+  );
+  assert.equal(
+    substituteChainContext("{steps.constructor}", "", outputs),
+    "safe",
+  );
+  assert.equal(
+    substituteChainContext(
+      "{steps.empty}",
+      "not empty",
+      new Map([["empty", ""]]),
+    ),
+    "",
+  );
+  assert.equal(substituteChainContext("{previous}", "", new Map()), "");
+  assert.throws(
+    () => substituteChainContext("{steps.missing}", "", outputs),
+    /unavailable/,
+  );
 });

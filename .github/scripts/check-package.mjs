@@ -35,7 +35,10 @@ try {
   const entrypoints = manifest.pi?.extensions;
   assert.deepEqual(entrypoints, ["./index.ts"]);
   assert(packedPaths.has("index.ts"), "The extension entry point must ship");
-  assert(paths.includes("windows-supervisor.cs"), "The Windows supervisor must ship");
+  assert(
+    paths.includes("windows-supervisor.cs"),
+    "The Windows supervisor must ship",
+  );
   assert(
     !paths.some((path) => /^(?:tests|\.github|docs|node_modules)\//.test(path)),
     "Tests, workflows, docs, and installed dependencies must not ship",
@@ -50,11 +53,19 @@ try {
     const sourceFile = pending.pop();
     if (visited.has(sourceFile)) continue;
     visited.add(sourceFile);
-    assert(packedPaths.has(sourceFile), `Entry-point dependency is missing from tarball: ${sourceFile}`);
-    assert(existsSync(sourceFile), `Missing local source dependency: ${sourceFile}`);
+    assert(
+      packedPaths.has(sourceFile),
+      `Entry-point dependency is missing from tarball: ${sourceFile}`,
+    );
+    assert(
+      existsSync(sourceFile),
+      `Missing local source dependency: ${sourceFile}`,
+    );
     const source = readFileSync(sourceFile, "utf8");
     for (const [, specifier] of source.matchAll(localReference)) {
-      const dependency = posix.normalize(posix.join(posix.dirname(sourceFile), specifier));
+      const dependency = posix.normalize(
+        posix.join(posix.dirname(sourceFile), specifier),
+      );
       assert(
         dependency !== ".." && !dependency.startsWith("../"),
         `Local dependency escapes package root: ${specifier}`,
@@ -89,7 +100,12 @@ try {
 
   const installedManifest = JSON.parse(
     readFileSync(
-      join(consumer, "node_modules", ...manifest.name.split("/"), "package.json"),
+      join(
+        consumer,
+        "node_modules",
+        ...manifest.name.split("/"),
+        "package.json",
+      ),
       "utf8",
     ),
   );
@@ -124,7 +140,9 @@ console.log("Packed extension loads under Node.js through jiti.");
     cwd: consumer,
     stdio: "inherit",
   });
-  console.log(`Validated ${packed.filename}: ${paths.length} allowlisted files.`);
+  console.log(
+    `Validated ${packed.filename}: ${paths.length} allowlisted files.`,
+  );
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

@@ -1,76 +1,79 @@
 {
-	"name": "@leocavalcante/pi-subagents",
-	"version": "0.2.0",
-	"description": "Delegate tasks to isolated Pi agents, singly, in parallel, or in a chain.",
-	"type": "module",
-	"license": "MIT",
-	"publishConfig": {
-		"access": "public",
-		"provenance": true
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/leocavalcante/pi-subagents.git"
-	},
-	"keywords": [
-		"pi-package",
-		"pi",
-		"subagents"
-	],
-	"files": [
-		"index.ts",
-		"agents.ts",
-		"agent-listing.ts",
-		"jobs.ts",
-		"capture.ts",
-		"protocol.ts",
-		"paging.ts",
-		"usage.ts",
-		"chain.ts",
-		"unicode.ts",
-		"progress.ts",
-		"abort.ts",
-		"temporary-files.ts",
-		"windows-supervisor-invocation.ts",
-		"windows-supervisor.cs",
-		"CONTRIBUTING.md",
-		"SECURITY.md",
-		"LICENSE",
-		"README.md"
-	],
-	"scripts": {
-		"check": "tsc -p tsconfig.json && tsc -p tests && tsc -p .github/scripts",
-		"test": "bun run test:bun && bun run test:node",
-		"test:bun": "bun test --timeout 30000",
-		"test:node": "node --import jiti/register --test --test-concurrency=1 \"tests/*.node-test.ts\" \"tests/*.node-test.mjs\"",
-		"check:package": "publint && node .github/scripts/check-package.mjs",
-		"verify": "bun run check && bun run test && bun run check:package && bun audit --audit-level=high"
-	},
-	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "1.5.2",
-		"@types/bun": "1.4.4",
-		"@types/node": "22.20.5",
-		"jiti": "2.7.0",
-		"publint": "0.3.25",
-		"typescript": "6.0.3",
-		"yaml": "2.9.1"
-	},
-	"engines": {
-		"node": ">=22.19.0",
-		"pi": ">=1.0.4"
-	},
-	"packageManager": "bun@1.4.4",
-	"trustedDependencies": [],
-	"peerDependencies": {
-		"@earendil-works/pi-agent-core": "*",
-		"@earendil-works/pi-ai": "*",
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
-		"typebox": "*"
-	},
-	"pi": {
-		"extensions": [
-			"./index.ts"
-		]
-	}
+  "name": "@leocavalcante/pi-subagents",
+  "version": "0.2.0",
+  "description": "Delegate tasks to isolated Pi agents, singly, in parallel, or in a chain.",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leocavalcante/pi-subagents.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "subagents"
+  ],
+  "files": [
+    "index.ts",
+    "agents.ts",
+    "agent-listing.ts",
+    "jobs.ts",
+    "capture.ts",
+    "protocol.ts",
+    "paging.ts",
+    "usage.ts",
+    "chain.ts",
+    "unicode.ts",
+    "progress.ts",
+    "abort.ts",
+    "temporary-files.ts",
+    "windows-supervisor-invocation.ts",
+    "windows-supervisor.cs",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "tsc -p tsconfig.json && tsc -p tests && tsc -p .github/scripts",
+    "lint": "prettier --check .",
+    "format": "prettier --write .",
+    "test": "bun run test:bun && bun run test:node",
+    "test:bun": "bun test --timeout 30000",
+    "test:node": "node --import jiti/register --test --test-concurrency=1 \"tests/*.node-test.ts\" \"tests/*.node-test.mjs\"",
+    "check:package": "publint && node .github/scripts/check-package.mjs",
+    "verify": "bun run lint && bun run check && bun run test && bun run check:package && bun audit --audit-level=high"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@types/bun": "1.4.4",
+    "@types/node": "22.20.5",
+    "jiti": "2.7.0",
+    "prettier": "3.9.10",
+    "publint": "0.3.25",
+    "typescript": "6.0.3",
+    "yaml": "2.9.1"
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "pi": ">=1.0.4"
+  },
+  "packageManager": "bun@1.4.4",
+  "trustedDependencies": [],
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
 }
