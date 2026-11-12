@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
-const { DEFAULT_PROGRESS_UPDATE_INTERVAL_MS, ProgressUpdateLimiter } =
-  await jiti.import("../progress.ts");
+import { test } from "bun:test";
+import {
+  DEFAULT_PROGRESS_UPDATE_INTERVAL_MS,
+  ProgressUpdateLimiter,
+} from "../progress.ts";
 
 test("progress limiter emits immediately and then no more often than its interval", () => {
   const limiter = new ProgressUpdateLimiter();

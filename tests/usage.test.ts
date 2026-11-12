@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
-const { usageError, protocolUsageError, normalizeUsage, sumUsage } =
-  await jiti.import("../usage.ts");
+import { test } from "bun:test";
+import {
+  usageError,
+  protocolUsageError,
+  normalizeUsage,
+  sumUsage,
+} from "../usage.ts";
 
 test("validates every consumed token and cost field without exposing payloads", () => {
   for (const field of [

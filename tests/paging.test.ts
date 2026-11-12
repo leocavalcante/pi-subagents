@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
-const { createOutputPager, sliceOutput, WeakOutputPagerCache } =
-  await jiti.import("../paging.ts");
+import { test } from "bun:test";
+import {
+  createOutputPager,
+  sliceOutput,
+  WeakOutputPagerCache,
+} from "../paging.ts";
 
 test("UTF-8 output pages reconstruct multibyte text without replacement characters", () => {
   const original = "abc😀é漢字\n".repeat(50);
   for (const limit of [4, 5, 7, 31, 32768]) {
     let offset = 0,
       text = "";
-    do {
+    for (;;) {
       const page = sliceOutput(original, offset, limit);
       assert.ok(Buffer.byteLength(page.text) <= limit);
       assert.equal(page.text.includes("\uFFFD"), false);
@@ -18,7 +20,7 @@ test("UTF-8 output pages reconstruct multibyte text without replacement characte
       if (page.nextOffset === null) break;
       assert.ok(page.nextOffset > offset);
       offset = page.nextOffset;
-    } while (true);
+    }
     assert.equal(text, original);
   }
 });
@@ -41,16 +43,19 @@ test("end offsets and empty output return a final empty page", () => {
 test("reusable pager encodes once and serves late sequential pages without prefix scans", () => {
   const size = 8 * 1024 * 1024;
   const original = "x".repeat(size);
+  // Keep the original function object so the test can restore it.
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- restored as-is in finally.
   const originalFrom = Buffer.from;
-  const encoded = [];
-  Buffer.from = (value, ...args) => {
+  const encoded: number[] = [];
+  // Count encodings by wrapping Buffer.from; call the original exactly as before.
+  (Buffer as any).from = (value: any, ...args: any[]) => {
     if (typeof value === "string") encoded.push(Buffer.byteLength(value));
-    return originalFrom(value, ...args);
+    return (originalFrom as (...input: any[]) => Buffer)(value, ...args);
   };
   try {
     const pager = createOutputPager(original);
     const first = pager(size - 2048, 1024);
-    const second = pager(first.nextOffset, 1024);
+    const second = pager(first.nextOffset!, 1024);
     assert.equal(first.text, "x".repeat(1024));
     assert.equal(first.nextOffset, size - 1024);
     assert.equal(second.text, "x".repeat(1024));
@@ -68,9 +73,10 @@ test("reusable pager encodes once and serves late sequential pages without prefi
 
 test("output pager cache weakly tracks both results and encoded pagers", () => {
   const originalWeakRef = globalThis.WeakRef;
-  const refs = [];
-  globalThis.WeakRef = class {
-    constructor(value) {
+  const refs: any[] = [];
+  (globalThis as any).WeakRef = class {
+    value: unknown;
+    constructor(value: unknown) {
       this.value = value;
       refs.push(this);
     }
@@ -81,7 +87,7 @@ test("output pager cache weakly tracks both results and encoded pagers", () => {
   try {
     const cache = new WeakOutputPagerCache();
     const result = {};
-    const firstPager = () => "first";
+    const firstPager: any = () => "first";
     let creations = 0;
     assert.equal(
       cache.get(result, () => {
@@ -96,14 +102,14 @@ test("output pager cache weakly tracks both results and encoded pagers", () => {
     assert.equal(
       cache.get(result, () => {
         creations++;
-        return () => "unused";
+        return (() => "unused") as any;
       }),
       firstPager,
     );
     assert.equal(creations, 1);
 
     refs[1].value = undefined; // Simulate the pager being collected without GC timing.
-    const secondPager = () => "second";
+    const secondPager: any = () => "second";
     assert.equal(
       cache.get(result, () => {
         creations++;
@@ -114,7 +120,7 @@ test("output pager cache weakly tracks both results and encoded pagers", () => {
     assert.equal(creations, 2);
 
     refs[2].value = undefined; // A collected result invalidates its pager too.
-    const thirdPager = () => "third";
+    const thirdPager: any = () => "third";
     assert.equal(
       cache.get(result, () => {
         creations++;
@@ -134,13 +140,13 @@ test("paging malformed UTF-16 preserves Buffer UTF-8 replacement behavior", () =
   const pager = createOutputPager(original);
   let offset = 0,
     text = "";
-  do {
+  for (;;) {
     const page = pager(offset, 4);
     assert.ok(Buffer.byteLength(page.text, "utf8") <= 4);
     text += page.text;
     if (page.nextOffset === null) break;
     offset = page.nextOffset;
-  } while (true);
+  }
   assert.equal(text, expected);
   assert.throws(() => pager(8, 4), /boundary/);
 });

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
-import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
-const { createAbortableDeferred, waitForSharedOperation, waitWithAbort } =
-  await jiti.import("../abort.ts");
+import { test } from "bun:test";
+import {
+  createAbortableDeferred,
+  waitForSharedOperation,
+  waitWithAbort,
+} from "../abort.ts";
 
 test("abortable deferred removes canceled waiters without canceling shared work", async () => {
   const deferred = createAbortableDeferred();
@@ -11,7 +13,7 @@ test("abortable deferred removes canceled waiters without canceling shared work"
   const remaining = new AbortController();
   const canceledWait = deferred.wait(canceled.signal).then(
     () => ({ resolved: true }),
-    (reason) => ({ reason }),
+    (reason: unknown) => ({ reason }),
   );
   const remainingWait = deferred.wait(remaining.signal);
 
@@ -53,7 +55,7 @@ test("abortable deferred shares failures with current and later waiters", async 
 test("shared operation builds once, detaches canceled callers, and reuses its result", async () => {
   const state = {};
   let starts = 0;
-  let finishCompilation;
+  let finishCompilation!: (value: string) => void;
   const start = () => {
     starts++;
     return new Promise((resolve) => {
@@ -68,7 +70,7 @@ test("shared operation builds once, detaches canceled callers, and reuses its re
     canceled.signal,
   ).then(
     () => ({ resolved: true }),
-    (reason) => ({ reason }),
+    (reason: unknown) => ({ reason }),
   );
   const remainingWait = waitForSharedOperation(state, start, remaining.signal);
 
@@ -104,7 +106,7 @@ test("shared operation can attach to work cached before a module reload", async 
 test("shared operation failures reach current waiters and allow a retry", async () => {
   const state = {};
   let starts = 0;
-  let rejectCompilation;
+  let rejectCompilation!: (reason: unknown) => void;
   const start = () => {
     starts++;
     if (starts === 1)
@@ -162,13 +164,13 @@ test("shared operation does not start for an already-aborted caller", () => {
 test("waitWithAbort preserves null and other falsy cancellation reasons", async () => {
   for (const reason of [null, false, 0, ""]) {
     const controller = new AbortController();
-    let resolveOperation;
+    let resolveOperation!: (value: string) => void;
     const operation = new Promise((resolve) => {
       resolveOperation = resolve;
     });
     const raced = waitWithAbort(operation, controller.signal).then(
       () => ({ resolved: true }),
-      (rejected) => ({ rejected }),
+      (rejected: unknown) => ({ rejected }),
     );
     assert.equal(getEventListeners(controller.signal, "abort").length, 1);
     controller.abort(reason);
@@ -180,12 +182,20 @@ test("waitWithAbort preserves null and other falsy cancellation reasons", async 
 
 test("waitWithAbort preserves the default AbortError and cleans up after settlement", async () => {
   const canceled = new AbortController();
-  const pending = waitWithAbort(new Promise(() => {}), canceled.signal).then(
+  const pending = waitWithAbort(
+    new Promise(() => {
+      // Never settles: only the abort can finish this wait.
+    }),
+    canceled.signal,
+  ).then(
     () => ({ resolved: true }),
-    (reason) => ({ reason }),
+    (reason: unknown) => ({ reason }),
   );
   canceled.abort();
-  assert.equal((await pending).reason, canceled.signal.reason);
+  assert.equal(
+    ((await pending) as { reason?: unknown }).reason,
+    canceled.signal.reason,
+  );
   assert.equal(getEventListeners(canceled.signal, "abort").length, 0);
 
   const completed = new AbortController();
@@ -199,9 +209,10 @@ test("waitWithAbort preserves the default AbortError and cleans up after settlem
 test("waitWithAbort immediately propagates an already-aborted null reason", () => {
   const controller = new AbortController();
   controller.abort(null);
-  let thrown = Symbol("not thrown");
+  let thrown: unknown = Symbol("not thrown");
   try {
-    waitWithAbort(Promise.resolve("unused"), controller.signal);
+    // An already-aborted signal throws synchronously, before any promise exists.
+    void waitWithAbort(Promise.resolve("unused"), controller.signal);
   } catch (error) {
     thrown = error;
   }

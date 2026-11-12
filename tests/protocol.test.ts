@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
-const {
+import { test } from "bun:test";
+import {
   assistantMessageError,
   isCapturedMessageRole,
   parseChildEvent,
   MAX_JSON_STRUCTURE_TOKENS,
   toolResultMessageError,
   userMessageError,
-} = await jiti.import("../protocol.ts");
-const message = (extra) => ({
+} from "../protocol.ts";
+const message = (extra?: Record<string, unknown>) => ({
   content: [{ type: "text", text: "answer" }],
   stopReason: "stop",
   ...extra,
@@ -46,7 +45,10 @@ test("JSON nesting is bounded without counting brackets inside escaped strings",
 
 test("JSON structural breadth is bounded before parsing and punctuation inside strings is ignored", () => {
   const atLimit = `[${"0,".repeat(MAX_JSON_STRUCTURE_TOKENS - 1)}0]`;
-  assert.equal(parseChildEvent(atLimit).length, MAX_JSON_STRUCTURE_TOKENS);
+  assert.equal(
+    (parseChildEvent(atLimit) as unknown[]).length,
+    MAX_JSON_STRUCTURE_TOKENS,
+  );
 
   const overLimit = `[${"0,".repeat(MAX_JSON_STRUCTURE_TOKENS)}0]`;
   const originalParse = JSON.parse;
@@ -145,6 +147,8 @@ test("malformed long JSON number candidates are scanned in linear work", () => {
     "1".repeat(digitCount) + ".",
     "1".repeat(digitCount) + "e+",
   ];
+  // Keep the original method so the test can restore it.
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- restored as-is in finally.
   const originalCharCodeAt = String.prototype.charCodeAt;
 
   for (const input of inputs) {
@@ -170,7 +174,7 @@ test("malformed long JSON number candidates are scanned in linear work", () => {
     );
     assert.ok(
       charCodeAtCalls <= input.length * 4,
-      `Expected linear character scanning, but read ${charCodeAtCalls} code units for ${input.length} input units`,
+      `Expected linear character scanning, but read ${String(charCodeAtCalls)} code units for ${String(input.length)} input units`,
     );
   }
 });
