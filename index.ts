@@ -21,7 +21,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message, Usage } from "@earendil-works/pi-ai";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
@@ -31,7 +30,22 @@ import {
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { Type, type Static } from "typebox";
+import { Type, type Static, type TUnsafe } from "typebox";
+
+// A string enum as `{ type: "string", enum }`, the shape every provider accepts.
+// Pi's own StringEnum returns a pi-schema schema from Pi 1.5 on, which this
+// file's TypeBox `Static` can't infer; building it here keeps one TypeBox copy.
+function StringEnum<T extends readonly string[]>(
+	values: T,
+	options?: { description?: string; default?: T[number] },
+): TUnsafe<T[number]> {
+	return Type.Unsafe<T[number]>({
+		type: "string",
+		enum: [...values],
+		...(options?.description && { description: options.description }),
+		...(options?.default && { default: options.default }),
+	});
+}
 import {
 	AGENT_NAME_PATTERN,
 	AGENT_TAG_INPUT_PATTERN,
