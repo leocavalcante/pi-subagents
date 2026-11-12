@@ -1,168 +1,209 @@
-import assert from 'node:assert/strict';
-import { getEventListeners } from 'node:events';
-import test from 'node:test';
-import { jiti } from './pi-runtime.mjs';
-const { createAbortableDeferred, waitForSharedOperation, waitWithAbort } = await jiti.import('../abort.ts');
+import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
+import test from "node:test";
+import { jiti } from "./pi-runtime.mjs";
+const { createAbortableDeferred, waitForSharedOperation, waitWithAbort } =
+  await jiti.import("../abort.ts");
 
-test('abortable deferred removes canceled waiters without canceling shared work', async () => {
+test("abortable deferred removes canceled waiters without canceling shared work", async () => {
   const deferred = createAbortableDeferred();
   const canceled = new AbortController();
   const remaining = new AbortController();
   const canceledWait = deferred.wait(canceled.signal).then(
     () => ({ resolved: true }),
-    reason => ({ reason }),
+    (reason) => ({ reason }),
   );
   const remainingWait = deferred.wait(remaining.signal);
 
-  assert.equal(getEventListeners(canceled.signal, 'abort').length, 1);
-  assert.equal(getEventListeners(remaining.signal, 'abort').length, 1);
+  assert.equal(getEventListeners(canceled.signal, "abort").length, 1);
+  assert.equal(getEventListeners(remaining.signal, "abort").length, 1);
   canceled.abort(null);
   assert.deepEqual(await canceledWait, { reason: null });
-  assert.equal(getEventListeners(canceled.signal, 'abort').length, 0);
-  assert.equal(getEventListeners(remaining.signal, 'abort').length, 1);
+  assert.equal(getEventListeners(canceled.signal, "abort").length, 0);
+  assert.equal(getEventListeners(remaining.signal, "abort").length, 1);
 
-  deferred.resolve('compiled supervisor');
-  assert.equal(await remainingWait, 'compiled supervisor');
-  assert.equal(getEventListeners(remaining.signal, 'abort').length, 0);
-  assert.equal(await deferred.wait(), 'compiled supervisor');
+  deferred.resolve("compiled supervisor");
+  assert.equal(await remainingWait, "compiled supervisor");
+  assert.equal(getEventListeners(remaining.signal, "abort").length, 0);
+  assert.equal(await deferred.wait(), "compiled supervisor");
 });
 
-test('abortable deferred immediately preserves an already-aborted reason', () => {
+test("abortable deferred immediately preserves an already-aborted reason", () => {
   const deferred = createAbortableDeferred();
   const controller = new AbortController();
   controller.abort(null);
-  assert.throws(() => deferred.wait(controller.signal), reason => reason === null);
-  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assert.throws(
+    () => deferred.wait(controller.signal),
+    (reason) => reason === null,
+  );
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 });
 
-test('abortable deferred shares failures with current and later waiters', async () => {
+test("abortable deferred shares failures with current and later waiters", async () => {
   const deferred = createAbortableDeferred();
-  const failure = new Error('compilation failed');
+  const failure = new Error("compilation failed");
   const first = deferred.wait();
   const second = deferred.wait();
   deferred.reject(failure);
-  await assert.rejects(first, error => error === failure);
-  await assert.rejects(second, error => error === failure);
-  await assert.rejects(deferred.wait(), error => error === failure);
+  await assert.rejects(first, (error) => error === failure);
+  await assert.rejects(second, (error) => error === failure);
+  await assert.rejects(deferred.wait(), (error) => error === failure);
 });
 
-test('shared operation builds once, detaches canceled callers, and reuses its result', async () => {
+test("shared operation builds once, detaches canceled callers, and reuses its result", async () => {
   const state = {};
   let starts = 0;
   let finishCompilation;
   const start = () => {
     starts++;
-    return new Promise(resolve => { finishCompilation = resolve; });
+    return new Promise((resolve) => {
+      finishCompilation = resolve;
+    });
   };
   const canceled = new AbortController();
   const remaining = new AbortController();
-  const canceledWait = waitForSharedOperation(state, start, canceled.signal).then(
+  const canceledWait = waitForSharedOperation(
+    state,
+    start,
+    canceled.signal,
+  ).then(
     () => ({ resolved: true }),
-    reason => ({ reason }),
+    (reason) => ({ reason }),
   );
   const remainingWait = waitForSharedOperation(state, start, remaining.signal);
 
   assert.equal(starts, 1);
   canceled.abort(null);
   assert.deepEqual(await canceledWait, { reason: null });
-  assert.equal(getEventListeners(canceled.signal, 'abort').length, 0);
-  assert.equal(getEventListeners(remaining.signal, 'abort').length, 1);
+  assert.equal(getEventListeners(canceled.signal, "abort").length, 0);
+  assert.equal(getEventListeners(remaining.signal, "abort").length, 1);
 
-  finishCompilation('compiled supervisor');
-  assert.equal(await remainingWait, 'compiled supervisor');
-  assert.equal(getEventListeners(remaining.signal, 'abort').length, 0);
-  assert.equal(await waitForSharedOperation(state, start), 'compiled supervisor');
+  finishCompilation("compiled supervisor");
+  assert.equal(await remainingWait, "compiled supervisor");
+  assert.equal(getEventListeners(remaining.signal, "abort").length, 0);
+  assert.equal(
+    await waitForSharedOperation(state, start),
+    "compiled supervisor",
+  );
   assert.equal(starts, 1);
 });
 
-test('shared operation can attach to work cached before a module reload', async () => {
-  const state = { promise: Promise.resolve('existing compilation') };
+test("shared operation can attach to work cached before a module reload", async () => {
+  const state = { promise: Promise.resolve("existing compilation") };
   let starts = 0;
-  assert.equal(await waitForSharedOperation(state, () => {
-    starts++;
-    return Promise.resolve('unexpected compilation');
-  }), 'existing compilation');
+  assert.equal(
+    await waitForSharedOperation(state, () => {
+      starts++;
+      return Promise.resolve("unexpected compilation");
+    }),
+    "existing compilation",
+  );
   assert.equal(starts, 0);
 });
 
-test('shared operation failures reach current waiters and allow a retry', async () => {
+test("shared operation failures reach current waiters and allow a retry", async () => {
   const state = {};
   let starts = 0;
   let rejectCompilation;
   const start = () => {
     starts++;
-    if (starts === 1) return new Promise((_resolve, reject) => { rejectCompilation = reject; });
-    return Promise.resolve('retried supervisor');
+    if (starts === 1)
+      return new Promise((_resolve, reject) => {
+        rejectCompilation = reject;
+      });
+    return Promise.resolve("retried supervisor");
   };
-  const failure = new Error('compilation failed');
+  const failure = new Error("compilation failed");
   const firstController = new AbortController();
   const secondController = new AbortController();
   const first = waitForSharedOperation(state, start, firstController.signal);
   const second = waitForSharedOperation(state, start, secondController.signal);
-  const firstRejected = assert.rejects(first, error => error === failure);
-  const secondRejected = assert.rejects(second, error => error === failure);
+  const firstRejected = assert.rejects(first, (error) => error === failure);
+  const secondRejected = assert.rejects(second, (error) => error === failure);
 
   assert.equal(starts, 1);
-  assert.equal(getEventListeners(firstController.signal, 'abort').length, 1);
-  assert.equal(getEventListeners(secondController.signal, 'abort').length, 1);
+  assert.equal(getEventListeners(firstController.signal, "abort").length, 1);
+  assert.equal(getEventListeners(secondController.signal, "abort").length, 1);
   rejectCompilation(failure);
   await Promise.all([firstRejected, secondRejected]);
-  assert.equal(getEventListeners(firstController.signal, 'abort').length, 0);
-  assert.equal(getEventListeners(secondController.signal, 'abort').length, 0);
-  assert.equal(await waitForSharedOperation(state, start), 'retried supervisor');
+  assert.equal(getEventListeners(firstController.signal, "abort").length, 0);
+  assert.equal(getEventListeners(secondController.signal, "abort").length, 0);
+  assert.equal(
+    await waitForSharedOperation(state, start),
+    "retried supervisor",
+  );
   assert.equal(starts, 2);
-  assert.equal(await waitForSharedOperation(state, start), 'retried supervisor');
+  assert.equal(
+    await waitForSharedOperation(state, start),
+    "retried supervisor",
+  );
   assert.equal(starts, 2);
 });
 
-test('shared operation does not start for an already-aborted caller', () => {
+test("shared operation does not start for an already-aborted caller", () => {
   const controller = new AbortController();
   controller.abort(null);
   let starts = 0;
-  assert.throws(() => waitForSharedOperation({}, () => {
-    starts++;
-    return Promise.resolve('unused');
-  }, controller.signal), reason => reason === null);
+  assert.throws(
+    () =>
+      waitForSharedOperation(
+        {},
+        () => {
+          starts++;
+          return Promise.resolve("unused");
+        },
+        controller.signal,
+      ),
+    (reason) => reason === null,
+  );
   assert.equal(starts, 0);
 });
 
-test('waitWithAbort preserves null and other falsy cancellation reasons', async () => {
-  for (const reason of [null, false, 0, '']) {
+test("waitWithAbort preserves null and other falsy cancellation reasons", async () => {
+  for (const reason of [null, false, 0, ""]) {
     const controller = new AbortController();
     let resolveOperation;
-    const operation = new Promise(resolve => { resolveOperation = resolve; });
+    const operation = new Promise((resolve) => {
+      resolveOperation = resolve;
+    });
     const raced = waitWithAbort(operation, controller.signal).then(
       () => ({ resolved: true }),
-      rejected => ({ rejected }),
+      (rejected) => ({ rejected }),
     );
-    assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+    assert.equal(getEventListeners(controller.signal, "abort").length, 1);
     controller.abort(reason);
-    resolveOperation('late result');
+    resolveOperation("late result");
     assert.deepEqual(await raced, { rejected: reason });
-    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    assert.equal(getEventListeners(controller.signal, "abort").length, 0);
   }
 });
 
-test('waitWithAbort preserves the default AbortError and cleans up after settlement', async () => {
+test("waitWithAbort preserves the default AbortError and cleans up after settlement", async () => {
   const canceled = new AbortController();
   const pending = waitWithAbort(new Promise(() => {}), canceled.signal).then(
     () => ({ resolved: true }),
-    reason => ({ reason }),
+    (reason) => ({ reason }),
   );
   canceled.abort();
   assert.equal((await pending).reason, canceled.signal.reason);
-  assert.equal(getEventListeners(canceled.signal, 'abort').length, 0);
+  assert.equal(getEventListeners(canceled.signal, "abort").length, 0);
 
   const completed = new AbortController();
-  assert.equal(await waitWithAbort(Promise.resolve('done'), completed.signal), 'done');
-  assert.equal(getEventListeners(completed.signal, 'abort').length, 0);
+  assert.equal(
+    await waitWithAbort(Promise.resolve("done"), completed.signal),
+    "done",
+  );
+  assert.equal(getEventListeners(completed.signal, "abort").length, 0);
 });
 
-test('waitWithAbort immediately propagates an already-aborted null reason', () => {
+test("waitWithAbort immediately propagates an already-aborted null reason", () => {
   const controller = new AbortController();
   controller.abort(null);
-  let thrown = Symbol('not thrown');
-  try { waitWithAbort(Promise.resolve('unused'), controller.signal); }
-  catch (error) { thrown = error; }
+  let thrown = Symbol("not thrown");
+  try {
+    waitWithAbort(Promise.resolve("unused"), controller.signal);
+  } catch (error) {
+    thrown = error;
+  }
   assert.equal(thrown, null);
 });

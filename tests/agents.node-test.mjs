@@ -1,26 +1,55 @@
-import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { after, beforeEach, test } from 'node:test';
-import { chmodSync, linkSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
-import { jiti } from './pi-runtime.mjs';
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { after, beforeEach, test } from "node:test";
+import {
+  chmodSync,
+  linkSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
+import { jiti } from "./pi-runtime.mjs";
 
-const { discoverAgents, normalizeAgentTag, parseAgentTags, parseAgentUnsetEnv, MAX_AGENT_DESCRIPTION_BYTES, MAX_AGENT_TAG_BYTES, MAX_AGENT_TAG_COUNT, MAX_AGENT_TAG_LIST_BYTES, MAX_AGENT_TOOL_LIST_BYTES, MAX_AGENT_TOOL_COUNT, MAX_AGENT_UNSET_ENV_BYTES, MAX_AGENT_UNSET_ENV_COUNT, MAX_MODEL_SELECTOR_BYTES, MAX_TIMEOUT_MS, MAX_WORKING_DIRECTORY_LENGTH } = await jiti.import('../agents.ts');
-const sandbox = mkdtempSync(join(tmpdir(), 'pi-agents-test-'));
+const {
+  discoverAgents,
+  normalizeAgentTag,
+  parseAgentTags,
+  parseAgentUnsetEnv,
+  MAX_AGENT_DESCRIPTION_BYTES,
+  MAX_AGENT_TAG_BYTES,
+  MAX_AGENT_TAG_COUNT,
+  MAX_AGENT_TAG_LIST_BYTES,
+  MAX_AGENT_TOOL_LIST_BYTES,
+  MAX_AGENT_TOOL_COUNT,
+  MAX_AGENT_UNSET_ENV_BYTES,
+  MAX_AGENT_UNSET_ENV_COUNT,
+  MAX_MODEL_SELECTOR_BYTES,
+  MAX_TIMEOUT_MS,
+  MAX_WORKING_DIRECTORY_LENGTH,
+} = await jiti.import("../agents.ts");
+const sandbox = mkdtempSync(join(tmpdir(), "pi-agents-test-"));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-process.env.PI_CODING_AGENT_DIR = join(sandbox, 'user');
-const userDir = join(sandbox, 'user/agents');
-const projectDir = join(sandbox, 'project/.pi/agents');
-const cwd = join(sandbox, 'project/nested');
-const agent = (dir, file, yaml) => writeFileSync(join(dir, `${file}.md`), `---\n${yaml}\n---\nInstructions for ${file}.\n`);
+process.env.PI_CODING_AGENT_DIR = join(sandbox, "user");
+const userDir = join(sandbox, "user/agents");
+const projectDir = join(sandbox, "project/.pi/agents");
+const cwd = join(sandbox, "project/nested");
+const agent = (dir, file, yaml) =>
+  writeFileSync(
+    join(dir, `${file}.md`),
+    `---\n${yaml}\n---\nInstructions for ${file}.\n`,
+  );
 // Discovery children load the extension through jiti, which takes several seconds
 // on a busy machine. The limit only has to catch discovery that blocks.
 const DISCOVERY_CHILD_TIMEOUT_MS = 30_000;
 
 beforeEach(() => {
   rmSync(sandbox, { recursive: true, force: true });
-  for (const dir of [userDir, projectDir, cwd]) mkdirSync(dir, { recursive: true });
+  for (const dir of [userDir, projectDir, cwd])
+    mkdirSync(dir, { recursive: true });
 });
 after(() => {
   if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -28,527 +57,1024 @@ after(() => {
   rmSync(sandbox, { recursive: true, force: true });
 });
 
-test('inaccessible nested project agent directories stop ancestor fallback', {
-  skip: process.platform === 'win32' ? 'POSIX directory permissions are not portable to Windows' : process.getuid?.() === 0 ? 'root bypasses POSIX directory permissions' : false,
-}, () => {
-  const nestedPiDir = join(cwd, '.pi');
-  const nestedAgentDir = join(nestedPiDir, 'agents');
-  mkdirSync(nestedAgentDir, { recursive: true });
-  agent(projectDir, 'outer-only', 'name: outer-only\ndescription: Outer project agent');
-  agent(nestedAgentDir, 'nested-agent', 'name: nested-agent\ndescription: Nested project agent');
-  chmodSync(nestedPiDir, 0);
+test(
+  "inaccessible nested project agent directories stop ancestor fallback",
+  {
+    skip:
+      process.platform === "win32"
+        ? "POSIX directory permissions are not portable to Windows"
+        : process.getuid?.() === 0
+          ? "root bypasses POSIX directory permissions"
+          : false,
+  },
+  () => {
+    const nestedPiDir = join(cwd, ".pi");
+    const nestedAgentDir = join(nestedPiDir, "agents");
+    mkdirSync(nestedAgentDir, { recursive: true });
+    agent(
+      projectDir,
+      "outer-only",
+      "name: outer-only\ndescription: Outer project agent",
+    );
+    agent(
+      nestedAgentDir,
+      "nested-agent",
+      "name: nested-agent\ndescription: Nested project agent",
+    );
+    chmodSync(nestedPiDir, 0);
 
-  try {
-    const result = discoverAgents(cwd, 'project');
+    try {
+      const result = discoverAgents(cwd, "project");
+      assert.deepEqual(result.agents, []);
+      assert.equal(result.projectAgentsDir, null);
+      assert.deepEqual(result.diagnostics, [
+        {
+          filePath: nestedAgentDir,
+          source: "project",
+          message: "Unable to inspect project agent directory safely.",
+        },
+      ]);
+    } finally {
+      chmodSync(nestedPiDir, 0o700);
+      rmSync(nestedPiDir, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "inaccessible personal agent roots are reported instead of appearing empty",
+  {
+    skip:
+      process.platform === "win32"
+        ? "POSIX directory permissions are not portable to Windows"
+        : process.getuid?.() === 0
+          ? "root bypasses POSIX directory permissions"
+          : false,
+  },
+  () => {
+    const userRoot = join(sandbox, "user");
+    agent(
+      userDir,
+      "hidden",
+      "name: hidden\ndescription: Hidden personal agent",
+    );
+    chmodSync(userRoot, 0);
+
+    try {
+      const result = discoverAgents(cwd, "user");
+      assert.deepEqual(result.agents, []);
+      assert.deepEqual(result.diagnostics, [
+        {
+          filePath: userDir,
+          source: "user",
+          message: "Unable to inspect agent directory safely.",
+        },
+      ]);
+    } finally {
+      chmodSync(userRoot, 0o700);
+    }
+  },
+);
+
+test(
+  "project agent symlinks to non-regular files are rejected without blocking",
+  { skip: process.platform === "win32" },
+  () => {
+    const fifo = join(projectDir, "agent-pipe");
+    execFileSync("mkfifo", [fifo]);
+    symlinkSync(fifo, join(projectDir, "linked-pipe.md"));
+    const script =
+      `import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};\n` +
+      `const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../agents.ts", import.meta.url).href)});\n` +
+      `process.stdout.write(JSON.stringify(discoverAgents(process.env.AGENT_TEST_CWD, 'project')));`;
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: join(sandbox, "user"),
+          AGENT_TEST_CWD: cwd,
+        },
+        encoding: "utf8",
+        timeout: DISCOVERY_CHILD_TIMEOUT_MS,
+      },
+    );
+    assert.equal(
+      child.error,
+      undefined,
+      `Discovery child must finish: ${child.error?.message}`,
+    );
+    assert.equal(child.status, 0, child.stderr);
+    const result = JSON.parse(child.stdout);
     assert.deepEqual(result.agents, []);
-    assert.equal(result.projectAgentsDir, null);
-    assert.deepEqual(result.diagnostics, [{
-      filePath: nestedAgentDir, source: 'project',
-      message: 'Unable to inspect project agent directory safely.',
-    }]);
-  } finally {
-    chmodSync(nestedPiDir, 0o700);
-    rmSync(nestedPiDir, { recursive: true, force: true });
-  }
-});
+    assert.equal(result.diagnostics.length, 1);
+    assert.match(result.diagnostics[0].message, /regular file/);
+  },
+);
 
-test('inaccessible personal agent roots are reported instead of appearing empty', {
-  skip: process.platform === 'win32' ? 'POSIX directory permissions are not portable to Windows' : process.getuid?.() === 0 ? 'root bypasses POSIX directory permissions' : false,
-}, () => {
-  const userRoot = join(sandbox, 'user');
-  agent(userDir, 'hidden', 'name: hidden\ndescription: Hidden personal agent');
-  chmodSync(userRoot, 0);
-
-  try {
-    const result = discoverAgents(cwd, 'user');
-    assert.deepEqual(result.agents, []);
-    assert.deepEqual(result.diagnostics, [{
-      filePath: userDir, source: 'user',
-      message: 'Unable to inspect agent directory safely.',
-    }]);
-  } finally {
-    chmodSync(userRoot, 0o700);
-  }
-});
-
-test('project agent symlinks to non-regular files are rejected without blocking', { skip: process.platform === 'win32' }, () => {
-  const fifo = join(projectDir, 'agent-pipe');
-  execFileSync('mkfifo', [fifo]);
-  symlinkSync(fifo, join(projectDir, 'linked-pipe.md'));
-  const script = `import { jiti } from ${JSON.stringify(new URL('./pi-runtime.mjs', import.meta.url).href)};\n` +
-    `const { discoverAgents } = await jiti.import(${JSON.stringify(new URL('../agents.ts', import.meta.url).href)});\n` +
-    `process.stdout.write(JSON.stringify(discoverAgents(process.env.AGENT_TEST_CWD, 'project')));`;
-  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-    cwd: process.cwd(),
-    env: { ...process.env, PI_CODING_AGENT_DIR: join(sandbox, 'user'), AGENT_TEST_CWD: cwd },
-    encoding: 'utf8',
-    timeout: DISCOVERY_CHILD_TIMEOUT_MS,
-  });
-  assert.equal(child.error, undefined, `Discovery child must finish: ${child.error?.message}`);
-  assert.equal(child.status, 0, child.stderr);
-  const result = JSON.parse(child.stdout);
-  assert.deepEqual(result.agents, []);
-  assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /regular file/);
-});
-
-test('small agent files use size-proportional read buffers', () => {
-  const contents = '---\nname: small\ndescription: Small definition\n---\nPrompt.\n';
-  writeFileSync(join(userDir, 'small.md'), contents);
+test("small agent files use size-proportional read buffers", () => {
+  const contents =
+    "---\nname: small\ndescription: Small definition\n---\nPrompt.\n";
+  writeFileSync(join(userDir, "small.md"), contents);
   const allocations = [];
   const originalAllocUnsafe = Buffer.allocUnsafe;
-  Buffer.allocUnsafe = function(size, ...args) {
+  Buffer.allocUnsafe = function (size, ...args) {
     allocations.push(Number(size));
     return originalAllocUnsafe.call(Buffer, size, ...args);
   };
   let result;
   try {
-    result = discoverAgents(cwd, 'user');
+    result = discoverAgents(cwd, "user");
   } finally {
     Buffer.allocUnsafe = originalAllocUnsafe;
   }
 
-  assert.deepEqual(result.agents.map(a => a.name), ['small']);
-  assert.ok(allocations.includes(Buffer.byteLength(contents) + 1), 'allocate only the file size plus a growth-detection byte');
-  assert.equal(allocations.some(size => size >= 512 * 1024), false,
-    'small definitions must not allocate the 512 KiB per-file ceiling');
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["small"],
+  );
+  assert.ok(
+    allocations.includes(Buffer.byteLength(contents) + 1),
+    "allocate only the file size plus a growth-detection byte",
+  );
+  assert.equal(
+    allocations.some((size) => size >= 512 * 1024),
+    false,
+    "small definitions must not allocate the 512 KiB per-file ceiling",
+  );
 });
 
-test('oversized agent files are skipped without retaining or echoing prompt contents', () => {
-  const secret = 'OVERSIZED_PRIVATE_AGENT_PROMPT';
+test("oversized agent files are skipped without retaining or echoing prompt contents", () => {
+  const secret = "OVERSIZED_PRIVATE_AGENT_PROMPT";
   const prefix = `---\nname: oversized\ndescription: Too large\n---\n${secret}`;
-  const content = prefix + 'x'.repeat(512 * 1024 + 1 - Buffer.byteLength(prefix));
-  writeFileSync(join(projectDir, 'oversized.md'), content);
+  const content =
+    prefix + "x".repeat(512 * 1024 + 1 - Buffer.byteLength(prefix));
+  writeFileSync(join(projectDir, "oversized.md"), content);
 
-  const result = discoverAgents(cwd, 'project');
+  const result = discoverAgents(cwd, "project");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0].message, /512 KiB size limit/);
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
-test('agent directory scanning is bounded even with many unrelated entries', () => {
-  for (let i = 0; i < 4096; i++) writeFileSync(join(userDir, `ignored-${String(i).padStart(4, '0')}.txt`), '');
-  agent(userDir, 'worker', 'name: worker\ndescription: Worker');
+test("agent directory scanning is bounded even with many unrelated entries", () => {
+  for (let i = 0; i < 4096; i++)
+    writeFileSync(
+      join(userDir, `ignored-${String(i).padStart(4, "0")}.txt`),
+      "",
+    );
+  agent(userDir, "worker", "name: worker\ndescription: Worker");
 
-  const result = discoverAgents(cwd, 'user');
+  const result = discoverAgents(cwd, "user");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0].message, /4096-entry scan limit/);
 });
 
-test('agent file-count overflow fails closed before loading partial definitions', () => {
+test("agent file-count overflow fails closed before loading partial definitions", () => {
   for (let i = 0; i < 257; i++) {
-    agent(userDir, `agent-${String(i).padStart(3, '0')}`, `name: worker-${i}\ndescription: Worker ${i}`);
+    agent(
+      userDir,
+      `agent-${String(i).padStart(3, "0")}`,
+      `name: worker-${i}\ndescription: Worker ${i}`,
+    );
   }
 
-  const result = discoverAgents(cwd, 'user');
+  const result = discoverAgents(cwd, "user");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0].message, /256-definition limit/);
   assert.match(result.diagnostics[0].message, /no definitions .* loaded/);
 });
 
-test('agent directory content is capped in filename order', () => {
+test("agent directory content is capped in filename order", () => {
   const fileBytes = 512 * 1024;
   const count = 9;
   for (let i = 0; i < count; i++) {
     const prefix = `---\nname: worker-${i}\ndescription: Worker ${i}\n---\n`;
-    const content = prefix + 'x'.repeat(fileBytes - Buffer.byteLength(prefix));
-    writeFileSync(join(projectDir, `agent-${String(i).padStart(2, '0')}.md`), content);
+    const content = prefix + "x".repeat(fileBytes - Buffer.byteLength(prefix));
+    writeFileSync(
+      join(projectDir, `agent-${String(i).padStart(2, "0")}.md`),
+      content,
+    );
   }
 
-  const result = discoverAgents(cwd, 'project');
-  assert.deepEqual(result.agents.map(a => a.name), Array.from({ length: 8 }, (_, i) => `worker-${i}`));
+  const result = discoverAgents(cwd, "project");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    Array.from({ length: 8 }, (_, i) => `worker-${i}`),
+  );
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0].message, /4 MiB content limit/);
-  assert.ok(result.agents.every(a => Buffer.byteLength(a.systemPrompt) < fileBytes));
+  assert.ok(
+    result.agents.every((a) => Buffer.byteLength(a.systemPrompt) < fileBytes),
+  );
 });
 
-test('agent diagnostics are bounded with one omission notice', () => {
-  for (let i = 0; i < 80; i++) writeFileSync(join(userDir, `bad-${String(i).padStart(2, '0')}.md`), '---\nname: [invalid\n---\n');
+test("agent diagnostics are bounded with one omission notice", () => {
+  for (let i = 0; i < 80; i++)
+    writeFileSync(
+      join(userDir, `bad-${String(i).padStart(2, "0")}.md`),
+      "---\nname: [invalid\n---\n",
+    );
 
-  const result = discoverAgents(cwd, 'user');
+  const result = discoverAgents(cwd, "user");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 64);
-  assert.equal(result.diagnostics.at(-1).message, 'Further agent diagnostics omitted.');
+  assert.equal(
+    result.diagnostics.at(-1).message,
+    "Further agent diagnostics omitted.",
+  );
 });
 
-test('agent descriptions are bounded by UTF-8 bytes and oversized values are not echoed', () => {
-  const atLimit = 'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES);
-  const multibyteAtLimit = '😀'.repeat(MAX_AGENT_DESCRIPTION_BYTES / 4);
-  const oversized = 'x'.repeat(MAX_AGENT_DESCRIPTION_BYTES + 1);
-  const multibyteOversized = '€'.repeat(Math.floor(MAX_AGENT_DESCRIPTION_BYTES / 3) + 1);
-  assert.equal(Buffer.byteLength(multibyteAtLimit, 'utf8'), MAX_AGENT_DESCRIPTION_BYTES);
+test("agent descriptions are bounded by UTF-8 bytes and oversized values are not echoed", () => {
+  const atLimit = "x".repeat(MAX_AGENT_DESCRIPTION_BYTES);
+  const multibyteAtLimit = "😀".repeat(MAX_AGENT_DESCRIPTION_BYTES / 4);
+  const oversized = "x".repeat(MAX_AGENT_DESCRIPTION_BYTES + 1);
+  const multibyteOversized = "€".repeat(
+    Math.floor(MAX_AGENT_DESCRIPTION_BYTES / 3) + 1,
+  );
+  assert.equal(
+    Buffer.byteLength(multibyteAtLimit, "utf8"),
+    MAX_AGENT_DESCRIPTION_BYTES,
+  );
   assert.ok(multibyteOversized.length < MAX_AGENT_DESCRIPTION_BYTES);
-  assert.ok(Buffer.byteLength(multibyteOversized, 'utf8') > MAX_AGENT_DESCRIPTION_BYTES);
-  agent(userDir, 'a-unicode-limit', `name: a-unicode-limit\ndescription: ${JSON.stringify(multibyteAtLimit)}`);
-  agent(userDir, 'valid', `name: valid\ndescription: ${JSON.stringify(atLimit)}`);
-  agent(userDir, 'oversized', `name: oversized\ndescription: ${JSON.stringify(oversized)}`);
-  agent(userDir, 'multibyte', `name: multibyte\ndescription: ${JSON.stringify(multibyteOversized)}`);
+  assert.ok(
+    Buffer.byteLength(multibyteOversized, "utf8") > MAX_AGENT_DESCRIPTION_BYTES,
+  );
+  agent(
+    userDir,
+    "a-unicode-limit",
+    `name: a-unicode-limit\ndescription: ${JSON.stringify(multibyteAtLimit)}`,
+  );
+  agent(
+    userDir,
+    "valid",
+    `name: valid\ndescription: ${JSON.stringify(atLimit)}`,
+  );
+  agent(
+    userDir,
+    "oversized",
+    `name: oversized\ndescription: ${JSON.stringify(oversized)}`,
+  );
+  agent(
+    userDir,
+    "multibyte",
+    `name: multibyte\ndescription: ${JSON.stringify(multibyteOversized)}`,
+  );
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['a-unicode-limit', 'valid']);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["a-unicode-limit", "valid"],
+  );
   assert.equal(result.agents[0].description, multibyteAtLimit);
   assert.equal(result.agents[1].description, atLimit);
   assert.equal(result.diagnostics.length, 2);
-  assert.ok(result.diagnostics.every(d => d.message ===
-    `description must be well-formed Unicode and at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`));
+  assert.ok(
+    result.diagnostics.every(
+      (d) =>
+        d.message ===
+        `description must be well-formed Unicode and at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
+    ),
+  );
   assert.equal(JSON.stringify(result).includes(oversized), false);
   assert.equal(JSON.stringify(result).includes(multibyteOversized), false);
 });
 
-test('agent names reject oversized UTF-8 and terminal or bidirectional controls', () => {
-  agent(userDir, 'oversized-name', `name: "${'€'.repeat(86)}"\ndescription: Too many UTF-8 bytes`);
-  agent(userDir, 'terminal-control', 'name: "bad\\u001b[31mname"\ndescription: Terminal control');
-  agent(userDir, 'c1-control', 'name: "bad\\u009bname"\ndescription: C1 terminal control');
-  agent(userDir, 'line-control', 'name: "bad\\nname"\ndescription: Newline');
-  agent(userDir, 'bidi-control', 'name: "bad\\u202ename"\ndescription: Bidirectional control');
-  agent(userDir, 'valid-unicode', 'name: café\ndescription: Valid Unicode name');
+test("agent names reject oversized UTF-8 and terminal or bidirectional controls", () => {
+  agent(
+    userDir,
+    "oversized-name",
+    `name: "${"€".repeat(86)}"\ndescription: Too many UTF-8 bytes`,
+  );
+  agent(
+    userDir,
+    "terminal-control",
+    'name: "bad\\u001b[31mname"\ndescription: Terminal control',
+  );
+  agent(
+    userDir,
+    "c1-control",
+    'name: "bad\\u009bname"\ndescription: C1 terminal control',
+  );
+  agent(userDir, "line-control", 'name: "bad\\nname"\ndescription: Newline');
+  agent(
+    userDir,
+    "bidi-control",
+    'name: "bad\\u202ename"\ndescription: Bidirectional control',
+  );
+  agent(
+    userDir,
+    "valid-unicode",
+    "name: café\ndescription: Valid Unicode name",
+  );
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['café']);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["café"],
+  );
   assert.equal(result.diagnostics.length, 5);
-  assert.ok(result.diagnostics.every(d => d.message === 'name must be well-formed Unicode, at most 256 UTF-8 bytes, and contain no control or bidirectional formatting characters.'));
+  assert.ok(
+    result.diagnostics.every(
+      (d) =>
+        d.message ===
+        "name must be well-formed Unicode, at most 256 UTF-8 bytes, and contain no control or bidirectional formatting characters.",
+    ),
+  );
 });
 
-test('malformed YAML and invalid definitions do not break discovery', () => {
-  agent(userDir, 'bad-yaml', 'name: [unterminated');
-  agent(userDir, 'scalar', 'just a scalar');
-  agent(userDir, 'blank-name', 'name: "  "\ndescription: Blank');
-  agent(userDir, 'bad-tools', 'name: unsafe\ndescription: Invalid allowlist\ntools: [read, 42]');
-  agent(userDir, 'bad-thinking', 'name: wrong\ndescription: Invalid thinking\nthinking: extreme');
-  agent(userDir, 'good', 'name: worker\ndescription: Valid worker');
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['worker']);
+test("malformed YAML and invalid definitions do not break discovery", () => {
+  agent(userDir, "bad-yaml", "name: [unterminated");
+  agent(userDir, "scalar", "just a scalar");
+  agent(userDir, "blank-name", 'name: "  "\ndescription: Blank');
+  agent(
+    userDir,
+    "bad-tools",
+    "name: unsafe\ndescription: Invalid allowlist\ntools: [read, 42]",
+  );
+  agent(
+    userDir,
+    "bad-thinking",
+    "name: wrong\ndescription: Invalid thinking\nthinking: extreme",
+  );
+  agent(userDir, "good", "name: worker\ndescription: Valid worker");
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["worker"],
+  );
   assert.equal(result.diagnostics.length, 5);
-  assert.ok(result.diagnostics.every(d => d.source === 'user' && d.filePath && d.message));
+  assert.ok(
+    result.diagnostics.every(
+      (d) => d.source === "user" && d.filePath && d.message,
+    ),
+  );
 });
 
-test('malformed YAML diagnostics never echo private frontmatter content', () => {
-  const secret = 'PRIVATE_AGENT_FRONTMATTER_SECRET';
-  writeFileSync(join(userDir, 'private-malformed.md'),
-    `---\nname: [${secret}\ndescription: Private malformed metadata\n---\nInstructions.`);
+test("malformed YAML diagnostics never echo private frontmatter content", () => {
+  const secret = "PRIVATE_AGENT_FRONTMATTER_SECRET";
+  writeFileSync(
+    join(userDir, "private-malformed.md"),
+    `---\nname: [${secret}\ndescription: Private malformed metadata\n---\nInstructions.`,
+  );
 
-  const result = discoverAgents(cwd, 'user');
+  const result = discoverAgents(cwd, "user");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].message, 'Invalid YAML frontmatter.');
+  assert.equal(result.diagnostics[0].message, "Invalid YAML frontmatter.");
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
-test('project agent discovery rejects excessive YAML aliases before approval', () => {
-  const anchors = ['a0: &a0 [harmless]',
-    ...Array.from({ length: 7 }, (_, index) => `a${index + 1}: &a${index + 1} [*a${index}, *a${index}]`)];
-  writeFileSync(join(projectDir, 'alias-expansion.md'), [
-    '---', 'name: alias-expansion', 'description: Alias expansion test', ...anchors, 'unused: *a7', '---', 'Instructions.',
-  ].join('\n'));
+test("project agent discovery rejects excessive YAML aliases before approval", () => {
+  const anchors = [
+    "a0: &a0 [harmless]",
+    ...Array.from(
+      { length: 7 },
+      (_, index) => `a${index + 1}: &a${index + 1} [*a${index}, *a${index}]`,
+    ),
+  ];
+  writeFileSync(
+    join(projectDir, "alias-expansion.md"),
+    [
+      "---",
+      "name: alias-expansion",
+      "description: Alias expansion test",
+      ...anchors,
+      "unused: *a7",
+      "---",
+      "Instructions.",
+    ].join("\n"),
+  );
 
-  const result = discoverAgents(cwd, 'project');
+  const result = discoverAgents(cwd, "project");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].source, 'project');
-  assert.equal(result.diagnostics[0].message, 'Invalid YAML frontmatter.');
+  assert.equal(result.diagnostics[0].source, "project");
+  assert.equal(result.diagnostics[0].message, "Invalid YAML frontmatter.");
 });
 
-test('agent definitions with invalid UTF-8 are rejected without exposing prompt bytes', () => {
-  const privatePrompt = 'PRIVATE_INVALID_UTF8_PROMPT';
-  writeFileSync(join(userDir, 'bad-utf8.md'), Buffer.concat([
-    Buffer.from(`---\nname: bad-utf8\ndescription: Invalid encoding\n---\n${privatePrompt}`),
-    Buffer.from([0xc3, 0x28]),
-  ]));
-  agent(userDir, 'valid', 'name: worker\ndescription: Valid worker');
+test("agent definitions with invalid UTF-8 are rejected without exposing prompt bytes", () => {
+  const privatePrompt = "PRIVATE_INVALID_UTF8_PROMPT";
+  writeFileSync(
+    join(userDir, "bad-utf8.md"),
+    Buffer.concat([
+      Buffer.from(
+        `---\nname: bad-utf8\ndescription: Invalid encoding\n---\n${privatePrompt}`,
+      ),
+      Buffer.from([0xc3, 0x28]),
+    ]),
+  );
+  agent(userDir, "valid", "name: worker\ndescription: Valid worker");
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['worker']);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["worker"],
+  );
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].message, 'Agent definition is not valid UTF-8.');
+  assert.equal(
+    result.diagnostics[0].message,
+    "Agent definition is not valid UTF-8.",
+  );
   assert.equal(JSON.stringify(result).includes(privatePrompt), false);
-  assert.equal(JSON.stringify(result).includes('�'), false);
+  assert.equal(JSON.stringify(result).includes("�"), false);
 });
 
-test('agent metadata rejects YAML escapes that decode to unpaired surrogates', () => {
-  agent(userDir, 'bad-name-surrogate', 'name: "\\uD800"\ndescription: Invalid name');
-  agent(userDir, 'bad-description-surrogate', 'name: bad-description\ndescription: "\\uD800"');
-  agent(userDir, 'bad-model-surrogate', 'name: bad-model\ndescription: Invalid model\nmodel: "\\uD800"');
-  agent(userDir, 'bad-tools-surrogate', 'name: bad-tools\ndescription: Invalid tools\ntools: ["\\uD800"]');
-  agent(userDir, 'valid', 'name: worker\ndescription: Valid worker');
+test("agent metadata rejects YAML escapes that decode to unpaired surrogates", () => {
+  agent(
+    userDir,
+    "bad-name-surrogate",
+    'name: "\\uD800"\ndescription: Invalid name',
+  );
+  agent(
+    userDir,
+    "bad-description-surrogate",
+    'name: bad-description\ndescription: "\\uD800"',
+  );
+  agent(
+    userDir,
+    "bad-model-surrogate",
+    'name: bad-model\ndescription: Invalid model\nmodel: "\\uD800"',
+  );
+  agent(
+    userDir,
+    "bad-tools-surrogate",
+    'name: bad-tools\ndescription: Invalid tools\ntools: ["\\uD800"]',
+  );
+  agent(userDir, "valid", "name: worker\ndescription: Valid worker");
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['worker']);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["worker"],
+  );
   assert.equal(result.diagnostics.length, 4);
-  assert.ok(result.diagnostics.some(d => d.message.startsWith('name must be well-formed Unicode')));
-  assert.ok(result.diagnostics.some(d => d.message.startsWith('description must be well-formed Unicode')));
-  assert.ok(result.diagnostics.some(d => d.message.startsWith('model must be well-formed Unicode')));
-  assert.ok(result.diagnostics.some(d => d.message === 'tools entries must contain well-formed Unicode.'));
-  assert.equal(JSON.stringify(result).includes('\\ud800'), false);
+  assert.ok(
+    result.diagnostics.some((d) =>
+      d.message.startsWith("name must be well-formed Unicode"),
+    ),
+  );
+  assert.ok(
+    result.diagnostics.some((d) =>
+      d.message.startsWith("description must be well-formed Unicode"),
+    ),
+  );
+  assert.ok(
+    result.diagnostics.some((d) =>
+      d.message.startsWith("model must be well-formed Unicode"),
+    ),
+  );
+  assert.ok(
+    result.diagnostics.some(
+      (d) => d.message === "tools entries must contain well-formed Unicode.",
+    ),
+  );
+  assert.equal(JSON.stringify(result).includes("\\ud800"), false);
 });
 
-test('agent filename precedence and name ordering are locale-independent', () => {
-  agent(userDir, 'a', 'name: worker\ndescription: Dot filename');
-  agent(userDir, 'a_', 'name: worker\ndescription: Underscore filename');
-  agent(userDir, 'a-agent', 'name: a\ndescription: A');
-  agent(userDir, 'aa-agent', 'name: aa\ndescription: AA');
-  agent(userDir, 'z-agent', 'name: z\ndescription: Z');
-  agent(userDir, 'accented-agent', 'name: á\ndescription: Accented');
+test("agent filename precedence and name ordering are locale-independent", () => {
+  agent(userDir, "a", "name: worker\ndescription: Dot filename");
+  agent(userDir, "a_", "name: worker\ndescription: Underscore filename");
+  agent(userDir, "a-agent", "name: a\ndescription: A");
+  agent(userDir, "aa-agent", "name: aa\ndescription: AA");
+  agent(userDir, "z-agent", "name: z\ndescription: Z");
+  agent(userDir, "accented-agent", "name: á\ndescription: Accented");
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['a', 'aa', 'worker', 'z', 'á']);
-  assert.equal(result.agents.find(a => a.name === 'worker').description, 'Underscore filename');
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["a", "aa", "worker", "z", "á"],
+  );
+  assert.equal(
+    result.agents.find((a) => a.name === "worker").description,
+    "Underscore filename",
+  );
 });
 
-test('agent tags are bounded portable slugs normalized for discovery', () => {
-  assert.equal(normalizeAgentTag('Code-Review'), 'code-review');
-  assert.equal(normalizeAgentTag('tag\n'), undefined);
+test("agent tags are bounded portable slugs normalized for discovery", () => {
+  assert.equal(normalizeAgentTag("Code-Review"), "code-review");
+  assert.equal(normalizeAgentTag("tag\n"), undefined);
   assert.equal(parseAgentTags(undefined), undefined);
   assert.deepEqual(parseAgentTags([]), []);
-  assert.deepEqual(parseAgentTags(['Security-Audit', 'security-audit', 'Docs_v2', '42', 'v1.2']),
-    ['security-audit', 'docs_v2', '42', 'v1.2'], 'tags are lowercase and duplicates are removed in order');
-  assert.equal(parseAgentTags(['x'.repeat(MAX_AGENT_TAG_BYTES)])[0].length, MAX_AGENT_TAG_BYTES);
-  assert.equal(parseAgentTags(Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) => `tag-${index}`)).length,
-    MAX_AGENT_TAG_COUNT);
+  assert.deepEqual(
+    parseAgentTags([
+      "Security-Audit",
+      "security-audit",
+      "Docs_v2",
+      "42",
+      "v1.2",
+    ]),
+    ["security-audit", "docs_v2", "42", "v1.2"],
+    "tags are lowercase and duplicates are removed in order",
+  );
+  assert.equal(
+    parseAgentTags(["x".repeat(MAX_AGENT_TAG_BYTES)])[0].length,
+    MAX_AGENT_TAG_BYTES,
+  );
+  assert.equal(
+    parseAgentTags(
+      Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) => `tag-${index}`),
+    ).length,
+    MAX_AGENT_TAG_COUNT,
+  );
 
-  const oversizedAggregate = Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) =>
-    `${String(index).padStart(2, '0')}${'x'.repeat(MAX_AGENT_TAG_BYTES - 2)}`);
-  assert.ok(oversizedAggregate.reduce((size, tag) => size + tag.length, MAX_AGENT_TAG_COUNT - 1) > MAX_AGENT_TAG_LIST_BYTES);
+  const oversizedAggregate = Array.from(
+    { length: MAX_AGENT_TAG_COUNT },
+    (_, index) =>
+      `${String(index).padStart(2, "0")}${"x".repeat(MAX_AGENT_TAG_BYTES - 2)}`,
+  );
+  assert.ok(
+    oversizedAggregate.reduce(
+      (size, tag) => size + tag.length,
+      MAX_AGENT_TAG_COUNT - 1,
+    ) > MAX_AGENT_TAG_LIST_BYTES,
+  );
   for (const value of [
-    null, 'security', Array.from({ length: MAX_AGENT_TAG_COUNT + 1 }, (_, index) => `tag-${index}`),
-    [''], ['-leading'], ['has space'], ['unicode-é'], ['tag/segment'], ['tag,other'], ['tag\n'],
-    ['x'.repeat(MAX_AGENT_TAG_BYTES + 1)], oversizedAggregate,
-  ]) assert.throws(() => parseAgentTags(value), /tags/);
+    null,
+    "security",
+    Array.from(
+      { length: MAX_AGENT_TAG_COUNT + 1 },
+      (_, index) => `tag-${index}`,
+    ),
+    [""],
+    ["-leading"],
+    ["has space"],
+    ["unicode-é"],
+    ["tag/segment"],
+    ["tag,other"],
+    ["tag\n"],
+    ["x".repeat(MAX_AGENT_TAG_BYTES + 1)],
+    oversizedAggregate,
+  ])
+    assert.throws(() => parseAgentTags(value), /tags/);
 
-  agent(userDir, 'valid-tags', `name: tagged\ndescription: Tagged agent\ntags: [Security-Audit, docs_v2]`);
-  agent(userDir, 'invalid-tags', `name: invalid-tags\ndescription: Invalid tag\ntags: [private/secret]`);
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(entry => [entry.name, entry.tags]), [['tagged', ['security-audit', 'docs_v2']]]);
+  agent(
+    userDir,
+    "valid-tags",
+    `name: tagged\ndescription: Tagged agent\ntags: [Security-Audit, docs_v2]`,
+  );
+  agent(
+    userDir,
+    "invalid-tags",
+    `name: invalid-tags\ndescription: Invalid tag\ntags: [private/secret]`,
+  );
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((entry) => [entry.name, entry.tags]),
+    [["tagged", ["security-audit", "docs_v2"]]],
+  );
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0].message, /tags entries must be/);
-  assert.equal(JSON.stringify(result).includes('private/secret'), false,
-    'invalid tag payloads are not copied into diagnostics');
+  assert.equal(
+    JSON.stringify(result).includes("private/secret"),
+    false,
+    "invalid tag payloads are not copied into diagnostics",
+  );
 });
 
-test('agent unsetEnv configuration accepts bounded portable variable names and rejects the recursion guard', () => {
+test("agent unsetEnv configuration accepts bounded portable variable names and rejects the recursion guard", () => {
   assert.equal(parseAgentUnsetEnv(undefined), undefined);
   assert.deepEqual(parseAgentUnsetEnv([]), []);
-  assert.deepEqual(parseAgentUnsetEnv(['AWS_SECRET_ACCESS_KEY', 'HOME', 'AWS_SECRET_ACCESS_KEY']),
-    ['AWS_SECRET_ACCESS_KEY', 'HOME'], 'exact duplicate names are removed while order is preserved');
-  assert.equal(parseAgentUnsetEnv(['x'.repeat(MAX_AGENT_UNSET_ENV_BYTES)])[0].length, MAX_AGENT_UNSET_ENV_BYTES);
-  assert.equal(parseAgentUnsetEnv(Array.from({ length: MAX_AGENT_UNSET_ENV_COUNT }, (_, index) => `ENV_${index}`)).length,
-    MAX_AGENT_UNSET_ENV_COUNT);
+  assert.deepEqual(
+    parseAgentUnsetEnv([
+      "AWS_SECRET_ACCESS_KEY",
+      "HOME",
+      "AWS_SECRET_ACCESS_KEY",
+    ]),
+    ["AWS_SECRET_ACCESS_KEY", "HOME"],
+    "exact duplicate names are removed while order is preserved",
+  );
+  assert.equal(
+    parseAgentUnsetEnv(["x".repeat(MAX_AGENT_UNSET_ENV_BYTES)])[0].length,
+    MAX_AGENT_UNSET_ENV_BYTES,
+  );
+  assert.equal(
+    parseAgentUnsetEnv(
+      Array.from(
+        { length: MAX_AGENT_UNSET_ENV_COUNT },
+        (_, index) => `ENV_${index}`,
+      ),
+    ).length,
+    MAX_AGENT_UNSET_ENV_COUNT,
+  );
   for (const value of [
-    null, 'AWS_SECRET_ACCESS_KEY', Array.from({ length: MAX_AGENT_UNSET_ENV_COUNT + 1 }, (_, index) => `ENV_${index}`),
-    [''], ['1INVALID'], ['HAS-DASH'], ['HAS=EQUALS'], ['PI_SUBAGENTS_NESTING_DEPTH'], ['pi_subagents_nesting_depth'],
-    ['x'.repeat(MAX_AGENT_UNSET_ENV_BYTES + 1)], ['A'.repeat(MAX_AGENT_UNSET_ENV_BYTES / 2), 'B'.repeat(MAX_AGENT_UNSET_ENV_BYTES / 2)],
-  ]) assert.throws(() => parseAgentUnsetEnv(value), /unsetEnv/);
+    null,
+    "AWS_SECRET_ACCESS_KEY",
+    Array.from(
+      { length: MAX_AGENT_UNSET_ENV_COUNT + 1 },
+      (_, index) => `ENV_${index}`,
+    ),
+    [""],
+    ["1INVALID"],
+    ["HAS-DASH"],
+    ["HAS=EQUALS"],
+    ["PI_SUBAGENTS_NESTING_DEPTH"],
+    ["pi_subagents_nesting_depth"],
+    ["x".repeat(MAX_AGENT_UNSET_ENV_BYTES + 1)],
+    [
+      "A".repeat(MAX_AGENT_UNSET_ENV_BYTES / 2),
+      "B".repeat(MAX_AGENT_UNSET_ENV_BYTES / 2),
+    ],
+  ])
+    assert.throws(() => parseAgentUnsetEnv(value), /unsetEnv/);
 });
 
-test('model selectors are byte-bounded before becoming child arguments', () => {
-  const atLimit = 'x'.repeat(MAX_MODEL_SELECTOR_BYTES);
-  agent(userDir, 'valid-model', `name: valid\ndescription: Valid model\nmodel: "${atLimit}"`);
-  agent(userDir, 'oversized-model', `name: oversized\ndescription: Oversized model\nmodel: "${'x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1)}"`);
-  agent(userDir, 'multibyte-model', `name: multibyte\ndescription: Oversized UTF-8 model\nmodel: "${'€'.repeat(Math.ceil(MAX_MODEL_SELECTOR_BYTES / 3))}"`);
-  agent(userDir, 'control-model', 'name: control\ndescription: Control character model\nmodel: "fake\\u001b/model"');
+test("model selectors are byte-bounded before becoming child arguments", () => {
+  const atLimit = "x".repeat(MAX_MODEL_SELECTOR_BYTES);
+  agent(
+    userDir,
+    "valid-model",
+    `name: valid\ndescription: Valid model\nmodel: "${atLimit}"`,
+  );
+  agent(
+    userDir,
+    "oversized-model",
+    `name: oversized\ndescription: Oversized model\nmodel: "${"x".repeat(MAX_MODEL_SELECTOR_BYTES + 1)}"`,
+  );
+  agent(
+    userDir,
+    "multibyte-model",
+    `name: multibyte\ndescription: Oversized UTF-8 model\nmodel: "${"€".repeat(Math.ceil(MAX_MODEL_SELECTOR_BYTES / 3))}"`,
+  );
+  agent(
+    userDir,
+    "control-model",
+    'name: control\ndescription: Control character model\nmodel: "fake\\u001b/model"',
+  );
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['valid']);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["valid"],
+  );
   assert.equal(result.agents[0].model, atLimit);
   assert.equal(result.diagnostics.length, 3);
-  assert.ok(result.diagnostics.every(d => d.message ===
-    `model must be well-formed Unicode, at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes, and contain no control characters.`));
-  assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_MODEL_SELECTOR_BYTES + 1)), false);
+  assert.ok(
+    result.diagnostics.every(
+      (d) =>
+        d.message ===
+        `model must be well-formed Unicode, at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes, and contain no control characters.`,
+    ),
+  );
+  assert.equal(
+    JSON.stringify(result).includes("x".repeat(MAX_MODEL_SELECTOR_BYTES + 1)),
+    false,
+  );
 });
 
-test('agent tool allowlists reject ambiguous names and modifiers and are bounded before becoming a child argument', () => {
-  const atLimit = 'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES);
-  const commaTool = 'read,bash';
+test("agent tool allowlists reject ambiguous names and modifiers and are bounded before becoming a child argument", () => {
+  const atLimit = "x".repeat(MAX_AGENT_TOOL_LIST_BYTES);
+  const commaTool = "read,bash";
   const nulTool = `read${String.fromCharCode(0)}bash`;
   const escapeTool = `read${String.fromCharCode(27)}bash`;
-  const addModifier = '+private-tool';
-  const removeModifier = '-bash';
-  agent(userDir, 'valid-array-tools', `name: valid-array-tools\ndescription: Separate array entries\ntools: ${JSON.stringify(['read', 'bash'])}`);
-  agent(userDir, 'valid-tools', `name: valid-tools\ndescription: At-limit tool argument\ntools: ["${atLimit}"]`);
-  agent(userDir, 'oversized-tools', `name: oversized-tools\ndescription: Oversized tool argument\ntools: ["${'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)}"]`);
-  agent(userDir, 'multibyte-tools', `name: multibyte-tools\ndescription: Oversized UTF-8 tool argument\ntools: ["${'€'.repeat(Math.ceil(MAX_AGENT_TOOL_LIST_BYTES / 3))}"]`);
-  agent(userDir, 'oversized-list-string', `name: oversized-list-string\ndescription: Oversized comma-separated list\ntools: "${'x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)}"`);
-  agent(userDir, 'multibyte-list-string', `name: multibyte-list-string\ndescription: Oversized UTF-8 comma-separated list\ntools: "${'€'.repeat(Math.ceil(MAX_AGENT_TOOL_LIST_BYTES / 3))}"`);
-  agent(userDir, 'many-tools', `name: many-tools\ndescription: Too many tool names\ntools: ${JSON.stringify(Array.from({ length: MAX_AGENT_TOOL_COUNT + 1 }, (_, i) => `tool-${i}`))}`);
-  agent(userDir, 'comma-array', `name: comma-array\ndescription: Ambiguous comma tool\ntools: ${JSON.stringify([commaTool])}`);
-  agent(userDir, 'nul-array', `name: nul-array\ndescription: NUL tool\ntools: ${JSON.stringify([nulTool])}`);
-  agent(userDir, 'escape-array', `name: escape-array\ndescription: Control tool\ntools: ${JSON.stringify([escapeTool])}`);
-  agent(userDir, 'add-modifier', `name: add-modifier\ndescription: Modifier entry\ntools: ${JSON.stringify([addModifier])}`);
-  agent(userDir, 'remove-modifier', `name: remove-modifier\ndescription: Modifier entry\ntools: ${JSON.stringify([removeModifier])}`);
+  const addModifier = "+private-tool";
+  const removeModifier = "-bash";
+  agent(
+    userDir,
+    "valid-array-tools",
+    `name: valid-array-tools\ndescription: Separate array entries\ntools: ${JSON.stringify(["read", "bash"])}`,
+  );
+  agent(
+    userDir,
+    "valid-tools",
+    `name: valid-tools\ndescription: At-limit tool argument\ntools: ["${atLimit}"]`,
+  );
+  agent(
+    userDir,
+    "oversized-tools",
+    `name: oversized-tools\ndescription: Oversized tool argument\ntools: ["${"x".repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)}"]`,
+  );
+  agent(
+    userDir,
+    "multibyte-tools",
+    `name: multibyte-tools\ndescription: Oversized UTF-8 tool argument\ntools: ["${"€".repeat(Math.ceil(MAX_AGENT_TOOL_LIST_BYTES / 3))}"]`,
+  );
+  agent(
+    userDir,
+    "oversized-list-string",
+    `name: oversized-list-string\ndescription: Oversized comma-separated list\ntools: "${"x".repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)}"`,
+  );
+  agent(
+    userDir,
+    "multibyte-list-string",
+    `name: multibyte-list-string\ndescription: Oversized UTF-8 comma-separated list\ntools: "${"€".repeat(Math.ceil(MAX_AGENT_TOOL_LIST_BYTES / 3))}"`,
+  );
+  agent(
+    userDir,
+    "many-tools",
+    `name: many-tools\ndescription: Too many tool names\ntools: ${JSON.stringify(Array.from({ length: MAX_AGENT_TOOL_COUNT + 1 }, (_, i) => `tool-${i}`))}`,
+  );
+  agent(
+    userDir,
+    "comma-array",
+    `name: comma-array\ndescription: Ambiguous comma tool\ntools: ${JSON.stringify([commaTool])}`,
+  );
+  agent(
+    userDir,
+    "nul-array",
+    `name: nul-array\ndescription: NUL tool\ntools: ${JSON.stringify([nulTool])}`,
+  );
+  agent(
+    userDir,
+    "escape-array",
+    `name: escape-array\ndescription: Control tool\ntools: ${JSON.stringify([escapeTool])}`,
+  );
+  agent(
+    userDir,
+    "add-modifier",
+    `name: add-modifier\ndescription: Modifier entry\ntools: ${JSON.stringify([addModifier])}`,
+  );
+  agent(
+    userDir,
+    "remove-modifier",
+    `name: remove-modifier\ndescription: Modifier entry\ntools: ${JSON.stringify([removeModifier])}`,
+  );
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(a => a.name), ['valid-array-tools', 'valid-tools']);
-  assert.deepEqual(result.agents[0].tools, ['read', 'bash']);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["valid-array-tools", "valid-tools"],
+  );
+  assert.deepEqual(result.agents[0].tools, ["read", "bash"]);
   assert.deepEqual(result.agents[1].tools, [atLimit]);
   assert.equal(result.diagnostics.length, 10);
-  assert.ok(result.diagnostics.every(d => /tools/.test(d.message)));
-  assert.equal(JSON.stringify(result).includes('x'.repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)), false);
+  assert.ok(result.diagnostics.every((d) => /tools/.test(d.message)));
+  assert.equal(
+    JSON.stringify(result).includes("x".repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)),
+    false,
+  );
   assert.equal(JSON.stringify(result).includes(commaTool), false);
   assert.equal(JSON.stringify(result).includes(nulTool), false);
   assert.equal(JSON.stringify(result).includes(escapeTool), false);
   assert.equal(JSON.stringify(result).includes(addModifier), false);
   assert.equal(JSON.stringify(result).includes(removeModifier), false);
-  assert.equal(result.diagnostics.filter(d => d.message ===
-    "tools entries must not contain commas, control characters, or start with '+' or '-'.").length, 5);
+  assert.equal(
+    result.diagnostics.filter(
+      (d) =>
+        d.message ===
+        "tools entries must not contain commas, control characters, or start with '+' or '-'.",
+    ).length,
+    5,
+  );
 });
 
-test('agent runtime timeout defaults are integer-bounded and invalid definitions fail closed', () => {
-  agent(userDir, 'minimum-timeout', `name: minimum-timeout\ndescription: Minimum timeout\ntimeoutMs: 1`);
-  agent(userDir, 'maximum-timeout', `name: maximum-timeout\ndescription: Maximum timeout\ntimeoutMs: ${MAX_TIMEOUT_MS}`);
+test("agent runtime timeout defaults are integer-bounded and invalid definitions fail closed", () => {
+  agent(
+    userDir,
+    "minimum-timeout",
+    `name: minimum-timeout\ndescription: Minimum timeout\ntimeoutMs: 1`,
+  );
+  agent(
+    userDir,
+    "maximum-timeout",
+    `name: maximum-timeout\ndescription: Maximum timeout\ntimeoutMs: ${MAX_TIMEOUT_MS}`,
+  );
   const invalid = [
-    ['zero', '0'], ['negative', '-1'], ['fraction', '1.5'], ['over-limit', String(MAX_TIMEOUT_MS + 1)],
-    ['string', '"100"'], ['boolean', 'true'], ['null', 'null'], ['object', '{ value: 100 }'], ['array', '[100]'],
+    ["zero", "0"],
+    ["negative", "-1"],
+    ["fraction", "1.5"],
+    ["over-limit", String(MAX_TIMEOUT_MS + 1)],
+    ["string", '"100"'],
+    ["boolean", "true"],
+    ["null", "null"],
+    ["object", "{ value: 100 }"],
+    ["array", "[100]"],
   ];
   for (const [name, value] of invalid) {
-    agent(userDir, `timeout-${name}`, `name: timeout-${name}\ndescription: Invalid timeout\ntimeoutMs: ${value}`);
+    agent(
+      userDir,
+      `timeout-${name}`,
+      `name: timeout-${name}\ndescription: Invalid timeout\ntimeoutMs: ${value}`,
+    );
   }
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(entry => [entry.name, entry.timeoutMs]), [
-    ['maximum-timeout', MAX_TIMEOUT_MS], ['minimum-timeout', 1],
-  ]);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((entry) => [entry.name, entry.timeoutMs]),
+    [
+      ["maximum-timeout", MAX_TIMEOUT_MS],
+      ["minimum-timeout", 1],
+    ],
+  );
   assert.equal(result.diagnostics.length, invalid.length);
-  assert.ok(result.diagnostics.every(diagnostic =>
-    diagnostic.message === `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`));
-  assert.equal(JSON.stringify(result).includes('Invalid timeout'), false);
+  assert.ok(
+    result.diagnostics.every(
+      (diagnostic) =>
+        diagnostic.message ===
+        `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`,
+    ),
+  );
+  assert.equal(JSON.stringify(result).includes("Invalid timeout"), false);
 });
 
-test('agent working-directory defaults are non-empty, well-formed, and bounded', () => {
-  const atLimit = 'x'.repeat(MAX_WORKING_DIRECTORY_LENGTH);
-  agent(userDir, 'valid-cwd', `name: valid-cwd\ndescription: Valid cwd\ncwd: ${JSON.stringify(atLimit)}`);
+test("agent working-directory defaults are non-empty, well-formed, and bounded", () => {
+  const atLimit = "x".repeat(MAX_WORKING_DIRECTORY_LENGTH);
+  agent(
+    userDir,
+    "valid-cwd",
+    `name: valid-cwd\ndescription: Valid cwd\ncwd: ${JSON.stringify(atLimit)}`,
+  );
   const invalid = [
-    ['empty', JSON.stringify('')], ['null', 'null'], ['number', '42'],
-    ['oversized', JSON.stringify('x'.repeat(MAX_WORKING_DIRECTORY_LENGTH + 1))],
-    ['nul', JSON.stringify(`dir${String.fromCharCode(0)}name`)],
-    ['surrogate', JSON.stringify(String.fromCharCode(0xd800))],
+    ["empty", JSON.stringify("")],
+    ["null", "null"],
+    ["number", "42"],
+    ["oversized", JSON.stringify("x".repeat(MAX_WORKING_DIRECTORY_LENGTH + 1))],
+    ["nul", JSON.stringify(`dir${String.fromCharCode(0)}name`)],
+    ["surrogate", JSON.stringify(String.fromCharCode(0xd800))],
   ];
   for (const [name, value] of invalid) {
-    agent(userDir, `invalid-cwd-${name}`, `name: invalid-cwd-${name}\ndescription: Invalid cwd\ncwd: ${value}`);
+    agent(
+      userDir,
+      `invalid-cwd-${name}`,
+      `name: invalid-cwd-${name}\ndescription: Invalid cwd\ncwd: ${value}`,
+    );
   }
 
-  const result = discoverAgents(cwd, 'user');
-  assert.deepEqual(result.agents.map(entry => entry.name), ['valid-cwd']);
+  const result = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    result.agents.map((entry) => entry.name),
+    ["valid-cwd"],
+  );
   assert.equal(result.agents[0].cwd, atLimit);
   assert.equal(result.diagnostics.length, invalid.length);
-  assert.ok(result.diagnostics.every(diagnostic => /cwd must be a non-empty path/.test(diagnostic.message)));
-  assert.equal(JSON.stringify(result).includes('Invalid cwd'), false);
+  assert.ok(
+    result.diagnostics.every((diagnostic) =>
+      /cwd must be a non-empty path/.test(diagnostic.message),
+    ),
+  );
+  assert.equal(JSON.stringify(result).includes("Invalid cwd"), false);
 });
 
-test('normalizes config, preserves explicit empty tools, and supports thinking', () => {
-  agent(userDir, 'z', 'name: " z "\ndescription: " Worker Z "\nmodel: "  "\ntools: []\nthinking: off');
-  agent(userDir, 'a', 'name: a\ndescription: Worker A\ntools: "read, bash,read, "\nmodel: " fake/model "\nthinking: max');
-  agent(userDir, 'b', 'name: b\ndescription: Worker B');
-  const { agents, diagnostics } = discoverAgents(cwd, 'user');
-  assert.deepEqual(agents.map(a => a.name), ['a', 'b', 'z']);
-  assert.deepEqual(agents[0].tools, ['read', 'bash']);
-  assert.equal(agents[0].model, 'fake/model');
-  assert.equal(agents[0].thinking, 'max');
+test("normalizes config, preserves explicit empty tools, and supports thinking", () => {
+  agent(
+    userDir,
+    "z",
+    'name: " z "\ndescription: " Worker Z "\nmodel: "  "\ntools: []\nthinking: off',
+  );
+  agent(
+    userDir,
+    "a",
+    'name: a\ndescription: Worker A\ntools: "read, bash,read, "\nmodel: " fake/model "\nthinking: max',
+  );
+  agent(userDir, "b", "name: b\ndescription: Worker B");
+  const { agents, diagnostics } = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    agents.map((a) => a.name),
+    ["a", "b", "z"],
+  );
+  assert.deepEqual(agents[0].tools, ["read", "bash"]);
+  assert.equal(agents[0].model, "fake/model");
+  assert.equal(agents[0].thinking, "max");
   assert.equal(agents[1].tools, undefined);
   assert.deepEqual(agents[2].tools, []);
-  assert.equal(agents[2].thinking, 'off');
+  assert.equal(agents[2].thinking, "off");
   assert.equal(agents[2].model, undefined);
-  assert.equal(agents[2].description, 'Worker Z');
+  assert.equal(agents[2].description, "Worker Z");
   assert.deepEqual(diagnostics, []);
 });
 
-test('duplicate names within a directory report both paths without changing precedence', () => {
-  agent(userDir, 'a-worker', 'name: worker\ndescription: First');
-  agent(userDir, 'z-worker', 'name: " worker "\ndescription: Last');
-  const result = discoverAgents(cwd, 'user');
+test("duplicate names within a directory report both paths without changing precedence", () => {
+  agent(userDir, "a-worker", "name: worker\ndescription: First");
+  agent(userDir, "z-worker", 'name: " worker "\ndescription: Last');
+  const result = discoverAgents(cwd, "user");
   assert.equal(result.agents.length, 1);
-  assert.equal(result.agents[0].description, 'Last');
+  assert.equal(result.agents[0].description, "Last");
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].filePath, join(userDir, 'z-worker.md'));
+  assert.equal(result.diagnostics[0].filePath, join(userDir, "z-worker.md"));
   assert.match(result.diagnostics[0].message, /Duplicate/);
-  assert.ok(result.diagnostics[0].message.includes(join(userDir, 'a-worker.md')));
-  assert.equal(result.diagnostics[0].message.includes('Instructions'), false);
+  assert.ok(
+    result.diagnostics[0].message.includes(join(userDir, "a-worker.md")),
+  );
+  assert.equal(result.diagnostics[0].message.includes("Instructions"), false);
 });
 
-test('malformed duplicates do not override valid definitions and cross-scope overrides are intentional', () => {
-  agent(userDir, 'a-worker', 'name: worker\ndescription: Personal');
-  agent(userDir, 'z-invalid', 'name: worker\ndescription: Invalid\ntools: [42]');
-  agent(projectDir, 'worker', 'name: worker\ndescription: Project');
-  const result = discoverAgents(cwd, 'both');
-  assert.equal(result.agents[0].description, 'Project');
+test("malformed duplicates do not override valid definitions and cross-scope overrides are intentional", () => {
+  agent(userDir, "a-worker", "name: worker\ndescription: Personal");
+  agent(
+    userDir,
+    "z-invalid",
+    "name: worker\ndescription: Invalid\ntools: [42]",
+  );
+  agent(projectDir, "worker", "name: worker\ndescription: Project");
+  const result = discoverAgents(cwd, "both");
+  assert.equal(result.agents[0].description, "Project");
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0].message, /tools/);
-  assert.equal(discoverAgents(cwd, 'user').agents[0].description, 'Personal');
+  assert.equal(discoverAgents(cwd, "user").agents[0].description, "Personal");
 });
 
-test('scope and project precedence work from nested or relative directories', () => {
-  agent(userDir, 'worker', 'name: worker\ndescription: Personal');
-  agent(projectDir, 'worker', 'name: worker\ndescription: Project');
-  agent(projectDir, 'reviewer', 'name: reviewer\ndescription: Review');
-  assert.equal(discoverAgents(cwd, 'user').agents[0].source, 'user');
-  const both = discoverAgents(relative(process.cwd(), cwd), 'both');
-  assert.deepEqual(both.agents.map(a => a.name), ['reviewer', 'worker']);
-  assert.equal(both.agents[1].source, 'project');
+test("scope and project precedence work from nested or relative directories", () => {
+  agent(userDir, "worker", "name: worker\ndescription: Personal");
+  agent(projectDir, "worker", "name: worker\ndescription: Project");
+  agent(projectDir, "reviewer", "name: reviewer\ndescription: Review");
+  assert.equal(discoverAgents(cwd, "user").agents[0].source, "user");
+  const both = discoverAgents(relative(process.cwd(), cwd), "both");
+  assert.deepEqual(
+    both.agents.map((a) => a.name),
+    ["reviewer", "worker"],
+  );
+  assert.equal(both.agents[1].source, "project");
   assert.equal(both.projectAgentsDir, projectDir);
-  assert.ok(discoverAgents(cwd, 'project').agents.every(a => a.source === 'project'));
+  assert.ok(
+    discoverAgents(cwd, "project").agents.every((a) => a.source === "project"),
+  );
 });
 
-test('project agent file symlinks stay within the project trust boundary', t => {
-  const internal = join(sandbox, 'project/shared-agent.md');
-  const external = join(sandbox, 'external-agent.md');
-  writeFileSync(internal, '---\nname: internal\ndescription: In-project shared agent\n---\nInternal prompt.\n');
-  writeFileSync(external, '---\nname: escaped\ndescription: Outside project\n---\nExternal prompt.\n');
+test("project agent file symlinks stay within the project trust boundary", (t) => {
+  const internal = join(sandbox, "project/shared-agent.md");
+  const external = join(sandbox, "external-agent.md");
+  writeFileSync(
+    internal,
+    "---\nname: internal\ndescription: In-project shared agent\n---\nInternal prompt.\n",
+  );
+  writeFileSync(
+    external,
+    "---\nname: escaped\ndescription: Outside project\n---\nExternal prompt.\n",
+  );
   try {
-    symlinkSync(internal, join(projectDir, 'linked-internal.md'));
-    symlinkSync(external, join(projectDir, 'linked-external.md'));
+    symlinkSync(internal, join(projectDir, "linked-internal.md"));
+    symlinkSync(external, join(projectDir, "linked-external.md"));
   } catch (error) {
     // Creating file symlinks on Windows requires Developer Mode or the
     // SeCreateSymbolicLinkPrivilege right. Keep the rest of the suite usable
     // when neither is available, but do not hide unrelated setup failures.
-    if (process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error?.code)) {
-      t.skip('File symlink creation is unavailable; enable Developer Mode or grant symlink privilege to run this boundary test.');
+    if (
+      process.platform === "win32" &&
+      ["EPERM", "EACCES"].includes(error?.code)
+    ) {
+      t.skip(
+        "File symlink creation is unavailable; enable Developer Mode or grant symlink privilege to run this boundary test.",
+      );
       return;
     }
     throw error;
   }
 
-  const result = discoverAgents(cwd, 'project');
-  assert.deepEqual(result.agents.map(a => a.name), ['internal']);
-  assert.equal(result.agents[0].filePath, join(projectDir, 'linked-internal.md'));
+  const result = discoverAgents(cwd, "project");
+  assert.deepEqual(
+    result.agents.map((a) => a.name),
+    ["internal"],
+  );
+  assert.equal(
+    result.agents[0].filePath,
+    join(projectDir, "linked-internal.md"),
+  );
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].filePath, join(projectDir, 'linked-external.md'));
+  assert.equal(
+    result.diagnostics[0].filePath,
+    join(projectDir, "linked-external.md"),
+  );
   assert.match(result.diagnostics[0].message, /outside the project root/i);
 });
 
-test('project agent hard links are rejected while personal hard links remain supported', () => {
-  const external = join(sandbox, 'external-hard-linked-agent.md');
-  const contents = '---\nname: linked\ndescription: Hard-linked definition\n---\nLinked prompt.\n';
+test("project agent hard links are rejected while personal hard links remain supported", () => {
+  const external = join(sandbox, "external-hard-linked-agent.md");
+  const contents =
+    "---\nname: linked\ndescription: Hard-linked definition\n---\nLinked prompt.\n";
   writeFileSync(external, contents);
-  linkSync(external, join(projectDir, 'linked.md'));
-  linkSync(external, join(userDir, 'linked.md'));
+  linkSync(external, join(projectDir, "linked.md"));
+  linkSync(external, join(userDir, "linked.md"));
 
-  const project = discoverAgents(cwd, 'project');
+  const project = discoverAgents(cwd, "project");
   assert.deepEqual(project.agents, []);
   assert.equal(project.diagnostics.length, 1);
-  assert.match(project.diagnostics[0].message, /hard-linked project agent definitions are not supported/i);
+  assert.match(
+    project.diagnostics[0].message,
+    /hard-linked project agent definitions are not supported/i,
+  );
 
-  const user = discoverAgents(cwd, 'user');
-  assert.deepEqual(user.agents.map(entry => entry.name), ['linked']);
-  assert.equal(user.agents[0].systemPrompt, 'Linked prompt.');
+  const user = discoverAgents(cwd, "user");
+  assert.deepEqual(
+    user.agents.map((entry) => entry.name),
+    ["linked"],
+  );
+  assert.equal(user.agents[0].systemPrompt, "Linked prompt.");
   assert.deepEqual(user.diagnostics, []);
 });
 
-test('project agent link counts are rechecked after reading', () => {
-  const root = mkdtempSync(join(tmpdir(), 'pi-agent-hardlink-race-'));
-  const projectRoot = join(root, 'project');
-  const projectDir = join(projectRoot, '.pi/agents');
-  const cwd = join(projectRoot, 'nested');
-  const filePath = join(projectDir, 'worker.md');
-  const outsidePath = join(root, 'outside-hard-link.md');
+test("project agent link counts are rechecked after reading", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-agent-hardlink-race-"));
+  const projectRoot = join(root, "project");
+  const projectDir = join(projectRoot, ".pi/agents");
+  const cwd = join(projectRoot, "nested");
+  const filePath = join(projectDir, "worker.md");
+  const outsidePath = join(root, "outside-hard-link.md");
   mkdirSync(projectDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
-  writeFileSync(filePath, '---\nname: worker\ndescription: Worker\n---\nPrompt.\n');
+  writeFileSync(
+    filePath,
+    "---\nname: worker\ndescription: Worker\n---\nPrompt.\n",
+  );
   const script = `
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
-    import { jiti } from ${JSON.stringify(new URL('./pi-runtime.mjs', import.meta.url).href)};
-    const { discoverAgents } = await jiti.import(${JSON.stringify(new URL('../agents.ts', import.meta.url).href)});
+    import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};
+    const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../agents.ts", import.meta.url).href)});
     const originalReadSync = fs.readSync;
     let linkCreated = false;
     fs.readSync = function(...args) {
@@ -564,19 +1090,27 @@ test('project agent link counts are rechecked after reading', () => {
   `;
 
   try {
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PI_CODING_AGENT_DIR: join(root, 'user'),
-        AGENT_TEST_CWD: cwd,
-        AGENT_TEST_FILE: filePath,
-        AGENT_TEST_OUTSIDE_LINK: outsidePath,
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: join(root, "user"),
+          AGENT_TEST_CWD: cwd,
+          AGENT_TEST_FILE: filePath,
+          AGENT_TEST_OUTSIDE_LINK: outsidePath,
+        },
+        encoding: "utf8",
+        timeout: DISCOVERY_CHILD_TIMEOUT_MS,
       },
-      encoding: 'utf8',
-      timeout: DISCOVERY_CHILD_TIMEOUT_MS,
-    });
-    assert.equal(child.error, undefined, `Discovery child must finish: ${child.error?.message}`);
+    );
+    assert.equal(
+      child.error,
+      undefined,
+      `Discovery child must finish: ${child.error?.message}`,
+    );
     assert.equal(child.status, 0, child.stderr);
     const result = JSON.parse(child.stdout);
     assert.deepEqual(result.agents, []);
@@ -587,30 +1121,37 @@ test('project agent link counts are rechecked after reading', () => {
   }
 });
 
-test('project agent reads reject directory swaps during path revalidation and open', () => {
-  const root = mkdtempSync(join(tmpdir(), 'pi-agent-race-'));
-  const makeCase = name => {
+test("project agent reads reject directory swaps during path revalidation and open", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-agent-race-"));
+  const makeCase = (name) => {
     const projectRoot = join(root, name);
-    const projectDir = join(projectRoot, '.pi/agents');
-    const cwd = join(projectRoot, 'nested');
+    const projectDir = join(projectRoot, ".pi/agents");
+    const cwd = join(projectRoot, "nested");
     const outsideDir = join(root, `${name}-outside`);
-    const savedProjectDir = join(projectRoot, '.pi/agents-saved');
+    const savedProjectDir = join(projectRoot, ".pi/agents-saved");
     const baseName = `race-${name}`;
     const fileName = `${baseName}.md`;
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(cwd, { recursive: true });
     mkdirSync(outsideDir);
-    agent(projectDir, baseName, 'name: in-project\ndescription: In project');
-    agent(outsideDir, baseName, 'name: outside\ndescription: Outside project');
-    return { projectDir, cwd, outsideDir, savedProjectDir, filePath: join(projectDir, fileName), fileName };
+    agent(projectDir, baseName, "name: in-project\ndescription: In project");
+    agent(outsideDir, baseName, "name: outside\ndescription: Outside project");
+    return {
+      projectDir,
+      cwd,
+      outsideDir,
+      savedProjectDir,
+      filePath: join(projectDir, fileName),
+      fileName,
+    };
   };
-  const revalidationCase = makeCase('revalidation');
-  const openCase = makeCase('open');
+  const revalidationCase = makeCase("revalidation");
+  const openCase = makeCase("open");
   const cases = { revalidation: revalidationCase, open: openCase };
   const script = `
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
-    import { jiti } from ${JSON.stringify(new URL('./pi-runtime.mjs', import.meta.url).href)};
+    import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};
     const cases = ${JSON.stringify(cases)};
     let revalidationSwap = false;
     let openSwap = false;
@@ -645,7 +1186,7 @@ test('project agent reads reject directory swaps during path revalidation and op
     syncBuiltinESMExports();
     let output;
     try {
-      const { discoverAgents } = await jiti.import(${JSON.stringify(new URL('../agents.ts', import.meta.url).href)});
+      const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../agents.ts", import.meta.url).href)});
       const revalidationResult = discoverAgents(cases.revalidation.cwd, 'project');
       const openResult = discoverAgents(cases.open.cwd, 'project');
       output = JSON.stringify({ revalidationSwap, openSwap, revalidationResult, openResult });
@@ -659,36 +1200,54 @@ test('project agent reads reject directory swaps during path revalidation and op
     process.stdout.write(output);
   `;
   try {
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: process.cwd(),
-      env: process.env,
-      encoding: 'utf8',
-      timeout: 15000,
-    });
-    assert.equal(child.error, undefined, `Race fixture child must finish: ${child.error?.message}`);
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        encoding: "utf8",
+        timeout: 15000,
+      },
+    );
+    assert.equal(
+      child.error,
+      undefined,
+      `Race fixture child must finish: ${child.error?.message}`,
+    );
     assert.equal(child.status, 0, child.stderr);
     const result = JSON.parse(child.stdout);
     assert.equal(result.revalidationSwap, true);
     assert.equal(result.openSwap, true);
     assert.deepEqual(result.revalidationResult.agents, []);
     assert.equal(result.revalidationResult.diagnostics.length, 1);
-    assert.match(result.revalidationResult.diagnostics[0].message, /outside the project root/i);
+    assert.match(
+      result.revalidationResult.diagnostics[0].message,
+      /outside the project root/i,
+    );
     assert.deepEqual(result.openResult.agents, []);
     assert.equal(result.openResult.diagnostics.length, 1);
-    assert.match(result.openResult.diagnostics[0].message, /changed while opening/i);
+    assert.match(
+      result.openResult.diagnostics[0].message,
+      /changed while opening/i,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('project agents directories that resolve outside the project are ignored', () => {
-  const externalDir = join(sandbox, 'external-agents');
+test("project agents directories that resolve outside the project are ignored", () => {
+  const externalDir = join(sandbox, "external-agents");
   mkdirSync(externalDir);
-  agent(externalDir, 'escaped', 'name: escaped\ndescription: Outside project');
+  agent(externalDir, "escaped", "name: escaped\ndescription: Outside project");
   rmSync(projectDir, { recursive: true, force: true });
-  symlinkSync(externalDir, projectDir, process.platform === 'win32' ? 'junction' : 'dir');
+  symlinkSync(
+    externalDir,
+    projectDir,
+    process.platform === "win32" ? "junction" : "dir",
+  );
 
-  const result = discoverAgents(cwd, 'project');
+  const result = discoverAgents(cwd, "project");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
   assert.equal(result.diagnostics[0].filePath, projectDir);

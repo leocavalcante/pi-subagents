@@ -1,2 +1,1 @@
-# Keep README.md LF on every checkout. Windows CI reads it with LF-only section markers.
-/README.md text eol=lf
+* text=auto eol=lf
