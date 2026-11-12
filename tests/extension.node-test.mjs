@@ -2411,6 +2411,12 @@ test('working directory arguments reject empty, non-string, NUL, and overlong pa
 });
 
 test('unsetEnv filters inherited variables additively for agents, calls, entries, chains, and background jobs', async t => {
+  const previousNestingDepth = process.env.PI_SUBAGENTS_NESTING_DEPTH;
+  delete process.env.PI_SUBAGENTS_NESTING_DEPTH;
+  t.after(() => {
+    if (previousNestingDepth === undefined) delete process.env.PI_SUBAGENTS_NESTING_DEPTH;
+    else process.env.PI_SUBAGENTS_NESTING_DEPTH = previousNestingDepth;
+  });
   const variableNames = [
     'PI_SUBAGENTS_TEST_AGENT_ENV', 'PI_SUBAGENTS_TEST_CALL_ENV',
     'PI_SUBAGENTS_TEST_ENTRY_ENV', 'PI_SUBAGENTS_TEST_KEEP_ENV', 'pi_subagents_test_case_env',
