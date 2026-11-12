@@ -14,6 +14,9 @@ const userDir = join(sandbox, 'user/agents');
 const projectDir = join(sandbox, 'project/.pi/agents');
 const cwd = join(sandbox, 'project/nested');
 const agent = (dir, file, yaml) => writeFileSync(join(dir, `${file}.md`), `---\n${yaml}\n---\nInstructions for ${file}.\n`);
+// Discovery children load the extension through jiti, which takes several seconds
+// on a busy machine. The limit only has to catch discovery that blocks.
+const DISCOVERY_CHILD_TIMEOUT_MS = 30_000;
 
 beforeEach(() => {
   rmSync(sandbox, { recursive: true, force: true });
@@ -79,7 +82,7 @@ test('project agent symlinks to non-regular files are rejected without blocking'
     cwd: process.cwd(),
     env: { ...process.env, PI_CODING_AGENT_DIR: join(sandbox, 'user'), AGENT_TEST_CWD: cwd },
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: DISCOVERY_CHILD_TIMEOUT_MS,
   });
   assert.equal(child.error, undefined, `Discovery child must finish: ${child.error?.message}`);
   assert.equal(child.status, 0, child.stderr);
@@ -571,7 +574,7 @@ test('project agent link counts are rechecked after reading', () => {
         AGENT_TEST_OUTSIDE_LINK: outsidePath,
       },
       encoding: 'utf8',
-      timeout: 5000,
+      timeout: DISCOVERY_CHILD_TIMEOUT_MS,
     });
     assert.equal(child.error, undefined, `Discovery child must finish: ${child.error?.message}`);
     assert.equal(child.status, 0, child.stderr);
