@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
-const {
+import { test } from "bun:test";
+import {
   isValidChainId,
   validateChainReferences,
   substituteChainContext,
   substituteChainContextBounded,
-} = await jiti.import("../chain.ts");
+} from "../chain.ts";
 
 test("chain step IDs share one strict validator for references and output lookup", () => {
   for (const id of ["a", "Step_1", "x-y", "A".repeat(64)])
@@ -90,7 +89,7 @@ test("bounded substitution counts UTF-8 bytes and retains literal one-pass behav
 });
 
 test("bounded substitution matches exact UTF-8 budgets across adjacent and empty replacements", () => {
-  const cases = [
+  const cases: [string, string, Map<string, string>][] = [
     [
       "café/{previous}/😀/{steps.review}/終",
       "東京",
@@ -126,7 +125,7 @@ test("bounded substitution matches exact UTF-8 budgets across adjacent and empty
       assert.equal(
         actual,
         maxBytes >= requiredBytes ? expanded : undefined,
-        `template ${JSON.stringify(template)} at ${maxBytes} of ${requiredBytes} bytes`,
+        `template ${JSON.stringify(template)} at ${String(maxBytes)} of ${String(requiredBytes)} bytes`,
       );
     }
   }

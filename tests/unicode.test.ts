@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
+import { test } from "bun:test";
 
-const { isWellFormedUnicode } = await jiti.import("../unicode.ts");
+import { isWellFormedUnicode } from "../unicode.ts";
 
 test("well-formed Unicode accepts scalar values and rejects isolated UTF-16 surrogates", () => {
   for (const value of ["", "ASCII", "café", "😀", "\ud800\udc00"])

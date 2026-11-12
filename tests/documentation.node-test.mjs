@@ -301,7 +301,8 @@ test("CONTRIBUTING documents Bun commands and the temporary Node.js test lane", 
   assert.match(contributing, /bun audit --audit-level=high/);
   assert.match(contributing, /bun run check/);
   assert.match(contributing, /bun run test/);
-  assert.match(contributing, /tests\/paging\.node-test\.mjs/);
+  assert.match(contributing, /bun test tests\/paging\.test\.ts/);
+  assert.match(contributing, /tests\/extension\.node-test\.mjs/);
   assert.match(
     contributing,
     /node --import jiti\/register --test --test-concurrency=1/,
