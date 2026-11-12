@@ -31,7 +31,7 @@ function validateRange(offset: number, limit: number): void {
     throw new RangeError("offset must be a non-negative safe integer.");
   if (!Number.isInteger(limit) || limit < 4 || limit > MAX_PAGE_BYTES) {
     throw new RangeError(
-      `limit must be an integer between 4 and ${MAX_PAGE_BYTES}.`,
+      `limit must be an integer between 4 and ${String(MAX_PAGE_BYTES)}.`,
     );
   }
 }

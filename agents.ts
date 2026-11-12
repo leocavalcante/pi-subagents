@@ -46,11 +46,10 @@ export interface AgentDiscoveryResult {
  * Raw agent frontmatter. Values are `unknown` because `parseFrontmatter` runs a
  * real YAML parser, so any scalar or collection can appear here.
  *
- * A type alias rather than an interface: `parseFrontmatter` constrains its
- * parameter to `Record<string, unknown>`, and only an alias picks up the
- * implicit index signature that satisfies it.
+ * `parseFrontmatter` constrains its parameter to `Record<string, unknown>`,
+ * so the interface declares that index signature explicitly.
  */
-type AgentFrontmatter = {
+interface AgentFrontmatter extends Record<string, unknown> {
   name?: unknown;
   description?: unknown;
   tools?: unknown;
@@ -60,7 +59,7 @@ type AgentFrontmatter = {
   thinking?: unknown;
   timeoutMs?: unknown;
   cwd?: unknown;
-};
+}
 
 export const THINKING_LEVELS = [
   "off",
@@ -92,8 +91,11 @@ export const MAX_WORKING_DIRECTORY_LENGTH = 32_767;
 export const AGENT_NAME_PATTERN =
   "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u206f\\ufeff]+(?![\\s\\S])";
 const INVALID_AGENT_NAME =
+  // eslint-disable-next-line no-control-regex -- reject control and bidi formatting characters in agent names.
   /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u206f\ufeff]/;
+// eslint-disable-next-line no-control-regex -- reject control characters in agent tool names.
 const INVALID_AGENT_TOOL_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+// eslint-disable-next-line no-control-regex -- reject control characters in model selectors.
 const INVALID_MODEL_SELECTOR_CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 export function isSafeAgentName(name: string): boolean {
@@ -162,7 +164,7 @@ export function parseAgentTags(value: unknown): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length > MAX_AGENT_TAG_COUNT) {
     throw new Error(
-      `tags must be an array of at most ${MAX_AGENT_TAG_COUNT} entries.`,
+      `tags must be an array of at most ${String(MAX_AGENT_TAG_COUNT)} entries.`,
     );
   }
   const tags: string[] = [];
@@ -172,14 +174,14 @@ export function parseAgentTags(value: unknown): string[] | undefined {
     const tag = normalizeAgentTag(rawTag);
     if (tag === undefined) {
       throw new Error(
-        `tags entries must be 1-${MAX_AGENT_TAG_BYTES} ASCII letters, digits, dots, underscores, or hyphens, beginning with a letter or digit.`,
+        `tags entries must be 1-${String(MAX_AGENT_TAG_BYTES)} ASCII letters, digits, dots, underscores, or hyphens, beginning with a letter or digit.`,
       );
     }
     if (seen.has(tag)) continue;
     const bytes = tag.length + (tags.length > 0 ? 1 : 0);
     if (bytes > MAX_AGENT_TAG_LIST_BYTES - totalBytes) {
       throw new Error(
-        `tags must be at most ${MAX_AGENT_TAG_LIST_BYTES} bytes and contain at most ${MAX_AGENT_TAG_COUNT} entries.`,
+        `tags must be at most ${String(MAX_AGENT_TAG_LIST_BYTES)} bytes and contain at most ${String(MAX_AGENT_TAG_COUNT)} entries.`,
       );
     }
     tags.push(tag);
@@ -198,7 +200,7 @@ export function parseAgentUnsetEnv(value: unknown): string[] | undefined {
     !value.every((name): name is string => typeof name === "string")
   ) {
     throw new Error(
-      `unsetEnv must be an array of at most ${MAX_AGENT_UNSET_ENV_COUNT} environment variable names.`,
+      `unsetEnv must be an array of at most ${String(MAX_AGENT_UNSET_ENV_COUNT)} environment variable names.`,
     );
   }
   const names: string[] = [];
@@ -223,7 +225,7 @@ export function parseAgentUnsetEnv(value: unknown): string[] | undefined {
     const bytes = name.length + (names.length > 0 ? 1 : 0);
     if (bytes > MAX_AGENT_UNSET_ENV_BYTES - totalBytes) {
       throw new Error(
-        `unsetEnv must be at most ${MAX_AGENT_UNSET_ENV_BYTES} bytes and contain at most ${MAX_AGENT_UNSET_ENV_COUNT} names.`,
+        `unsetEnv must be at most ${String(MAX_AGENT_UNSET_ENV_BYTES)} bytes and contain at most ${String(MAX_AGENT_UNSET_ENV_COUNT)} names.`,
       );
     }
     names.push(name);
@@ -283,12 +285,12 @@ export function parseAgentToolList(value: unknown): string[] | undefined {
       Buffer.byteLength(value, "utf8") > MAX_AGENT_TOOL_LIST_BYTES)
   ) {
     throw new Error(
-      `tools must be valid Unicode, at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes, and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`,
+      `tools must be valid Unicode, at most ${String(MAX_AGENT_TOOL_LIST_BYTES)} UTF-8 bytes, and contain at most ${String(MAX_AGENT_TOOL_COUNT)} entries.`,
     );
   }
   if (Array.isArray(value) && value.length > MAX_AGENT_TOOL_COUNT) {
     throw new Error(
-      `tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`,
+      `tools must be at most ${String(MAX_AGENT_TOOL_LIST_BYTES)} UTF-8 bytes and contain at most ${String(MAX_AGENT_TOOL_COUNT)} entries.`,
     );
   }
   const raw = Array.isArray(value)
@@ -302,7 +304,7 @@ export function parseAgentToolList(value: unknown): string[] | undefined {
     !raw.every((tool): tool is string => typeof tool === "string")
   ) {
     throw new Error(
-      `tools must be a comma-separated string or an array of at most ${MAX_AGENT_TOOL_COUNT} strings.`,
+      `tools must be a comma-separated string or an array of at most ${String(MAX_AGENT_TOOL_COUNT)} strings.`,
     );
   }
   const tools: string[] = [];
@@ -311,7 +313,7 @@ export function parseAgentToolList(value: unknown): string[] | undefined {
   for (const item of raw) {
     if (item.length > MAX_AGENT_TOOL_LIST_BYTES) {
       throw new Error(
-        `tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`,
+        `tools must be at most ${String(MAX_AGENT_TOOL_LIST_BYTES)} UTF-8 bytes and contain at most ${String(MAX_AGENT_TOOL_COUNT)} entries.`,
       );
     }
     if (!isWellFormedUnicode(item))
@@ -335,7 +337,7 @@ export function parseAgentToolList(value: unknown): string[] | undefined {
       tools.length >= MAX_AGENT_TOOL_COUNT
     ) {
       throw new Error(
-        `tools must be at most ${MAX_AGENT_TOOL_LIST_BYTES} UTF-8 bytes and contain at most ${MAX_AGENT_TOOL_COUNT} entries.`,
+        `tools must be at most ${String(MAX_AGENT_TOOL_LIST_BYTES)} UTF-8 bytes and contain at most ${String(MAX_AGENT_TOOL_COUNT)} entries.`,
       );
     }
     tools.push(tool);
@@ -452,7 +454,7 @@ function loadAgentsFromDir(
       diagnostics,
       dir,
       source,
-      `Agent directory exceeds the ${MAX_AGENT_DIRECTORY_ENTRIES}-entry scan limit; no definitions from this directory were loaded.`,
+      `Agent directory exceeds the ${String(MAX_AGENT_DIRECTORY_ENTRIES)}-entry scan limit; no definitions from this directory were loaded.`,
     );
     return agents;
   }
@@ -461,7 +463,7 @@ function loadAgentsFromDir(
       diagnostics,
       dir,
       source,
-      `Agent directory exceeds the ${MAX_AGENT_FILES}-definition limit; no definitions from this directory were loaded.`,
+      `Agent directory exceeds the ${String(MAX_AGENT_FILES)}-definition limit; no definitions from this directory were loaded.`,
     );
     return agents;
   }
@@ -562,7 +564,7 @@ function loadAgentsFromDir(
         }
         if (stat.size > BigInt(MAX_AGENT_FILE_BYTES)) {
           throw new Error(
-            `Agent definition exceeds the ${MAX_AGENT_FILE_BYTES / 1024} KiB size limit.`,
+            `Agent definition exceeds the ${String(MAX_AGENT_FILE_BYTES / 1024)} KiB size limit.`,
           );
         }
         const remaining = MAX_AGENT_DIRECTORY_BYTES - totalBytes;
@@ -571,7 +573,7 @@ function loadAgentsFromDir(
             diagnostics,
             filePath,
             source,
-            `Agent directory exceeds the ${MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024)} MiB content limit; remaining definitions were skipped.`,
+            `Agent directory exceeds the ${String(MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024))} MiB content limit; remaining definitions were skipped.`,
           );
           break;
         }
@@ -602,7 +604,7 @@ function loadAgentsFromDir(
         }
         if (length > MAX_AGENT_FILE_BYTES) {
           throw new Error(
-            `Agent definition exceeds the ${MAX_AGENT_FILE_BYTES / 1024} KiB size limit.`,
+            `Agent definition exceeds the ${String(MAX_AGENT_FILE_BYTES / 1024)} KiB size limit.`,
           );
         }
         if (length > remaining) {
@@ -610,7 +612,7 @@ function loadAgentsFromDir(
             diagnostics,
             filePath,
             source,
-            `Agent directory exceeds the ${MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024)} MiB content limit; remaining definitions were skipped.`,
+            `Agent directory exceeds the ${String(MAX_AGENT_DIRECTORY_BYTES / (1024 * 1024))} MiB content limit; remaining definitions were skipped.`,
           );
           break;
         }
@@ -641,7 +643,9 @@ function loadAgentsFromDir(
         throw new Error("Invalid YAML frontmatter.");
       }
       const { frontmatter, body } = parsed;
+      // Keep runtime validation for malformed values from untyped YAML parser callers.
       if (
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- preserve the defensive frontmatter shape check.
         !frontmatter ||
         typeof frontmatter !== "object" ||
         Array.isArray(frontmatter)
@@ -663,12 +667,12 @@ function loadAgentsFromDir(
         Buffer.byteLength(description, "utf8") > MAX_AGENT_DESCRIPTION_BYTES
       ) {
         throw new Error(
-          `description must be well-formed Unicode and at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
+          `description must be well-formed Unicode and at most ${String(MAX_AGENT_DESCRIPTION_BYTES)} UTF-8 bytes.`,
         );
       }
       if (!isSafeAgentName(frontmatter.name.trim())) {
         throw new Error(
-          `name must be well-formed Unicode, at most ${MAX_AGENT_NAME_BYTES} UTF-8 bytes, and contain no control or bidirectional formatting characters.`,
+          `name must be well-formed Unicode, at most ${String(MAX_AGENT_NAME_BYTES)} UTF-8 bytes, and contain no control or bidirectional formatting characters.`,
         );
       }
       if (
@@ -676,7 +680,7 @@ function loadAgentsFromDir(
         !isSafeModelSelector(frontmatter.model, true)
       ) {
         throw new Error(
-          `model must be well-formed Unicode, at most ${MAX_MODEL_SELECTOR_BYTES} UTF-8 bytes, and contain no control characters.`,
+          `model must be well-formed Unicode, at most ${String(MAX_MODEL_SELECTOR_BYTES)} UTF-8 bytes, and contain no control characters.`,
         );
       }
       const thinking = frontmatter.thinking;
@@ -697,13 +701,13 @@ function loadAgentsFromDir(
           timeoutMs > MAX_TIMEOUT_MS)
       ) {
         throw new Error(
-          `timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`,
+          `timeoutMs must be an integer between 1 and ${String(MAX_TIMEOUT_MS)}.`,
         );
       }
       const cwd = frontmatter.cwd;
       if (cwd !== undefined && !isSafeWorkingDirectory(cwd)) {
         throw new Error(
-          `cwd must be a non-empty path containing well-formed Unicode, no NUL characters, and at most ${MAX_WORKING_DIRECTORY_LENGTH} UTF-16 code units.`,
+          `cwd must be a non-empty path containing well-formed Unicode, no NUL characters, and at most ${String(MAX_WORKING_DIRECTORY_LENGTH)} UTF-16 code units.`,
         );
       }
       const agent: AgentConfig = {
@@ -712,10 +716,12 @@ function loadAgentsFromDir(
         tools: parseAgentToolList(frontmatter.tools),
         tags: parseAgentTags(frontmatter.tags),
         unsetEnv: parseAgentUnsetEnv(frontmatter.unsetEnv),
+        // An empty model selector intentionally falls back to undefined.
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- preserve empty-string fallback behavior.
         model: frontmatter.model?.trim() || undefined,
         thinking: thinking as ThinkingLevel | undefined,
-        timeoutMs: timeoutMs as number | undefined,
-        cwd: cwd as string | undefined,
+        timeoutMs: timeoutMs,
+        cwd: cwd,
         systemPrompt: body,
         source,
         filePath,
@@ -748,6 +754,8 @@ function findNearestProjectAgentsDir(
   diagnostics: AgentDiagnostic[],
 ): { dir: string; root: string } | null {
   let currentDir = path.resolve(cwd);
+  // The search stops when it reaches the filesystem root.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- keep the intentional ancestor walk.
   while (true) {
     const candidate = path.join(currentDir, CONFIG_DIR_NAME, "agents");
     try {
