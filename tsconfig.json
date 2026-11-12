@@ -18,7 +18,8 @@
     "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node"],
+    "noUncheckedIndexedAccess": true
   },
   "include": ["*.ts"]
 }

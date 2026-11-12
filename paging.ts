@@ -40,13 +40,13 @@ function sliceBytes(bytes: Buffer, offset: number, limit: number): OutputSlice {
   validateRange(offset, limit);
   if (offset > bytes.length)
     throw new RangeError("offset exceeds the captured output length.");
-  if (offset < bytes.length && (bytes[offset] & 0xc0) === 0x80) {
+  if (offset < bytes.length && ((bytes[offset] ?? 0) & 0xc0) === 0x80) {
     throw new RangeError(
       "offset must align with a UTF-8 character boundary. Use nextOffset from the previous page.",
     );
   }
   let end = Math.min(bytes.length, offset + limit);
-  while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end--;
+  while (end < bytes.length && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
   return {
     text: bytes.subarray(offset, end).toString("utf8"),
     offset,

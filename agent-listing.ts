@@ -29,6 +29,6 @@ export function truncateAgentListingText(
   const noticeBytes = Buffer.byteLength(TRUNCATION_NOTICE, "utf8");
   let end = maxBytes - noticeBytes;
   const bytes = Buffer.from(value.slice(0, end + 2), "utf8");
-  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
   return bytes.subarray(0, end).toString("utf8") + TRUNCATION_NOTICE;
 }

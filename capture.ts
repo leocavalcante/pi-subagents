@@ -23,7 +23,7 @@ function utf8Prefix(text: string, maxBytes: number): string {
   const bytes = Buffer.from(text.slice(0, maxBytes + 2), "utf8");
   if (text.length <= maxBytes && bytes.length <= maxBytes) return text;
   let end = Math.max(0, maxBytes);
-  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--;
   return bytes.subarray(0, end).toString("utf8");
 }
 
