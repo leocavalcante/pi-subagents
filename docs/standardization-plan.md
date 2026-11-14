@@ -1,8 +1,25 @@
 # Standardization plan: pi-subagents
 
-Status: draft, 2026-11-10. Target: [Pi extension standard v1](pi-extension-standard.md). Delete this file once every step is done.
+Status: in progress, 2026-11-14. Target: [Pi extension standard v1](pi-extension-standard.md). Delete this file once every step is done.
 
 pi-subagents goes last because it has the largest test migration. It runs real Pi child processes, so most of its tests depend on Node.js runtime behavior.
+
+## Progress
+
+- Step 0a is complete. The local failures were 5-second child-process timeouts on a busy machine (#399). CI on `main` had also turned red from upstream changes: an undici advisory and Pi 1.5's new schema package breaking TypeBox inference. #400 fixed both with an undici override and string enums built on the extension's own TypeBox.
+- Step 0b is complete, including `sha_pinning_required`. Tag `v0.1.0` and its release record that 0.1.0 was published by hand; its tarball matches commit `eea309a`.
+- Step 1 merged as #402 with the ruleset cutover; CodeQL default setup covers C#, JavaScript/TypeScript, and Actions. `pi-min` reads `engines.pi` (1.0.4), and `.github/scripts/pi-pins.json` pins Pi Codemode 1.1.0 for Pi 1.0.4 and 1.1.0.
+- Step 2 merged as #403 after the trusted publisher moved to `cd.yaml`, and released **0.3.0** (#393). The README installs the unpinned package and tells users with pinned installs how to switch.
+- Steps 3–5 merged as #404 (Prettier), #405 (`.git-blame-ignore-revs`), and #406 (typescript-eslint).
+- Step 6 merged as #409 and released **0.3.1**.
+- Step 7 is half done: #408 moved the seven logic suites to TypeScript on Bun.
+- Step 8 merged as #407 (`noUncheckedIndexedAccess`, exact runtime reads).
+- Step 9 merged as #410. The root `index.ts` re-export can be removed in the release after next.
+- npm: the trusted publisher is `cd.yaml` with environment `npm`, `0.0.0-stage` is deprecated, and publishing requires 2FA and disallows tokens.
+- **Remaining:**
+  - Convert the process and file-system suites to TypeScript `*.node-test.ts`, then drop the `.mjs` pattern.
+  - Remove the root `index.ts` re-export after one release.
+  - Add `pi.image` and upload the social preview by hand.
 
 ## Target identity
 
