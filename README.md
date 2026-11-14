@@ -15,6 +15,7 @@ Ask two agents to inspect authentication and tests in parallel; they return sepa
 - [Compatibility](#compatibility)
 - [Privacy and security](#privacy-and-security)
 - [Troubleshooting](#troubleshooting)
+- [More Pi extensions](#more-pi-extensions)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -562,6 +563,19 @@ Authenticate on each machine with Pi's `/login`. Do not put credentials, session
 - **The process queue is full.** Wait for current tasks to finish, reduce parallel `concurrency`, or raise `PI_SUBAGENTS_MAX_PROCESSES` within its supported range before starting Pi.
 - **A background result is missing.** Check `subagent_jobs` status. Jobs belong to the current Pi session and do not survive quit, `/reload`, or session replacement. Silent jobs do not send completion messages.
 - **A job output page fails.** Use the returned `nextOffset`, preserve the same `stepId` or `taskIndex`, and remember that offsets are UTF-8 byte positions.
+
+## More Pi extensions
+
+Each extension does one job, and all of them share the same conventions for code, tests, and releases. Combine the ones you need:
+
+| Extension                                                     | What it does                                                                              |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [pi-a2a](https://github.com/leocavalcante/pi-a2a)             | Talk to A2A agents from Pi, and serve Pi Durable agents over the A2A protocol.            |
+| [pi-otel](https://github.com/leocavalcante/pi-otel)           | Observe Pi sessions and Pi Durable agents with OpenTelemetry, exporting metadata only.    |
+| [pi-subagents](https://github.com/leocavalcante/pi-subagents) | Delegate tasks to isolated Pi subagents: single, parallel, chained, or in the background. |
+| [pi-tmux](https://github.com/leocavalcante/pi-tmux)           | Name tmux windows after your current Pi task and mark the ones waiting for your input.    |
+
+Install any of them with `pi install npm:@leocavalcante/<extension>`, then run `/reload`.
 
 ## Contributing
 
