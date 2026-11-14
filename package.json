@@ -2,21 +2,29 @@
   "name": "@leocavalcante/pi-subagents",
   "version": "0.0.0-development",
   "description": "Delegate tasks to isolated Pi subagents: single, parallel, chained, or in the background.",
-  "type": "module",
-  "license": "MIT",
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
+  "keywords": [
+    "pi-extension",
+    "pi-package",
+    "pi-coding-agent",
+    "subagents",
+    "multi-agent",
+    "agent-orchestration",
+    "background-jobs",
+    "parallel-execution",
+    "context-isolation",
+    "ai-agents"
+  ],
+  "homepage": "https://github.com/leocavalcante/pi-subagents#readme",
+  "bugs": {
+    "url": "https://github.com/leocavalcante/pi-subagents/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/leocavalcante/pi-subagents.git"
+    "url": "git+https://github.com/leocavalcante/pi-subagents.git"
   },
-  "keywords": [
-    "pi-package",
-    "pi",
-    "subagents"
-  ],
+  "license": "MIT",
+  "author": "Leo Cavalcante (https://github.com/leocavalcante)",
+  "type": "module",
   "files": [
     "index.ts",
     "src/",
@@ -34,6 +42,13 @@
     "changelog": "git-cliff --output CHANGELOG.md",
     "check:package": "bun run changelog && publint && node .github/scripts/check-package.mjs",
     "verify": "bun run lint && bun run check && bun run test && bun run check:package && bun audit --audit-level=high"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.5.2",
@@ -63,12 +78,9 @@
   },
   "packageManager": "bun@1.4.4",
   "trustedDependencies": [],
-  "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "pi": {
     "extensions": [
