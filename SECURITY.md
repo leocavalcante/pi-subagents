@@ -1,13 +1,17 @@
-# Security Policy
+# Security policy
 
 ## Supported versions
 
-Only the latest stable release is currently supported with security fixes. Upgrade to the latest version before reporting an issue; older releases may remain vulnerable.
+Only the latest release receives security fixes. Upgrade before you report an issue because older versions may still be affected.
 
-## Reporting a vulnerability
+## Report a vulnerability
 
-Please report suspected vulnerabilities using [GitHub's private vulnerability reporting form](https://github.com/leocavalcante/pi-subagents/security/advisories/new). Do not disclose vulnerabilities in public issues, discussions, or pull requests.
+Report vulnerabilities privately through [GitHub's vulnerability reporting form](https://github.com/leocavalcante/pi-subagents/security/advisories/new). Do not open a public issue, discussion, or pull request for them.
 
-Include the affected version, relevant platform and Pi/Node.js versions, a concise description of the impact, and reproducible steps where safe. Redact credentials, session data, private prompts, project contents, and other sensitive information from reports and logs. Do not attach authentication or configuration files.
+Include the affected pi-subagents version, Pi version, Node.js version, operating system, what an attacker can do, and safe steps to reproduce the issue.
 
-Please allow the maintainers time to investigate and coordinate a fix before making a report public.
+Leave out credentials, tokens, private prompts, session data, attachments, logs, project files, and other sensitive information. Use synthetic or redacted examples instead. Do not attach authentication or configuration files.
+
+If a credential was exposed, revoke or rotate it with its provider first, then report how it was exposed. Never include the credential itself.
+
+Please give the maintainer time to investigate and release a fix before you disclose the issue publicly.

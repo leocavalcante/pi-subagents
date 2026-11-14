@@ -29,10 +29,14 @@ const packageJson = JSON.parse(
 );
 
 function section(title) {
-  const start = readme.indexOf(`## ${title}\n`);
-  assert.notEqual(start, -1, `Missing README section: ${title}`);
-  const next = readme.indexOf("\n## ", start + 1);
-  return readme.slice(start, next === -1 ? undefined : next);
+  const headings = [...readme.matchAll(/^(#{2,4}) (.+)$/gm)];
+  const current = headings.find(([, , heading]) => heading === title);
+  assert.ok(current, `Missing README section: ${title}`);
+  const next = headings.find(
+    (heading) =>
+      heading.index > current.index && heading[1].length <= current[1].length,
+  );
+  return readme.slice(current.index, next?.index);
 }
 
 function githubHeadingSlug(title) {
@@ -43,32 +47,40 @@ function githubHeadingSlug(title) {
     .replace(/\s+/g, "-");
 }
 
-test("README contents links every section and subsection to its heading", () => {
+test("README contents links every top-level section to its heading", () => {
   const links = [
     ...section("Contents").matchAll(/^\s*-\s+\[[^\]]+\]\(#([a-z0-9-]+)\)$/gm),
   ].map(([, anchor]) => anchor);
-  const headings = [...readme.matchAll(/^#{2,3} (.+)$/gm)]
+  const headings = [...readme.matchAll(/^## (.+)$/gm)]
     .map(([, title]) => title)
     .filter((title) => title !== "Contents")
     .map(githubHeadingSlug);
   assert.deepEqual(
     links.sort(),
     headings.sort(),
-    "Keep the contents links aligned with every README section and subsection",
+    "Keep the contents links aligned with every top-level README section",
   );
+  const allHeadingAnchors = [...readme.matchAll(/^#{2,4} (.+)$/gm)].map(
+    ([, title]) => githubHeadingSlug(title),
+  );
+  for (const [, anchor] of readme.matchAll(/\]\(#([a-z0-9-]+)\)/g)) {
+    assert.ok(
+      allHeadingAnchors.includes(anchor),
+      `README anchor does not resolve to a heading: ${anchor}`,
+    );
+  }
 });
 
-test("README quick start connects installation, agent setup, and a first delegation", () => {
-  const quickStart = section("Quick start");
+test("README installation leads to setup and a first delegation", () => {
+  const installation = section("Installation");
+  const quickStart = section("First delegation");
   const npmInstall = `pi install npm:${packageJson.name}\n`;
-  assert.ok(quickStart.includes(npmInstall));
-  assert.ok(quickStart.includes("enter `/reload`"));
+  assert.ok(installation.includes(npmInstall));
+  assert.ok(installation.includes("Then run `/reload` in Pi"));
+  assert.ok(installation.indexOf(npmInstall) < installation.indexOf("/reload"));
   assert.ok(
-    quickStart.indexOf(npmInstall) < quickStart.indexOf("enter `/reload`"),
-  );
-  assert.ok(
-    quickStart.indexOf("enter `/reload`") <
-      quickStart.indexOf("~/.pi/agent/agents/reviewer.md"),
+    readme.indexOf("/reload") <
+      readme.indexOf("~/.pi/agent/agents/reviewer.md"),
   );
   assert.ok(quickStart.includes("~/.pi/agent/agents/reviewer.md"));
   assert.match(quickStart, /mkdir -p ~\/.pi\/agent\/agents/);
@@ -92,8 +104,9 @@ test("README documents the minimum Node.js version required by the package", () 
     /^>=\d+\.\d+\.\d+$/,
     "Expected a simple minimum Node.js engine range",
   );
+  const documentedFloor = engine.slice(2).split(".").slice(0, 2).join(".");
   assert.ok(
-    readme.includes(`Node.js ${engine.slice(2)} or newer`),
+    readme.includes(`Node.js ${documentedFloor} or newer`),
     `README must document Node.js ${engine}`,
   );
 });
@@ -121,12 +134,21 @@ test("README installs the unpinned npm package and the unreleased GitHub version
   );
   assert.match(
     installation,
-    /Tested with Pi 1\.0\.4 and 1\.1\.0 paired with Pi Codemode 1\.1\.0, and with Pi 1\.2\.0/,
+    /Fresh installs of those Pi versions may resolve incompatible Pi Codemode 1\.2\.0/,
+  );
+  const compatibility = section("Compatibility");
+  assert.match(
+    compatibility,
+    /Requires Pi 1\.0\.4 or newer \(with Pi Codemode 1\.1\.0 for Pi 1\.0\.4 and 1\.1\.x\) and Node\.js 22\.19 or newer/,
   );
   assert.match(
-    installation,
-    /Fresh installs of Pi 1\.0\.4 or 1\.1\.0 may resolve incompatible Pi Codemode 1\.2\.0/,
+    compatibility,
+    /Tested with Pi 1\.5\.2 on Linux, macOS, and Windows/,
   );
+  assert.match(compatibility, /Node\.js 22\.19\.0, 22, 24, and 26/);
+  assert.match(compatibility, /`pi-min` job tests Pi 1\.0\.4/);
+  assert.match(compatibility, /separate job tests Pi 1\.1\.0/);
+  assert.match(compatibility, /weekly canary checks the latest Pi release/);
   for (const piVersion of ["1.0.4", "1.1.0"]) {
     assert.ok(
       installation.includes(
@@ -200,6 +222,10 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
     "test",
   ]);
   assert.equal(packageJson.engines.node, ">=22.19.0");
+  assert.equal(
+    packageJson.description,
+    "Delegate tasks to isolated Pi subagents: single, parallel, chained, or in the background.",
+  );
   assert.equal(packageJson.engines.pi, ">=1.0.4");
   assert.equal(packageJson.devDependencies["@types/node"], "22.20.5");
   assert.equal(
@@ -830,15 +856,22 @@ test("README documents the bounded shared process queue", () => {
   );
 });
 
-test("README relative file links are included in the npm package", () => {
-  const relativeLinks = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)]
-    .map(([, target]) => target.split(/[?#]/, 1)[0])
-    .filter((target) => target && !/^[a-z][a-z\d+.-]*:/i.test(target));
-
-  for (const target of relativeLinks) {
+test("README repository files use absolute links and internal links use anchors", () => {
+  const links = [...readme.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(
+    ([, target]) => target,
+  );
+  for (const target of links) {
     assert.ok(
-      packageJson.files.includes(target),
-      `README target is missing from the npm package: ${target}`,
+      target.startsWith("#") || /^[a-z][a-z\d+.-]*:/i.test(target),
+      `README links must be absolute URLs or internal anchors: ${target}`,
+    );
+  }
+  for (const file of ["CONTRIBUTING.md", "SECURITY.md", "LICENSE"]) {
+    assert.ok(
+      links.includes(
+        `https://github.com/leocavalcante/pi-subagents/blob/main/${file}`,
+      ),
+      `README must link to ${file} with an absolute GitHub URL`,
     );
   }
 });
@@ -854,7 +887,7 @@ test("README documents fail-closed lookup when a nearer project-agent directory 
 });
 
 test("README documents mandatory approval for untrusted project agents", () => {
-  const security = section("Security");
+  const security = section("Privacy and security");
   assert.match(
     security,
     /require an interactive approval or an already-trusted Pi project/,
@@ -869,7 +902,7 @@ test("README documents mandatory approval for untrusted project agents", () => {
 test("README documents inherited environment filtering without describing it as a sandbox", () => {
   const agents = section("Agent definitions");
   const filtering = section("Inherited environment filtering");
-  const security = section("Security");
+  const security = section("Privacy and security");
   assert.match(
     agents,
     /inherited environment variables to remove with `unsetEnv`/,
@@ -901,7 +934,7 @@ test("README documents inherited environment filtering without describing it as 
 });
 
 test("README documents temporary system-prompt storage and platform permissions", () => {
-  const security = section("Security");
+  const security = section("Privacy and security");
   assert.match(
     security,
     /Agent system prompts are written briefly to a temporary UTF-8 file/,
@@ -923,7 +956,7 @@ test("README documents temporary system-prompt storage and platform permissions"
 });
 
 test("README documents terminal-control escaping for foreground, background, and job output", () => {
-  const security = section("Security");
+  const security = section("Privacy and security");
   assert.match(
     security,
     /foreground subagent result renderer escapes terminal control characters and invisible Unicode formatting characters in child output and tool-call previews/,
