@@ -14,11 +14,11 @@ pi-subagents goes last because it has the largest test migration. It runs real P
 - Step 6 merged as #409 and released **0.3.1**.
 - Step 7 is half done: #408 moved the seven logic suites to TypeScript on Bun.
 - Step 8 merged as #407 (`noUncheckedIndexedAccess`, exact runtime reads).
-- Step 9 merged as #410. The root `index.ts` re-export can be removed in the release after next.
+- Step 9 merged as #410 and shipped in 0.3.2 with a root `index.ts` re-export, which #414 then removed.
 - npm: the trusted publisher is `cd.yaml` with environment `npm`, `0.0.0-stage` is deprecated, and publishing requires 2FA and disallows tokens.
+- Consistency pass across the four extensions: #412 shared the repository files, and #413 (0.3.2) linked the other extensions from the README, with the package metadata matching the GitHub topics.
 - **Remaining:**
   - Convert the process and file-system suites to TypeScript `*.node-test.ts`, then drop the `.mjs` pattern.
-  - Remove the root `index.ts` re-export after one release.
   - Add `pi.image` and upload the social preview by hand.
 
 ## Target identity
