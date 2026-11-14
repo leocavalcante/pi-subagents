@@ -8,7 +8,7 @@ const {
   MessageCapture,
   MAX_CHILD_JSON_RECORDS,
   MAX_CHILD_STDOUT_BYTES,
-} = await jiti.import("../capture.ts");
+} = await jiti.import("../src/capture.ts");
 
 test("cumulative byte streams accept the exact limit, then notify once and drain without parsing", () => {
   const chunks = [];

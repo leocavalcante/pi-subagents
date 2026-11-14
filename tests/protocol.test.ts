@@ -7,7 +7,7 @@ import {
   MAX_JSON_STRUCTURE_TOKENS,
   toolResultMessageError,
   userMessageError,
-} from "../protocol.ts";
+} from "../src/protocol.ts";
 const message = (extra?: Record<string, unknown>) => ({
   content: [{ type: "text", text: "answer" }],
   stopReason: "stop",

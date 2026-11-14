@@ -12,7 +12,7 @@ const {
   cleanupTemporaryDirectories,
   removeTemporaryDirectory,
   trackTemporaryDirectory,
-} = await jiti.import("../temporary-files.ts");
+} = await jiti.import("../src/temporary-files.ts");
 
 test("temporary directories remain registered for process-exit cleanup after removal fails", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "pi-subagents-cleanup-test-"));

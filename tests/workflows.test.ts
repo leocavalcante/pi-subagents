@@ -65,11 +65,13 @@ test("the development toolchain is Bun but runtime sources do not import Bun API
   ) as PackageManifest;
   assert.match(manifest.packageManager, /^bun@\d+\.\d+\.\d+$/);
   assert.deepEqual(manifest.trustedDependencies, []);
-  // Runtime modules stay at the repository root until the planned src/ move.
-  for (const file of readdirSync(new URL("../", import.meta.url)).filter(
+  for (const file of readdirSync(new URL("../src/", import.meta.url)).filter(
     (file) => file.endsWith(".ts"),
   )) {
-    const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    const source = readFileSync(
+      new URL(`../src/${file}`, import.meta.url),
+      "utf8",
+    );
     assert.doesNotMatch(
       source,
       /(?:from\s*|import\s*\()\s*["']bun(?::[^"']*)?["']/,

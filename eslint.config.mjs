@@ -50,9 +50,9 @@ export default defineConfig(
     rules: nodeTestSafeCalls,
   },
   {
-    // This repository keeps Node runtime modules at its root, not under src/.
+    // Runtime modules live in src/; the root index.ts re-exports the entry for one release.
     // Node globals are explicit here; pi-otel's runtime block relies on TS types.
-    files: ["*.ts"],
+    files: ["index.ts", "src/**/*.ts"],
     languageOptions: { globals: globals.node },
     rules: {
       "no-restricted-imports": [
