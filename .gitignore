@@ -1,13 +1,28 @@
+# Dependencies and build output
 node_modules/
-CHANGELOG.md
+dist/
+coverage/
 *.tgz
+
+# Generated at release time
+CHANGELOG.md
+
+# Logs and local session records
+*.log
+*.jsonl
+
+# Machine-local state, credentials, and keys
 .env
 .env.*
-
-# Machine-local Pi state, credentials, keys, and execution logs.
-.pi/
+!.env.example
 .npmrc
 .netrc
+.pi/
+.pi-durable/
+/auth/
+/data/
+/private/
+/state/
 **/auth.json
 **/credentials*.json
 **/*service-account*.json
@@ -17,5 +32,12 @@ CHANGELOG.md
 *.pfx
 id_rsa*
 id_ed25519*
-*.jsonl
-*.log
+
+# Local databases
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Operating system files
+.DS_Store

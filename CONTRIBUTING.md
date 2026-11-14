@@ -2,7 +2,7 @@
 
 Thanks for helping improve Pi Subagents. This guide covers local development checks and the maintainer release process.
 
-## Development checks
+## Development
 
 Use [Bun](https://bun.sh/docs/installation) 1.4.4 for dependencies and scripts, and Node.js 22.19.0 or newer, matching the package's `engines` declaration; Pi runs extensions on Node.js. Install the pinned development SDK, compiler, and test loader locally. This also works when Pi is installed as a standalone binary:
 
@@ -30,7 +30,16 @@ The script downloads checksum-pinned actionlint v1.7.12 and gitleaks v8.30.1, th
 
 The project-agent hard-link rejection test runs on every platform. On Windows, the project-agent file-symlink boundary test runs when the process can create symbolic links. If Windows denies that privilege (`EPERM` or `EACCES`), that test is skipped with an explanation; enable Developer Mode or grant symbolic-link creation privilege to run it. Other tests, including the junction-based project-directory boundary test, still run. The junction-based extension checkout setup is a separate installation option documented in [README.md](README.md#installation).
 
-## Releasing
+## Deviations from the standard
+
+- The process and file-system suites still run as JavaScript (`tests/*.node-test.mjs`), so the Node.js lane also matches `.mjs`. Converting them to TypeScript is follow-up work.
+- The root `index.ts` re-exports `src/extension.ts` for one release, for anyone who loads the old entry directly. Pi loads `src/extension.ts`.
+
+## Commits and pull requests
+
+Use Conventional Commits and sign off commits with `git commit -s`. Never add a `Co-Authored-By` trailer. PR titles become squash commit subjects and release notes. Keep them user-facing, at most 72 characters, without a final period.
+
+## Automatic releases
 
 Do not edit the development version, create release tags, or publish from your machine. `.github/workflows/cd.yaml` runs CI on pushes to `main`, then semantic-release publishes releasable changes through npm Trusted Publishing with provenance.
 
