@@ -26,9 +26,9 @@ import { Value } from "typebox/value";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } =
-  await jiti.import("../capture.ts");
+  await jiti.import("../src/capture.ts");
 const { DEFAULT_PROGRESS_UPDATE_INTERVAL_MS } =
-  await jiti.import("../progress.ts");
+  await jiti.import("../src/progress.ts");
 const {
   MAX_AGENT_DESCRIPTION_BYTES,
   MAX_AGENT_DIAGNOSTICS,
@@ -42,16 +42,16 @@ const {
   MAX_MODEL_SELECTOR_BYTES,
   MAX_TIMEOUT_MS,
   MAX_WORKING_DIRECTORY_LENGTH,
-} = await jiti.import("../agents.ts");
+} = await jiti.import("../src/agents.ts");
 const {
   MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES,
   MAX_AGENT_LISTING_PATH_BYTES,
   truncateAgentListingText,
-} = await jiti.import("../agent-listing.ts");
-const { MAX_PENDING_JOB_WAITS } = await jiti.import("../jobs.ts");
-const { MAX_PAGE_BYTES } = await jiti.import("../paging.ts");
+} = await jiti.import("../src/agent-listing.ts");
+const { MAX_PENDING_JOB_WAITS } = await jiti.import("../src/jobs.ts");
+const { MAX_PAGE_BYTES } = await jiti.import("../src/paging.ts");
 const { buildWindowsSupervisorInvocation } = await jiti.import(
-  "../windows-supervisor-invocation.ts",
+  "../src/windows-supervisor-invocation.ts",
 );
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Use the canonical path because macOS exposes many temp directories through symlink aliases.
@@ -221,7 +221,10 @@ const shutdown = async () => {
 beforeEach(async () => {
   writeFileSync(traceFile, "");
   messages = [];
-  const loaded = await loadExtensions([join(root, "index.ts")], sandbox);
+  const loaded = await loadExtensions(
+    [join(root, "src", "extension.ts")],
+    sandbox,
+  );
   assert.deepEqual(loaded.errors, []);
   loaded.runtime.sendMessage = (message, options) =>
     messages.push({ message, options });
@@ -2080,7 +2083,10 @@ test("PI_SUBAGENTS_MAX_PROCESSES sets the shared process limit and rejects inval
   const reload = async (value) => {
     await shutdown();
     process.env.PI_SUBAGENTS_MAX_PROCESSES = value;
-    const loaded = await loadExtensions([join(root, "index.ts")], sandbox);
+    const loaded = await loadExtensions(
+      [join(root, "src", "extension.ts")],
+      sandbox,
+    );
     assert.deepEqual(loaded.errors, []);
     loaded.runtime.sendMessage = (message, options) =>
       messages.push({ message, options });
@@ -2090,7 +2096,10 @@ test("PI_SUBAGENTS_MAX_PROCESSES sets the shared process limit and rejects inval
   try {
     for (const value of ["0", "9", "2.5", "four"]) {
       process.env.PI_SUBAGENTS_MAX_PROCESSES = value;
-      const rejected = await loadExtensions([join(root, "index.ts")], sandbox);
+      const rejected = await loadExtensions(
+        [join(root, "src", "extension.ts")],
+        sandbox,
+      );
       assert.match(
         JSON.stringify(rejected.errors),
         /PI_SUBAGENTS_MAX_PROCESSES must be an integer from 1 to 8/,

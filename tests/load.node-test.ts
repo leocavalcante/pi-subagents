@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import extension from "../index.ts";
+import extension from "../src/extension.ts";
 
 test("the extension loads on Node.js and registers its tools, commands, and hooks", () => {
   const tools: string[] = [];

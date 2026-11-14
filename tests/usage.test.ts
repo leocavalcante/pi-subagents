@@ -5,7 +5,7 @@ import {
   protocolUsageError,
   normalizeUsage,
   sumUsage,
-} from "../usage.ts";
+} from "../src/usage.ts";
 
 test("validates every consumed token and cost field without exposing payloads", () => {
   for (const field of [

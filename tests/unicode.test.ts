@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 
-import { isWellFormedUnicode } from "../unicode.ts";
+import { isWellFormedUnicode } from "../src/unicode.ts";
 
 test("well-formed Unicode accepts scalar values and rejects isolated UTF-16 surrogates", () => {
   for (const value of ["", "ASCII", "café", "😀", "\ud800\udc00"])

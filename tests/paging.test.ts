@@ -4,7 +4,7 @@ import {
   createOutputPager,
   sliceOutput,
   WeakOutputPagerCache,
-} from "../paging.ts";
+} from "../src/paging.ts";
 
 test("UTF-8 output pages reconstruct multibyte text without replacement characters", () => {
   const original = "abc😀é漢字\n".repeat(50);

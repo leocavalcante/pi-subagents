@@ -66,7 +66,10 @@ after(() => {
 
 test("nested delegation propagates depth and blocks process trees past the limit", async () => {
   writeFileSync(traceFile, "");
-  const loaded = await loadExtensions([join(root, "index.ts")], sandbox);
+  const loaded = await loadExtensions(
+    [join(root, "src", "extension.ts")],
+    sandbox,
+  );
   assert.deepEqual(loaded.errors, []);
   const extension = loaded.extensions[0];
   const invoke = (params) =>

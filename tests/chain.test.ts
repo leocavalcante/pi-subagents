@@ -5,7 +5,7 @@ import {
   validateChainReferences,
   substituteChainContext,
   substituteChainContextBounded,
-} from "../chain.ts";
+} from "../src/chain.ts";
 
 test("chain step IDs share one strict validator for references and output lookup", () => {
   for (const id of ["a", "Step_1", "x-y", "A".repeat(64)])

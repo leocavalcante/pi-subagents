@@ -33,10 +33,15 @@ try {
   const packedPaths = new Set(paths);
 
   const entrypoints = manifest.pi?.extensions;
-  assert.deepEqual(entrypoints, ["./index.ts"]);
-  assert(packedPaths.has("index.ts"), "The extension entry point must ship");
+  assert.deepEqual(entrypoints, ["./src/extension.ts"]);
   assert(
-    paths.includes("windows-supervisor.cs"),
+    packedPaths.has("src/extension.ts"),
+    "The extension entry point must ship",
+  );
+  // The root re-export keeps direct loads of the old entry working for one release.
+  assert(packedPaths.has("index.ts"), "The root re-export must ship");
+  assert(
+    paths.includes("src/windows-supervisor.cs"),
     "The Windows supervisor must ship",
   );
   assert(paths.includes("CHANGELOG.md"), "The generated changelog must ship");
@@ -46,7 +51,7 @@ try {
   );
 
   // Walk the entry point's local imports and runtime assets against the tarball.
-  const pending = ["index.ts"];
+  const pending = ["src/extension.ts", "index.ts"];
   const visited = new Set();
   const localReference =
     /(?:\bfrom\s*|\bimport\s*\(?\s*|\bnew URL\(\s*)["'](\.{1,2}\/[^"']+)["']/g;
@@ -116,23 +121,26 @@ try {
   writeFileSync(
     smokeTest,
     `import assert from "node:assert/strict";
-const loaded = await import(${JSON.stringify(`${manifest.name}/index.ts`)});
-const register = typeof loaded.default === "function" ? loaded.default : loaded.default.default;
-assert.equal(typeof register, "function");
-const tools = [];
-const commands = [];
-const events = [];
-const messageRenderers = [];
-register({
-  registerTool: ({ name }) => tools.push(name),
-  registerCommand: (name) => commands.push(name),
-  registerMessageRenderer: (name) => messageRenderers.push(name),
-  on: (event) => events.push(event),
-});
-assert.deepEqual(tools, ["subagent_agents", "subagent_jobs", "subagent"]);
-assert.deepEqual(commands, []);
-assert.deepEqual(messageRenderers, ["subagent-background"]);
-assert.deepEqual(events, ["session_shutdown"]);
+const unwrap = (loaded) => typeof loaded.default === "function" ? loaded.default : loaded.default.default;
+// Pi loads src/extension.ts; the root index.ts re-export must register the same extension.
+for (const entry of ["src/extension.ts", "index.ts"]) {
+  const register = unwrap(await import(${JSON.stringify(manifest.name)} + "/" + entry));
+  assert.equal(typeof register, "function", entry);
+  const tools = [];
+  const commands = [];
+  const events = [];
+  const messageRenderers = [];
+  register({
+    registerTool: ({ name }) => tools.push(name),
+    registerCommand: (name) => commands.push(name),
+    registerMessageRenderer: (name) => messageRenderers.push(name),
+    on: (event) => events.push(event),
+  });
+  assert.deepEqual(tools, ["subagent_agents", "subagent_jobs", "subagent"], entry);
+  assert.deepEqual(commands, [], entry);
+  assert.deepEqual(messageRenderers, ["subagent-background"], entry);
+  assert.deepEqual(events, ["session_shutdown"], entry);
+}
 console.log("Packed extension loads under Node.js through jiti.");
 `,
   );

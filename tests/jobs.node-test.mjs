@@ -7,7 +7,7 @@ const {
   ProcessPool,
   MAX_PENDING_JOB_WAITS,
   JobWaiterCapacityError,
-} = await jiti.import("../jobs.ts");
+} = await jiti.import("../src/jobs.ts");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
   let resolve;

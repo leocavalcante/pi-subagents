@@ -30,7 +30,7 @@ const {
   MAX_MODEL_SELECTOR_BYTES,
   MAX_TIMEOUT_MS,
   MAX_WORKING_DIRECTORY_LENGTH,
-} = await jiti.import("../agents.ts");
+} = await jiti.import("../src/agents.ts");
 const sandbox = mkdtempSync(join(tmpdir(), "pi-agents-test-"));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, "user");
@@ -145,7 +145,7 @@ test(
     symlinkSync(fifo, join(projectDir, "linked-pipe.md"));
     const script =
       `import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};\n` +
-      `const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../agents.ts", import.meta.url).href)});\n` +
+      `const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../src/agents.ts", import.meta.url).href)});\n` +
       `process.stdout.write(JSON.stringify(discoverAgents(process.env.AGENT_TEST_CWD, 'project')));`;
     const child = spawnSync(
       process.execPath,
@@ -1074,7 +1074,7 @@ test("project agent link counts are rechecked after reading", () => {
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
     import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};
-    const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../agents.ts", import.meta.url).href)});
+    const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../src/agents.ts", import.meta.url).href)});
     const originalReadSync = fs.readSync;
     let linkCreated = false;
     fs.readSync = function(...args) {
@@ -1186,7 +1186,7 @@ test("project agent reads reject directory swaps during path revalidation and op
     syncBuiltinESMExports();
     let output;
     try {
-      const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../agents.ts", import.meta.url).href)});
+      const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../src/agents.ts", import.meta.url).href)});
       const revalidationResult = discoverAgents(cases.revalidation.cwd, 'project');
       const openResult = discoverAgents(cases.open.cwd, 'project');
       output = JSON.stringify({ revalidationSwap, openSwap, revalidationResult, openResult });

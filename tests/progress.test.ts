@@ -3,7 +3,7 @@ import { test } from "bun:test";
 import {
   DEFAULT_PROGRESS_UPDATE_INTERVAL_MS,
   ProgressUpdateLimiter,
-} from "../progress.ts";
+} from "../src/progress.ts";
 
 test("progress limiter emits immediately and then no more often than its interval", () => {
   const limiter = new ProgressUpdateLimiter();

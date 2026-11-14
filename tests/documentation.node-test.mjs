@@ -348,22 +348,33 @@ test("CONTRIBUTING documents Bun commands and the temporary Node.js test lane", 
   assert.match(contributing, /agentTags dispatch/);
 });
 
+// A file ships when `files` lists it or a directory that contains it.
+const published = (file) =>
+  packageJson.files.some(
+    (entry) =>
+      entry === file || (entry.endsWith("/") && file.startsWith(entry)),
+  );
+
 test("npm package includes required runtime support files", () => {
   for (const file of [
-    "windows-supervisor.cs",
-    "windows-supervisor-invocation.ts",
-    "temporary-files.ts",
-    "abort.ts",
+    "index.ts",
+    "src/extension.ts",
+    "src/windows-supervisor.cs",
+    "src/windows-supervisor-invocation.ts",
+    "src/temporary-files.ts",
+    "src/abort.ts",
   ]) {
-    assert.ok(
-      packageJson.files.includes(file),
-      `Package files must include ${file}`,
-    );
+    assert.ok(published(file), `Package files must include ${file}`);
   }
+  assert.deepEqual(packageJson.pi.extensions, ["./src/extension.ts"]);
 });
 
 test("npm package includes the full local dependency closure of its extension entrypoint", () => {
-  const pending = ["index.ts"];
+  // Walk from Pi's entry point and the root re-export kept for direct loads.
+  const pending = [
+    ...packageJson.pi.extensions.map((entry) => entry.replace(/^\.\//, "")),
+    "index.ts",
+  ];
   const visited = new Set();
   const localReference =
     /(?:\bfrom\s*|\bimport\s*\(?\s*|\bnew URL\(\s*)["'](\.{1,2}\/[^"']+)["']/g;
@@ -373,7 +384,7 @@ test("npm package includes the full local dependency closure of its extension en
     if (visited.has(sourceFile)) continue;
     visited.add(sourceFile);
     assert.ok(
-      packageJson.files.includes(sourceFile),
+      published(sourceFile),
       `Package files must include ${sourceFile}`,
     );
     assert.ok(
@@ -393,7 +404,7 @@ test("npm package includes the full local dependency closure of its extension en
         `Local dependency escapes package root: ${specifier}`,
       );
       assert.ok(
-        packageJson.files.includes(dependency),
+        published(dependency),
         `Package files must include ${dependency}, referenced by ${sourceFile}`,
       );
       if (dependency.endsWith(".ts")) pending.push(dependency);

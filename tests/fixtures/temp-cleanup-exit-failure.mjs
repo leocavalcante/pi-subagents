@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { jiti } from "../pi-runtime.mjs";
 
 const { cleanupTemporaryDirectories, trackTemporaryDirectory } =
-  await jiti.import("../temporary-files.ts");
+  await jiti.import("../src/temporary-files.ts");
 const directory = mkdtempSync(
   join(tmpdir(), "pi-subagents-exit-cleanup-test-"),
 );

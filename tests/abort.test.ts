@@ -5,7 +5,7 @@ import {
   createAbortableDeferred,
   waitForSharedOperation,
   waitWithAbort,
-} from "../abort.ts";
+} from "../src/abort.ts";
 
 test("abortable deferred removes canceled waiters without canceling shared work", async () => {
   const deferred = createAbortableDeferred();
