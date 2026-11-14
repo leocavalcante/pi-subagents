@@ -1,42 +1,98 @@
 # pi-subagents
 
-A Pi extension that delegates tasks to separate Pi processes with isolated context windows.
+Delegate tasks to isolated Pi subagents: single, parallel, chained, or in the background.
 
-Extracted from Leo Cavalcante's dotfiles and based on the subagent example bundled with Pi 1.0.0. Adds session-owned background execution.
+[![npm](https://img.shields.io/npm/v/@leocavalcante/pi-subagents)](https://www.npmjs.com/package/@leocavalcante/pi-subagents) [![CD](https://github.com/leocavalcante/pi-subagents/actions/workflows/cd.yaml/badge.svg)](https://github.com/leocavalcante/pi-subagents/actions/workflows/cd.yaml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/leocavalcante/pi-subagents/blob/main/LICENSE)
+
+Ask two agents to inspect authentication and tests in parallel; they return separate findings. A final chain step can compare both reports in another Pi process without filling your current conversation with their work.
 
 ## Contents
 
-- [Quick start](#quick-start)
 - [Installation](#installation)
-- [Agent definitions](#agent-definitions)
 - [Usage](#usage)
-  - [Filter by capability tag](#filter-by-capability-tag)
-  - [Filter by multiple capability tags](#filter-by-multiple-capability-tags)
-  - [Dispatch using capability tags](#dispatch-using-capability-tags)
-- [Named chain outputs](#named-chain-outputs)
-- [Model and thinking overrides](#model-and-thinking-overrides)
-- [Tool allowlist overrides](#tool-allowlist-overrides)
-- [Inherited environment filtering](#inherited-environment-filtering)
-- [Batch concurrency](#batch-concurrency)
-- [Task deadlines](#task-deadlines)
-- [Background execution](#background-execution)
-  - [Wait for a background job](#wait-for-a-background-job)
-  - [Read captured job output](#read-captured-job-output)
-- [Usage accounting](#usage-accounting)
-- [Output capture and cleanup](#output-capture-and-cleanup)
-- [Security](#security)
+- [How it works](#how-it-works)
+- [Configuration](#configuration)
+- [Compatibility](#compatibility)
+- [Privacy and security](#privacy-and-security)
+- [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
-- [Origin and license](#origin-and-license)
+- [License](#license)
 
-## Quick start
-
-Install the published npm package and reload Pi:
+## Installation
 
 ```sh
 pi install npm:@leocavalcante/pi-subagents
 ```
 
-If Pi is already running, enter `/reload` so it loads the newly installed extension.
+Then run `/reload` in Pi, or start a new session. To try pi-subagents once without adding it to your settings, run `pi -e npm:@leocavalcante/pi-subagents`. See [Compatibility](#compatibility) for Pi and Node.js requirements.
+
+Pi does not update npm packages installed at a pinned version, such as `npm:@leocavalcante/pi-subagents@0.2.0`. If you installed one, switch to the unpinned package:
+
+```sh
+pi remove npm:@leocavalcante/pi-subagents
+pi install npm:@leocavalcante/pi-subagents
+```
+
+To install unreleased changes from the current GitHub `main` branch instead, use:
+
+```sh
+pi install git:github.com/leocavalcante/pi-subagents
+```
+
+Git installations track `main` and report version `0.0.0-development`, so Pi does not show release notes for them. Remove either installation with `pi remove` and the same source.
+
+From the checkout root, install the local copy with:
+
+```sh
+pi install .
+```
+
+Run `/reload` in Pi after installation. Remove any previous copy or symlink at `~/.pi/agent/extensions/subagent` before installing the package to avoid registering the tool twice.
+
+For development without changing Pi settings, symlink the checkout instead:
+
+```sh
+mkdir -p ~/.pi/agent/extensions
+ln -s "$PWD" ~/.pi/agent/extensions/subagent
+```
+
+Run this command from the checkout, with no existing `subagent` directory. Use either a package install or the symlink, not both. On Windows, use PowerShell and a directory junction instead of the POSIX `ln -s` command:
+
+```powershell
+$extensions = Join-Path $HOME ".pi/agent/extensions"
+New-Item -ItemType Directory -Force $extensions | Out-Null
+$link = Join-Path $extensions "subagent"
+if (Test-Path -LiteralPath $link) { throw "Remove the existing subagent path first: $link" }
+New-Item -ItemType Junction -Path $link -Target (Get-Location).Path
+```
+
+Run this from the checkout root. A junction avoids requiring Windows symbolic-link privileges; remove it with `Remove-Item (Join-Path $HOME ".pi\agent\extensions\subagent")` when you no longer need the local install.
+
+Pi 1.0.4 and 1.1.0 need Pi Codemode 1.1.0. Fresh installs of those Pi versions may resolve incompatible Pi Codemode 1.2.0; see the [upstream bug report](https://github.com/earendil-works/pi/issues/10865). Install each Pi version with its compatible Codemode version:
+
+```sh
+# Pi 1.0.4
+npm install --global @earendil-works/pi-coding-agent@1.0.4 @earendil-works/pi-codemode@1.1.0
+
+# Pi 1.1.0
+npm install --global @earendil-works/pi-coding-agent@1.1.0 @earendil-works/pi-codemode@1.1.0
+```
+
+## Usage
+
+### Tools
+
+| Tool              | Parameters                                                                                                                                                                                                                                               | What it does                                                                                                                                   |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subagent_agents` | Optional `agentScope`, `name`, `query`, `tag`, `tags`, `offset`, and `limit`                                                                                                                                                                             | Lists agent definitions and diagnostics, or filters by one exact name, query, or capability tag filter.                                        |
+| `subagent`        | One of `agent` or `agentTags` with `task`; `tasks` for parallel work; or `chain` for sequential work. Optional `name`, `preamble`, `agentScope`, `cwd`, `model`, `thinking`, `tools`, `unsetEnv`, `timeoutMs`, `concurrency`, `background`, and `notify` | Runs one task, a parallel batch, or a sequential chain. `concurrency` applies only to parallel mode; `notify` applies only to background jobs. |
+| `subagent_jobs`   | Required `action`; optional `jobId`, `taskIndex`, `stepId`, `offset`, `limit`, `stream`, and `timeoutMs`                                                                                                                                                 | Lists, inspects, waits for, cancels, forgets, or clears background jobs; pages captured result or stderr output.                               |
+
+`subagent` accepts exactly one mode. A single task uses `{ agent, task, name? }` or `{ agentTags, task, name? }`; parallel mode uses 1–8 entries in `tasks`; chain mode uses 1–32 entries in `chain`. Each entry can select an agent by name or tags and can set its own display name, working directory, model, thinking level, tools, environment filtering, and deadline. The top-level `name` applies only to a single task; batch entries set their names individually. Top-level `preamble`, `cwd`, `model`, `thinking`, `tools`, `unsetEnv`, and `timeoutMs` provide defaults in every mode. `agentScope` defaults to `user` and can be `project` or `both`.
+
+`subagent_jobs` actions are `list`, `status`, `wait`, `output`, `cancel`, `forget`, and `clear`. `timeoutMs` applies only to `wait`; `taskIndex`, `stepId`, `offset`, `limit`, and `stream` apply only to `output`. Use `stepId` or `taskIndex`, not both.
+
+### First delegation
 
 Create the personal agent directory if it does not already exist. On macOS/Linux, run:
 
@@ -69,67 +125,7 @@ Use reviewer to review the authentication code for security issues. Do not modif
 
 See [Installation](#installation) for local installs and Windows setup, and [Agent definitions](#agent-definitions) for project agents and optional settings.
 
-## Installation
-
-Requires Pi and Node.js 22.19.0 or newer. Tested with Pi 1.0.4 and 1.1.0 paired with Pi Codemode 1.1.0, and with Pi 1.2.0 and 1.3.0. Fresh installs of Pi 1.0.4 or 1.1.0 may resolve incompatible Pi Codemode 1.2.0; see the [upstream bug report](https://github.com/earendil-works/pi/issues/10865). To install an older Pi with its compatible Codemode version, run the matching command:
-
-```sh
-# Pi 1.0.4
-npm install --global @earendil-works/pi-coding-agent@1.0.4 @earendil-works/pi-codemode@1.1.0
-
-# Pi 1.1.0
-npm install --global @earendil-works/pi-coding-agent@1.1.0 @earendil-works/pi-codemode@1.1.0
-```
-
-Alternatively, use Pi 1.3.0. Pi provides the runtime dependencies, so no build step is needed.
-
-Install the latest release from npm:
-
-```sh
-pi install npm:@leocavalcante/pi-subagents
-```
-
-Pi never updates an install pinned to a version, such as `npm:@leocavalcante/pi-subagents@0.2.0`. If you installed one, switch to the unpinned package to receive updates:
-
-```sh
-pi remove npm:@leocavalcante/pi-subagents
-pi install npm:@leocavalcante/pi-subagents
-```
-
-To install unreleased changes from the current GitHub `main` branch instead, use:
-
-```sh
-pi install git:github.com/leocavalcante/pi-subagents
-```
-
-From the checkout root, install the local copy with:
-
-```sh
-pi install .
-```
-
-Run `/reload` in Pi after installation. Remove any previous copy or symlink at `~/.pi/agent/extensions/subagent` before installing the package to avoid registering the tool twice.
-
-For development without changing Pi settings, symlink the checkout instead:
-
-```sh
-mkdir -p ~/.pi/agent/extensions
-ln -s "$PWD" ~/.pi/agent/extensions/subagent
-```
-
-Run that command from the checkout, with no existing `subagent` directory. Use either a package install or the symlink, not both. On Windows, use PowerShell and a directory junction instead of the POSIX `ln -s` command:
-
-```powershell
-$extensions = Join-Path $HOME ".pi/agent/extensions"
-New-Item -ItemType Directory -Force $extensions | Out-Null
-$link = Join-Path $extensions "subagent"
-if (Test-Path -LiteralPath $link) { throw "Remove the existing subagent path first: $link" }
-New-Item -ItemType Junction -Path $link -Target (Get-Location).Path
-```
-
-Run this from the checkout root. A junction avoids requiring Windows symbolic-link privileges; remove it with `Remove-Item (Join-Path $HOME ".pi\agent\extensions\subagent")` when you no longer need the local install.
-
-## Agent definitions
+### Agent definitions
 
 Keep personal agent definitions in `~/.pi/agent/agents/*.md`. They are not bundled with this package.
 
@@ -166,7 +162,7 @@ Project-local definitions live in `.pi/agents/*.md`. The tool loads only persona
 
 Agent discovery is bounded for both personal and project directories: it scans at most 4096 directory entries, loads at most 256 Markdown definitions, and reads at most 512 KiB per file and 4 MiB of content per directory. A directory exceeding either scan or definition count is skipped entirely; oversized files are skipped, and reaching the aggregate content limit skips remaining files in locale-independent lexical filename order. A missing personal-agent directory is treated as empty; permission and other inspection failures are reported as diagnostics rather than silently appearing empty. At most 64 diagnostics are retained per listing, with one notice when further diagnostics are omitted. These limits keep malformed or unexpectedly large agent directories from consuming unbounded time or memory during discovery.
 
-## Usage
+### Discover agents
 
 Use `subagent_agents` to list agent descriptions, tags, source paths, model, thinking, tool settings, configured timeout, working-directory and filtered-environment defaults, and invalid definitions without running an agent:
 
@@ -229,11 +225,11 @@ Use a chain: worker reviews the code, then worker evaluates the findings.
 
 The `subagent` tool accepts exactly one mode. Select each task's agent with either an exact `agent` name or `agentTags`, an array of exact capability labels that must all match. Selection applies after scope precedence and dispatch requires exactly one matching definition: no match or multiple matches fail before any child starts. Project-agent trust approval still applies to the resolved definition. Empty arrays, blank tasks, partial single-task parameters, and unknown agents are rejected before any child starts:
 
-| Mode     | Parameters                                                   | Execution                                                                |
-| -------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| Single   | `{ agent, task, name? }` or `{ agentTags, task, name? }`     | One task                                                                 |
-| Parallel | `{ tasks: [{ agent or agentTags, task, name? }, ...] }`      | Up to 8 tasks, up to 4 concurrent                                        |
-| Chain    | `{ chain: [{ agent or agentTags, task, id?, name? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references |
+| Mode     | Parameters                                                   | Execution                                                                              |
+| -------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Single   | `{ agent, task, name? }` or `{ agentTags, task, name? }`     | One task                                                                               |
+| Parallel | `{ tasks: [{ agent or agentTags, task, name? }, ...] }`      | Up to 8 tasks; 4 concurrent by default, up to the configured process limit (maximum 8) |
+| Chain    | `{ chain: [{ agent or agentTags, task, id?, name? }, ...] }` | Up to 32 sequential steps, with `{previous}` and named output references               |
 
 `agent` and `agentTags` select the agent definition; optional `name` is a separate display name. Set it at the top level for a single task or on each parallel task/chain step; top-level `name` is not a batch default. Omitted names are generated as `<agent> <adjective> <animal>` (for example, `worker amber otter`). Names are assigned once, unique within a dispatch, and used in progress, results, and background job labels/output; `jobId` remains the opaque job identifier. Duplicate explicit names are rejected. Explicit names must be non-empty, well-formed Unicode, at most 256 UTF-8 bytes, and contain no terminal or bidirectional controls. Renderers make invisible formatting characters visible.
 
@@ -259,7 +255,7 @@ Foreground execution is the default. Progress streams into the parent session at
 
 Collapsed tool output shows bounded text previews rather than wrapping an entire long line. Expand with Ctrl+O to see captured final text. All modes show process, protocol, and model failure diagnoses, including stderr when no explicit error message is available. Tool arguments remain compact previews in either view.
 
-## Named chain outputs
+### Named chain outputs
 
 Give a chain step an optional `id` to reuse its output in any later step:
 
@@ -290,7 +286,7 @@ The tool rejects invalid IDs, duplicate IDs, and unknown, self, or forward refer
 
 References use full captured text, not the model-facing preview. Substitution happens once, so placeholders and dollar sequences inside an agent's output stay literal. This works in foreground and background chains, including silent jobs. Captured step results include `stepId`, and output pages include it when present. Paginate a named step by `stepId`; use zero-based `taskIndex` for parallel batches, unnamed steps, or positional lookup.
 
-## Model and thinking overrides
+### Model and thinking overrides
 
 Set `model` or `thinking` on a call without editing the agent definition:
 
@@ -307,7 +303,7 @@ Parallel and chain entries accept the same fields. Each field resolves independe
 
 Model selectors support Pi's `provider/id` and `:thinking` syntax and are limited to 512 UTF-8 bytes without control characters. A resolved `thinking` setting overrides a model suffix. These options work in foreground and background modes; project-agent approval remains required regardless of these overrides.
 
-## Tool allowlist overrides
+### Tool allowlist overrides
 
 Use `tools` to tailor the child's initial tool selection for a particular dispatch without editing the agent definition:
 
@@ -323,7 +319,7 @@ A comma-separated string such as `"read, grep"` is also accepted. In parallel an
 
 Overrides use the same validation as agent definitions: at most 256 entries and 4 KiB of normalized UTF-8 tool names, with no commas, controls, or leading `+`/`-` modifiers in individual names. This is a convenience for selecting tools, not a sandbox; extensions can still change the selection. Tool overrides work in foreground and background modes and do not bypass project-agent approval.
 
-## Inherited environment filtering
+### Inherited environment filtering
 
 The child Pi process inherits the parent environment by default. Set `unsetEnv` on an agent or dispatch to omit known variables from the child's initial environment:
 
@@ -343,13 +339,13 @@ Agent defaults, top-level call values, and parallel/chain entry values combine a
 
 This only filters variables inherited at child startup; it is not a sandbox. A child can set variables for its own subprocesses, and it still has the parent's OS permissions to read files or obtain credentials elsewhere. Use trusted agents and do not put secrets in delegated tasks or prompts.
 
-## Batch concurrency
+### Batch concurrency
 
 Parallel mode accepts `concurrency` from 1 to the process limit, which is also the default. Use `concurrency: 1` to run independent tasks serially without chaining their output. All batches still share the same process budget; this option never raises it. Single and chain modes reject this option.
 
 The process limit is 4 by default. To change it, set `PI_SUBAGENTS_MAX_PROCESSES` to an integer from 1 to 8 before starting Pi. An invalid value stops the extension from loading.
 
-## Task deadlines
+### Task deadlines
 
 Set `timeoutMs` to bound a child's runtime:
 
@@ -371,7 +367,7 @@ For parallel and chain modes, a top-level `timeoutMs` is the default for each ch
 
 A timeout terminates the child using the same cleanup as cancellation and returns a failed result with `timedOut: true` in details. On POSIX, cleanup signals the child's process group and escalates from SIGTERM to SIGKILL after one second. On Windows, after compilation the supervisor joins a kill-on-close outer Job Object, creates Pi suspended with only its standard I/O handles inherited, assigns Pi to a nested kill-on-close Job Object, and then resumes it. This contains child-launched processes before Pi executes. Cancellation and timeout terminate the supervisor, causing its outer Job Object to terminate remaining members; after normal leader exit, the supervisor terminates and waits for remaining inner-job processes to exit. Job setup or cleanup failures fail closed; the supervisor waits at most 30 seconds for job settlement before reporting failure. Windows uses an immediate termination request instead of the POSIX escalation delay. Cleanup may still wait up to one second for inherited pipes to drain. Background jobs report `failed`, not `canceled`. Chains stop at the timed-out step; other parallel tasks continue. Explicit user cancellation still reports `canceled`.
 
-## Background execution
+### Background execution
 
 Add `background: true` to any mode. The tool returns a job ID immediately, allowing the parent to continue working. For example:
 
@@ -433,7 +429,7 @@ Completion and status text are capped at 50 KiB including headers and truncation
 
 Background execution requires a long-lived TUI or RPC session. Print and JSON modes must use foreground execution so they do not exit with unfinished work.
 
-## Wait for a background job
+#### Wait for a background job
 
 Use `action: "wait"` when the next operation needs a particular job's result. It waits for the job to finish cleanup, without polling. `timeoutMs` defaults to 30000 and accepts whole milliseconds from 1 to 60000. This limits the wait, not the child's runtime.
 
@@ -457,7 +453,7 @@ return { state: result.job.state, timedOut: result.timedOut };
 
 Use one bounded wait when needed rather than a repeated status or wait loop.
 
-## Read captured job output
+#### Read captured job output
 
 `action: "output"` reads a page of a task's captured final text or failure diagnosis as soon as that task finishes, even while other tasks in the job are still running. An unfinished task returns a clear error; use `action: "wait"` to wait for the whole job. Output for finished jobs is unchanged. The default `stream: "result"` preserves this behavior; set `stream: "stderr"` to page the task's separately captured stderr without mixing it into the final answer. `output.stderrTruncated` indicates whether stderr reached its 64 KiB capture limit (the captured text includes a truncation notice). Failed tasks also expose retained assistant and tool-result text under an explicit **partial, unverified** label; it is not evidence that the task completed successfully or that its side effects were rolled back. `output.partial` marks task output as incomplete or failed; model turns stopped by their output-token limit are failures, with retained text shown only as partial, unverified output. Deferred provider responses are not polled by subagent dispatch and are reported as failures rather than completed answers. `output.timedOut` indicates whether the runtime deadline fired, and `output.timeoutMs` reports the effective per-task deadline when configured. `output.exitCode` is the extension-reported task exit code (protocol violations and timeouts use `1`), while `output.processExitCode`, when available, reports the child's actual exit code (or `null` if it exited without a numeric code). Protocol failures include bounded `failureContext` fields for event type, a safe role label, JSONL record number, and last valid assistant stop reason. Invalid payload contents and arbitrary role strings are not echoed. Select a named chain step with `stepId`, or use zero-based `taskIndex` (default 0); the selectors are mutually exclusive. Use `taskIndex` for parallel batches and unnamed chain steps. Status reports `resultCount` while results are retained.
 
@@ -490,7 +486,7 @@ text(logs.output.text);
 
 Read additional pages only when needed; keep the same `stepId` or `taskIndex` selector and advance `offset` with each page. Non-silent jobs send completion messages automatically, so do not poll for them.
 
-## Usage accounting
+### Usage accounting
 
 Foreground results report cumulative child token and cost totals through Pi's standard tool-result `usage` field. This includes completed assistant attempts and nested model usage in canonical `message_end` tool results, even when a task fails or earlier message history is evicted. Legacy `tool_result_end` copies do not add usage again and are deduplicated from retained history only when an adjacent canonical copy is identical. Reasoning tokens and one-hour cache writes are subsets, not additional tokens.
 
@@ -498,7 +494,13 @@ Background totals are retained with job results and are also available as observ
 
 Malformed usage and arithmetic overflow fail the task without exposing provider payloads. An overflow while combining batch totals marks the response as an error and preserves individual captures, but omits aggregate usage.
 
-## Output capture and cleanup
+## How it works
+
+Each delegated task runs in a separate Pi child process with its own context window. pi-subagents starts the child in JSON mode without a saved session and sends the task through stdin, so task text does not need to fit in the operating system's command-line limit.
+
+In foreground mode, child results return to the current tool call. Progress streams at most 10 times per second per child; the first update is immediate, and the latest pending output is flushed at completion. Throttling affects notifications only: accepted child events are still parsed, accounted for, and captured. Use Ctrl+O to expand tool output.
+
+### Output capture and cleanup
 
 Each child has bounded output capture:
 
@@ -516,9 +518,34 @@ A zero exit code alone is not success. The child must emit a completed assistant
 
 On POSIX, when a child exits, the extension sends SIGTERM to remaining members of its process group and gives them one second to exit before sending SIGKILL. This applies even when descendants close or ignore the output pipes, so child-launched processes in that group do not survive the invocation. Keep the delegated process running and use `background: true` to decouple long-lived work from the caller. Processes that escape the group are not terminated. On Windows, the supervisor creates the target suspended and assigns it to a nested kill-on-close Job Object before resuming it. It terminates remaining job members after normal leader exit and confirms the job is empty before reporting success; cancellation and deadlines terminate the supervisor, whose outer kill-on-close Job Object handles the process tree. If compilation, containment, or cleanup fails, launch fails closed rather than claiming success. Job settlement is bounded to 30 seconds. Inherited output pipes get one second to drain, then the extension closes its pipe ends so they cannot hold the invocation open indefinitely. Results report this pipe cleanup.
 
-## Security
+## Configuration
+
+Agent definitions are files, not package settings. Keep personal agents in `~/.pi/agent/agents/*.md`; keep project-local agents in `.pi/agents/*.md`. `subagent_agents` and `subagent` load personal agents by default. Set `agentScope: "project"` or `"both"` to include project agents; project definitions override personal definitions with the same name in `both` scope.
+
+The process limit is shared by foreground calls and background jobs in one extension runtime:
+
+| Setting                      | Default                        | Allowed values                     | Effect                                                                                                      |
+| ---------------------------- | ------------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `PI_SUBAGENTS_MAX_PROCESSES` | `4`                            | Integer from `1` to `8`            | Sets the shared child-process limit before Pi starts. An invalid value prevents the extension from loading. |
+| `PI_SUBAGENTS_NESTING_DEPTH` | `0` in the original Pi process | Set internally for child processes | Tracks extension-mediated nesting. `unsetEnv` cannot remove it; the limit is two child-process levels.      |
+
+At most two extension-mediated child-process levels can run below the original Pi process. This does not limit processes that a child tool starts directly.
+
+## Compatibility
+
+Requires Pi 1.0.4 or newer (with Pi Codemode 1.1.0 for Pi 1.0.4 and 1.1.x) and Node.js 22.19 or newer. Tested with Pi 1.5.2 on Linux, macOS, and Windows.
+
+CI runs both test lanes on Linux, macOS, and Windows. The Node.js lane covers Node.js 22.19.0, 22, 24, and 26. The `pi-min` job tests Pi 1.0.4; a separate job tests Pi 1.1.0. Both use Pi Codemode 1.1.0. A weekly canary checks the latest Pi release.
+
+## Privacy and security
 
 Context isolation is not a sandbox. Children run with the same OS permissions as Pi and can read or modify files. Include relevant context and task restrictions in each delegation. The child `pi` process inherits the parent process's environment by default. Use `unsetEnv` to omit known variables from the child's startup environment; this does not prevent the child from setting variables itself or reading credentials from files and other sources. Do not put secrets in delegated tasks or prompts, and do not rely on environment filtering as a security boundary.
+
+pi-subagents sends each requested task and the selected agent's system prompt to a separate Pi child process. Pi sends model requests according to the configured provider. pi-subagents does not copy the parent session transcript automatically.
+
+On POSIX, cleanup targets the child's process group and escalates from SIGTERM to SIGKILL after one second. On Windows, the supervisor uses nested kill-on-close Job Objects to contain Pi and its descendants. Setup and cleanup fail closed; Windows job settlement is bounded to 30 seconds. See [How it works](#how-it-works) for process and deadline details.
+
+Child JSONL records, stdout, stderr, captured history, model-facing responses, and background-job output have explicit bounds. Excess output is rejected, discarded, truncated, or evicted at its limit. Model-facing and completion/status text is capped at 50 KiB; job output pages are at most 32 KiB. See [How it works](#how-it-works) for capture limits.
 
 Agent system prompts are written briefly to a temporary UTF-8 file so the child CLI can append them, then removed during invocation cleanup. Transient removal failures get bounded retries, and failed cleanup is retried at process exit. On POSIX, the temporary directory and file grant no group or other access. On Windows, access follows the ACLs inherited from the configured temporary directory; secure that directory if prompts must be private to your account. Temporary-file permissions do not protect against other processes running as the same user or against the delegated child.
 
@@ -526,14 +553,20 @@ Only enable project-local agents in repositories you trust. Untrusted project ag
 
 The foreground subagent result renderer escapes terminal control characters and invisible Unicode formatting characters in child output and tool-call previews before displaying them, while preserving valid emoji and script-joining sequences; captured messages and structured details remain unchanged. The background completion-message renderer also escapes child output and failure details for TUI display, while preserving the raw follow-up content and structured details. The `subagent_jobs` call and result renderers likewise escape untrusted job IDs, captured output, and failure text only for display; model-facing content and job details remain unchanged.
 
-Authenticate on each machine with Pi's `/login`. Do not put credentials, sessions, or machine-local Pi state in this repository. To report a vulnerability privately, see [SECURITY.md](SECURITY.md).
+Authenticate on each machine with Pi's `/login`. Do not put credentials, sessions, or machine-local Pi state in this repository. To report a vulnerability privately, see [SECURITY.md](https://github.com/leocavalcante/pi-subagents/blob/main/SECURITY.md).
+
+## Troubleshooting
+
+- **An agent is missing.** Check the agent file path, frontmatter, and `agentScope`. `subagent_agents` reports invalid definitions and discovery diagnostics.
+- **A project agent does not start.** Trust the project in Pi or approve the interactive confirmation. Headless sessions fail closed for untrusted project agents.
+- **The process queue is full.** Wait for current tasks to finish, reduce parallel `concurrency`, or raise `PI_SUBAGENTS_MAX_PROCESSES` within its supported range before starting Pi.
+- **A background result is missing.** Check `subagent_jobs` status. Jobs belong to the current Pi session and do not survive quit, `/reload`, or session replacement. Silent jobs do not send completion messages.
+- **A job output page fails.** Use the returned `nextOffset`, preserve the same `stepId` or `taskIndex`, and remember that offsets are UTF-8 byte positions.
 
 ## Contributing
 
-For local development checks and the maintainer release process, see [CONTRIBUTING.md](CONTRIBUTING.md).
+For local development checks and the maintainer release process, see [CONTRIBUTING.md](https://github.com/leocavalcante/pi-subagents/blob/main/CONTRIBUTING.md).
 
-## Origin and license
+## License
 
-Based on the [Pi subagent example](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent) bundled with `@earendil-works/pi-coding-agent` 1.0.0.
-
-MIT license. The original copyright notice for Mario Zechner is preserved in [LICENSE](LICENSE).
+pi-subagents began as the [Pi subagent example](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent) by Mario Zechner, bundled with `@earendil-works/pi-coding-agent` 1.0.0. The package keeps Mario Zechner's original copyright notice and adds Leo Cavalcante's notice. It is MIT licensed; see [LICENSE](https://github.com/leocavalcante/pi-subagents/blob/main/LICENSE).

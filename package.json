@@ -1,7 +1,7 @@
 {
   "name": "@leocavalcante/pi-subagents",
   "version": "0.0.0-development",
-  "description": "Delegate tasks to isolated Pi agents, singly, in parallel, or in a chain.",
+  "description": "Delegate tasks to isolated Pi subagents: single, parallel, chained, or in the background.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
@@ -33,8 +33,6 @@
     "temporary-files.ts",
     "windows-supervisor-invocation.ts",
     "windows-supervisor.cs",
-    "CONTRIBUTING.md",
-    "SECURITY.md",
     "LICENSE",
     "README.md",
     "CHANGELOG.md"
