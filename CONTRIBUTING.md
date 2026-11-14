@@ -33,7 +33,6 @@ The project-agent hard-link rejection test runs on every platform. On Windows, t
 ## Deviations from the standard
 
 - The process and file-system suites still run as JavaScript (`tests/*.node-test.mjs`), so the Node.js lane also matches `.mjs`. Converting them to TypeScript is follow-up work.
-- The root `index.ts` re-exports `src/extension.ts` for one release, for anyone who loads the old entry directly. Pi loads `src/extension.ts`.
 
 ## Commits and pull requests
 
