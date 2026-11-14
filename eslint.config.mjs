@@ -1,27 +1,13 @@
 // @ts-check
+// Shared by every Pi extension: keep this file identical in each repository.
 import eslint from "@eslint/js";
 import { defineConfig } from "eslint/config";
 import prettier from "eslint-config-prettier/flat";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-// Node's test runner owns and reports promises returned by these declarations.
-const nodeTestSafeCalls = {
-  "@typescript-eslint/no-floating-promises": [
-    "error",
-    {
-      allowForKnownSafeCalls: [
-        {
-          from: "package",
-          name: ["test", "it", "describe", "suite"],
-          package: "node:test",
-        },
-      ],
-    },
-  ],
-};
-
-// Subagent tests inspect dynamically shaped JSON, subprocess, and SDK payloads.
+// Tests inspect dynamically shaped JSON, protocol, and subprocess payloads;
+// keep these relaxations test-only.
 const testPayloadRules = Object.fromEntries(
   Object.keys(tseslint.plugin.rules)
     .filter(
@@ -45,15 +31,25 @@ export default defineConfig(
         tsconfigRootDir: import.meta.dirname,
       },
     },
+    rules: {
+      // Node's test runner owns and reports the promises its declarations return.
+      "@typescript-eslint/no-floating-promises": [
+        "error",
+        {
+          allowForKnownSafeCalls: [
+            {
+              from: "package",
+              name: ["test", "it", "describe", "suite"],
+              package: "node:test",
+            },
+          ],
+        },
+      ],
+    },
   },
   {
-    rules: nodeTestSafeCalls,
-  },
-  {
-    // Runtime modules live in src/; the root index.ts re-exports the entry for one release.
-    // Node globals are explicit here; pi-otel's runtime block relies on TS types.
+    // Runtime code. A root index.ts, where a repository keeps one, re-exports src/.
     files: ["index.ts", "src/**/*.ts"],
-    languageOptions: { globals: globals.node },
     rules: {
       "no-restricted-imports": [
         "error",
@@ -62,7 +58,7 @@ export default defineConfig(
             {
               group: ["bun", "bun:*"],
               message:
-                "Pi runs extensions on Node.js. Use node:* APIs in runtime modules.",
+                "Pi runs extensions on Node.js. Use node:* APIs in runtime code.",
             },
           ],
         },
@@ -72,17 +68,20 @@ export default defineConfig(
   {
     files: ["**/*.{js,mjs,cjs}"],
     extends: [tseslint.configs.disableTypeChecked],
-    // Unlike pi-otel, this also covers Node.js tests, which are .mjs here.
     languageOptions: { globals: globals.node },
   },
   {
     files: ["tests/**/*.ts"],
-    rules: testPayloadRules,
+    rules: {
+      ...testPayloadRules,
+      // Async test doubles keep Promise-shaped contracts.
+      "@typescript-eslint/require-await": "off",
+    },
   },
   {
-    // Node subprocess fixtures deliberately use no-op callbacks, empty cleanup catches,
+    // JavaScript subprocess fixtures use no-op callbacks, empty cleanup catches,
     // computed environment keys, and constant worker loops.
-    files: ["tests/**/*.mjs"],
+    files: ["tests/**/*.{js,mjs,cjs}"],
     rules: {
       "@typescript-eslint/no-empty-function": "off",
       "@typescript-eslint/no-dynamic-delete": "off",
