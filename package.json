@@ -26,7 +26,6 @@
   "author": "Leo Cavalcante (https://github.com/leocavalcante)",
   "type": "module",
   "files": [
-    "index.ts",
     "src/",
     "LICENSE",
     "README.md",

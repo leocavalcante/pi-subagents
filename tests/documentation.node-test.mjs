@@ -357,7 +357,6 @@ const published = (file) =>
 
 test("npm package includes required runtime support files", () => {
   for (const file of [
-    "index.ts",
     "src/extension.ts",
     "src/windows-supervisor.cs",
     "src/windows-supervisor-invocation.ts",
@@ -370,11 +369,10 @@ test("npm package includes required runtime support files", () => {
 });
 
 test("npm package includes the full local dependency closure of its extension entrypoint", () => {
-  // Walk from Pi's entry point and the root re-export kept for direct loads.
-  const pending = [
-    ...packageJson.pi.extensions.map((entry) => entry.replace(/^\.\//, "")),
-    "index.ts",
-  ];
+  // Walk from Pi's entry point.
+  const pending = packageJson.pi.extensions.map((entry) =>
+    entry.replace(/^\.\//, ""),
+  );
   const visited = new Set();
   const localReference =
     /(?:\bfrom\s*|\bimport\s*\(?\s*|\bnew URL\(\s*)["'](\.{1,2}\/[^"']+)["']/g;

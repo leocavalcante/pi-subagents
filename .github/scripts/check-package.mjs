@@ -38,8 +38,6 @@ try {
     packedPaths.has("src/extension.ts"),
     "The extension entry point must ship",
   );
-  // The root re-export keeps direct loads of the old entry working for one release.
-  assert(packedPaths.has("index.ts"), "The root re-export must ship");
   assert(
     paths.includes("src/windows-supervisor.cs"),
     "The Windows supervisor must ship",
@@ -51,7 +49,7 @@ try {
   );
 
   // Walk the entry point's local imports and runtime assets against the tarball.
-  const pending = ["src/extension.ts", "index.ts"];
+  const pending = ["src/extension.ts"];
   const visited = new Set();
   const localReference =
     /(?:\bfrom\s*|\bimport\s*\(?\s*|\bnew URL\(\s*)["'](\.{1,2}\/[^"']+)["']/g;
@@ -122,8 +120,8 @@ try {
     smokeTest,
     `import assert from "node:assert/strict";
 const unwrap = (loaded) => typeof loaded.default === "function" ? loaded.default : loaded.default.default;
-// Pi loads src/extension.ts; the root index.ts re-export must register the same extension.
-for (const entry of ["src/extension.ts", "index.ts"]) {
+// Pi loads src/extension.ts.
+for (const entry of ["src/extension.ts"]) {
   const register = unwrap(await import(${JSON.stringify(manifest.name)} + "/" + entry));
   assert.equal(typeof register, "function", entry);
   const tools = [];
