@@ -28,18 +28,18 @@ const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 );
 
-function section(title) {
+function section(title: any) {
   const headings = [...readme.matchAll(/^(#{2,4}) (.+)$/gm)];
   const current = headings.find(([, , heading]) => heading === title);
   assert.ok(current, `Missing README section: ${title}`);
   const next = headings.find(
     (heading) =>
-      heading.index > current.index && heading[1].length <= current[1].length,
+      heading.index > current.index && heading[1]!.length <= current[1]!.length,
   );
   return readme.slice(current.index, next?.index);
 }
 
-function githubHeadingSlug(title) {
+function githubHeadingSlug(title: any) {
   return title
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s-]/gu, "")
@@ -244,13 +244,13 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
       .sort(),
   );
   assert.match(
-    required.steps.map((step) => step.run ?? "").join("\n"),
+    required.steps.map((step: any) => step.run ?? "").join("\n"),
     /result !== "success"/,
   );
   assert.match(ciWorkflow, /os: \[ubuntu-24\.04, macos-15, windows-2025\]/);
   assert.equal(ci.jobs.test["runs-on"], "${{ matrix.os }}");
   assert.ok(
-    ci.jobs.test.steps.some((step) => step.run === "bun run test"),
+    ci.jobs.test.steps.some((step: any) => step.run === "bun run test"),
     "all three operating systems run both test lanes",
   );
   assert.equal(
@@ -258,7 +258,7 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
     "bun run test:bun && bun run test:node",
   );
   assert.match(packageJson.scripts["test:node"], /tests\/\*\.node-test\.ts/);
-  assert.match(packageJson.scripts["test:node"], /tests\/\*\.node-test\.mjs/);
+  assert.doesNotMatch(packageJson.scripts["test:node"], /\.mjs/);
   assert.match(packageJson.scripts["test:node"], /--test-concurrency=1/);
 
   assert.match(ciWorkflow, /node: \[22\.19\.0, 22, 24, 26\]/);
@@ -266,13 +266,14 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
   assert.equal(ci.jobs.node.steps.at(-1).run, "bun run test:node");
   assert.ok(
     ci.jobs.node.steps.some(
-      (step) => step.with?.["node-version"] === "${{ matrix.node }}",
+      (step: any) => step.with?.["node-version"] === "${{ matrix.node }}",
     ),
   );
 
   assert.equal(
-    ci.jobs["pi-min"].steps.find((step) => step.run?.includes("install-pi.ts"))
-      ?.run,
+    ci.jobs["pi-min"].steps.find((step: any) =>
+      step.run?.includes("install-pi.ts"),
+    )?.run,
     "bun .github/scripts/install-pi.ts min",
   );
   assert.deepEqual(piPins, {
@@ -282,11 +283,11 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
   assert.equal(ci.jobs["pi-1-1"].name, "Pi 1.1.0");
   assert.ok(
     ci.jobs["pi-1-1"].steps.some(
-      (step) => step.run === "bun .github/scripts/install-pi.ts 1.1.0",
+      (step: any) => step.run === "bun .github/scripts/install-pi.ts 1.1.0",
     ),
   );
   assert.ok(
-    ci.jobs["pi-1-1"].steps.some((step) => step.run === "bun run test"),
+    ci.jobs["pi-1-1"].steps.some((step: any) => step.run === "bun run test"),
   );
 
   const verify = packageJson.scripts.verify;
@@ -298,16 +299,22 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
   ]) {
     assert.ok(verify.includes(command), `verify must run ${command}`);
   }
-  assert.ok(ci.jobs.static.steps.some((step) => step.run === "bun run check"));
+  assert.ok(
+    ci.jobs.static.steps.some((step: any) => step.run === "bun run check"),
+  );
   assert.ok(
     ci.jobs.static.steps.some(
-      (step) => step.run === "bun audit --audit-level=high",
+      (step: any) => step.run === "bun audit --audit-level=high",
     ),
   );
   assert.ok(
-    ci.jobs.package.steps.some((step) => step.run === "bun run check:package"),
+    ci.jobs.package.steps.some(
+      (step: any) => step.run === "bun run check:package",
+    ),
   );
-  assert.ok(ci.jobs.test.steps.some((step) => step.run === "bun run test"));
+  assert.ok(
+    ci.jobs.test.steps.some((step: any) => step.run === "bun run test"),
+  );
 
   for (const workflow of [
     ciWorkflow,
@@ -320,7 +327,7 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
       /uses:\s+([\w.-]+\/[\w.-]+)@([^\s#]+)/g,
     )) {
       assert.match(
-        sha,
+        sha!,
         /^[0-9a-f]{40}$/,
         `${action} must be pinned to a full commit SHA`,
       );
@@ -334,13 +341,13 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
   assert.match(contributing, /Job Object containment/);
 });
 
-test("CONTRIBUTING documents Bun commands and the temporary Node.js test lane", () => {
+test("CONTRIBUTING documents Bun commands and the Node.js test lane", () => {
   assert.match(contributing, /bun install --frozen-lockfile/);
   assert.match(contributing, /bun audit --audit-level=high/);
   assert.match(contributing, /bun run check/);
   assert.match(contributing, /bun run test/);
   assert.match(contributing, /bun test tests\/paging\.test\.ts/);
-  assert.match(contributing, /tests\/extension\.node-test\.mjs/);
+  assert.match(contributing, /tests\/extension\.node-test\.ts/);
   assert.match(
     contributing,
     /node --import jiti\/register --test --test-concurrency=1/,
@@ -349,9 +356,9 @@ test("CONTRIBUTING documents Bun commands and the temporary Node.js test lane", 
 });
 
 // A file ships when `files` lists it or a directory that contains it.
-const published = (file) =>
+const published = (file: any) =>
   packageJson.files.some(
-    (entry) =>
+    (entry: any) =>
       entry === file || (entry.endsWith("/") && file.startsWith(entry)),
   );
 
@@ -370,7 +377,7 @@ test("npm package includes required runtime support files", () => {
 
 test("npm package includes the full local dependency closure of its extension entrypoint", () => {
   // Walk from Pi's entry point.
-  const pending = packageJson.pi.extensions.map((entry) =>
+  const pending = packageJson.pi.extensions.map((entry: any) =>
     entry.replace(/^\.\//, ""),
   );
   const visited = new Set();
@@ -395,7 +402,7 @@ test("npm package includes the full local dependency closure of its extension en
     );
     for (const [, specifier] of source.matchAll(localReference)) {
       const dependency = path.posix.normalize(
-        path.posix.join(path.posix.dirname(sourceFile), specifier),
+        path.posix.join(path.posix.dirname(sourceFile), specifier!),
       );
       assert.ok(
         dependency !== ".." && !dependency.startsWith("../"),
@@ -871,7 +878,7 @@ test("README repository files use absolute links and internal links use anchors"
   );
   for (const target of links) {
     assert.ok(
-      target.startsWith("#") || /^[a-z][a-z\d+.-]*:/i.test(target),
+      target!.startsWith("#") || /^[a-z][a-z\d+.-]*:/i.test(target!),
       `README links must be absolute URLs or internal anchors: ${target}`,
     );
   }

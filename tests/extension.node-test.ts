@@ -21,14 +21,14 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
-import { jiti, loadExtensions } from "./pi-runtime.mjs";
+import { jiti, loadExtensions } from "./pi-runtime.ts";
 import { Value } from "typebox/value";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 
 const { MAX_CHILD_JSON_RECORDS, MAX_CHILD_STDOUT_BYTES } =
-  await jiti.import("../src/capture.ts");
+  await jiti.import<typeof import("../src/capture.ts")>("../src/capture.ts");
 const { DEFAULT_PROGRESS_UPDATE_INTERVAL_MS } =
-  await jiti.import("../src/progress.ts");
+  await jiti.import<typeof import("../src/progress.ts")>("../src/progress.ts");
 const {
   MAX_AGENT_DESCRIPTION_BYTES,
   MAX_AGENT_DIAGNOSTICS,
@@ -42,23 +42,27 @@ const {
   MAX_MODEL_SELECTOR_BYTES,
   MAX_TIMEOUT_MS,
   MAX_WORKING_DIRECTORY_LENGTH,
-} = await jiti.import("../src/agents.ts");
+} = await jiti.import<typeof import("../src/agents.ts")>("../src/agents.ts");
 const {
   MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES,
   MAX_AGENT_LISTING_PATH_BYTES,
   truncateAgentListingText,
-} = await jiti.import("../src/agent-listing.ts");
-const { MAX_PENDING_JOB_WAITS } = await jiti.import("../src/jobs.ts");
-const { MAX_PAGE_BYTES } = await jiti.import("../src/paging.ts");
-const { buildWindowsSupervisorInvocation } = await jiti.import(
-  "../src/windows-supervisor-invocation.ts",
+} = await jiti.import<typeof import("../src/agent-listing.ts")>(
+  "../src/agent-listing.ts",
 );
+const { MAX_PENDING_JOB_WAITS } =
+  await jiti.import<typeof import("../src/jobs.ts")>("../src/jobs.ts");
+const { MAX_PAGE_BYTES } =
+  await jiti.import<typeof import("../src/paging.ts")>("../src/paging.ts");
+const { buildWindowsSupervisorInvocation } = await jiti.import<
+  typeof import("../src/windows-supervisor-invocation.ts")
+>("../src/windows-supervisor-invocation.ts");
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Use the canonical path because macOS exposes many temp directories through symlink aliases.
 const sandbox = realpathSync(mkdtempSync(join(tmpdir(), "pi-subagents-test-")));
 const assertSameDirectory = (
-  actualPath,
-  expectedPath,
+  actualPath: any,
+  expectedPath: any,
   message = "paths should identify the same directory",
 ) => {
   const actual = statSync(actualPath);
@@ -92,7 +96,7 @@ writeFileSync(
   "---\nname: project\ndescription: Project worker\n---\nProject instructions.\n",
 );
 
-let extension, tools, messages;
+let extension: any, tools: any, messages: any;
 const ctx = () => ({
   cwd: sandbox,
   mode: "rpc",
@@ -101,11 +105,16 @@ const ctx = () => ({
   model: { provider: "fake", id: "parent" },
   thinkingLevel: "high",
 });
-const invoke = (name, params, context = ctx(), signal) =>
+const invoke = (
+  name: string,
+  params: any,
+  context: any = ctx(),
+  signal?: AbortSignal,
+): Promise<any> =>
   tools
     .get(name)
     .definition.execute("test-call", params, signal, undefined, context);
-const launch = async (params) =>
+const launch = async (params: any) =>
   (
     await invoke("subagent", {
       background: true,
@@ -114,7 +123,7 @@ const launch = async (params) =>
       ...params,
     })
   ).details.background.id;
-const status = async (id) =>
+const status = async (id: any) =>
   (await invoke("subagent_jobs", { action: "status", jobId: id })).details;
 const traces = () =>
   readFileSync(traceFile, "utf8")
@@ -176,12 +185,12 @@ const terminalDisplayUnicode = (() => {
     text: `${zeroWidthSpace}${wordJoiner}${mongolianVowelSeparator}${languageTag}${standaloneTagCharacter}${orphanedVariationSelectors} ${orphanedJoiners} ${englandFlag} ${supplementaryEmojiVariation} ${emojiSequence} ${emojiKissSequence} ${scriptJoiner} ✈${variationSelector}`,
   };
 })();
-const assertTerminalDisplayUnicode = (rendered) => {
+const assertTerminalDisplayUnicode = (rendered: any) => {
   for (const character of terminalDisplayUnicode.hidden) {
     assert.equal(
       rendered.includes(character),
       false,
-      `default-ignorable ${character.codePointAt(0).toString(16)} must be visible`,
+      `default-ignorable ${character.codePointAt(0)!.toString(16)} must be visible`,
     );
   }
   for (const visible of terminalDisplayUnicode.visible)
@@ -195,7 +204,7 @@ const assertTerminalDisplayUnicode = (rendered) => {
       "valid emoji and script sequences remain intact",
     );
 };
-const waitFor = async (predicate, timeoutMs = 15000) => {
+const waitFor = async (predicate: any, timeoutMs = 15000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const result = await predicate();
@@ -204,12 +213,12 @@ const waitFor = async (predicate, timeoutMs = 15000) => {
   }
   throw new Error("Timed out waiting for test condition");
 };
-const finish = (id, timeoutMs = 15000) =>
+const finish = (id: any, timeoutMs = 15000) =>
   waitFor(async () => {
     const job = await status(id);
     return job.finishedAt ? job : undefined;
   }, timeoutMs);
-const noisyTasks = (prefix) => {
+const noisyTasks = (prefix: any) => {
   const task = `${prefix}${"x".repeat(1_300_000)}`;
   return Array.from({ length: 8 }, () => ({ agent: "worker", task }));
 };
@@ -226,7 +235,7 @@ beforeEach(async () => {
     sandbox,
   );
   assert.deepEqual(loaded.errors, []);
-  loaded.runtime.sendMessage = (message, options) =>
+  loaded.runtime.sendMessage = (message: any, options: any) =>
     messages.push({ message, options });
   extension = loaded.extensions[0];
   tools = extension.tools;
@@ -242,7 +251,7 @@ afterEach(async () => {
       );
 });
 after(() => {
-  process.argv[1] = oldArgv;
+  process.argv[1] = oldArgv!;
   if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
   delete process.env.SUBAGENT_TEST_TRACE;
@@ -274,17 +283,19 @@ test("background returns before completion, retains progress, and sends a follow
   const releaseFile = join(sandbox, "background-handoff.release");
   const task = `process-budget-barrier:${releaseFile}|delay=2000 main`;
   rmSync(releaseFile, { force: true });
-  let id;
+  let id: any;
   let launchTimer;
   const launchResult = launch({ task }).then(
     (id) => ({ id }),
-    (error) => ({ error }),
+    (error: unknown) => ({ error }),
   );
   try {
-    const outcome = await Promise.race([
+    const outcome: any = await Promise.race([
       launchResult,
       new Promise((resolve) => {
-        launchTimer = setTimeout(() => resolve(undefined), 15_000);
+        launchTimer = setTimeout(() => {
+          resolve(undefined);
+        }, 15_000);
       }),
     ]);
     assert.ok(
@@ -342,7 +353,7 @@ test("background returns before completion, retains progress, and sends a follow
     clearTimeout(launchTimer);
     // Releasing in finally prevents a failed assertion from stranding the child process.
     writeFileSync(releaseFile, "release");
-    const outcome = await launchResult;
+    const outcome: any = await launchResult;
     if (id === undefined && outcome.id) id = outcome.id;
     if (id !== undefined) await finish(id);
     rmSync(releaseFile, { force: true });
@@ -352,11 +363,12 @@ test("background returns before completion, retains progress, and sends a follow
 test("foreground cancellation just after child close does not report a completed result", async (t) => {
   const controller = new AbortController();
   const spawn = t.mock.method(childProcess, "spawn", () => {
-    const child = new EventEmitter();
+    // A fake ChildProcess: the tests attach only the members the code under test reads.
+    const child: any = new EventEmitter();
     child.pid = 2_000_000_000;
     child.kill = () => false;
     child.stdin = new EventEmitter();
-    child.stdin.end = () =>
+    child.stdin.end = () => {
       queueMicrotask(() => {
         child.emit("spawn");
         child.stdout.emit(
@@ -381,29 +393,33 @@ test("foreground cancellation just after child close does not report a completed
         child.emit("exit", 0);
         child.emit("close", 0);
       });
+    };
     child.stdout = new EventEmitter();
     child.stdout.destroy = () => {};
     child.stderr = new EventEmitter();
     child.stderr.setEncoding = () => {};
     child.stderr.destroy = () => {};
     const emit = child.emit.bind(child);
-    child.emit = (event, ...args) => {
+    child.emit = (event: any, ...args: any[]) => {
       const emitted = emit(event, ...args);
-      if (event === "close") process.nextTick(() => controller.abort());
+      if (event === "close")
+        process.nextTick(() => {
+          controller.abort();
+        });
       return emitted;
     };
     return child;
   });
   syncBuiltinESMExports();
   try {
-    const outcome = await invoke(
+    const outcome: any = await invoke(
       "subagent",
       { agent: "worker", task: "abort after child close" },
       ctx(),
       controller.signal,
     ).then(
       (result) => ({ result }),
-      (reason) => ({ reason }),
+      (reason: unknown) => ({ reason }),
     );
     assert.equal(
       outcome.reason,
@@ -426,7 +442,7 @@ test("foreground cancellation preserves an explicit null abort reason and releas
     controller.signal,
   ).then(
     () => ({ resolved: true }),
-    (reason) => ({ reason }),
+    (reason: unknown) => ({ reason }),
   );
   await waitFor(() =>
     traces().some(
@@ -457,7 +473,7 @@ test("progress bursts are throttled without dropping captured or final results",
     "progress-burst-test",
     { agent: "worker", task: "progress-burst:" + count },
     undefined,
-    (partial) => {
+    (partial: any) => {
       updates++;
       latestUpdate = partial;
     },
@@ -481,7 +497,7 @@ test("progress bursts are throttled without dropping captured or final results",
     "burst " + (count - 1),
   );
   assert.equal(
-    latestUpdate.details.results[0].messages.at(-1).content[0].text,
+    latestUpdate!.details.results[0].messages.at(-1).content[0].text,
     "burst " + (count - 1),
     "the final throttled progress update must include the latest captured history",
   );
@@ -556,7 +572,7 @@ test("progress callback failures do not interrupt child capture or cleanup", asy
     );
     assert.equal(result.details.results.length, scenario.results);
     assert.ok(
-      result.details.results.every((task) => task.exitCode === 0),
+      result.details.results.every((task: any) => task.exitCode === 0),
       `${scenario.name} child processes should finish normally`,
     );
     const childTasks = traces().filter(
@@ -596,7 +612,10 @@ test("background completion rendering escapes terminal controls without changing
   const renderer = extension.messageRenderers.get("subagent-background");
   assert.equal(typeof renderer, "function");
   initTheme("dark", false);
-  const theme = { fg: (_color, text) => text, bg: (_color, text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+  };
   const rendered = renderer(followUp, { expanded: false, outputPad: 1 }, theme)
     .render(100)
     .join("\n");
@@ -671,7 +690,7 @@ test("silent background jobs work across modes and expose the notification polic
     assert.notEqual(output.isError, true);
     const listed = await invoke("subagent_jobs", { action: "list" });
     assert.equal(
-      listed.structuredContent.jobs.find((job) => job.id === id).notify,
+      listed.structuredContent.jobs.find((job: any) => job.id === id).notify,
       false,
     );
     assert.match(listed.content[0].text, /silent/);
@@ -775,7 +794,7 @@ test("background usage overflow clears partial metadata even after output evicti
   );
   const listed = await invoke("subagent_jobs", { action: "list" });
   assert.equal(
-    listed.structuredContent.jobs.find((job) => job.id === id).usage,
+    listed.structuredContent.jobs.find((job: any) => job.id === id).usage,
     undefined,
   );
   assert.equal(
@@ -946,8 +965,8 @@ test("job-wait saturation returns a valid retry error without mutating the job",
     "saturated waits must not cancel the background job",
   );
 
-  controllers[0].abort();
-  await assert.rejects(pending[0], { name: "AbortError" });
+  controllers[0]!.abort();
+  await assert.rejects(pending[0]!, { name: "AbortError" });
   const replacementController = new AbortController();
   const replacement = invoke(
     "subagent_jobs",
@@ -966,7 +985,9 @@ test("job-wait saturation returns a valid retry error without mutating the job",
     "aborting one waiter lets another take its place",
   );
 
-  controllers.slice(1).forEach((controller) => controller.abort());
+  controllers.slice(1).forEach((controller) => {
+    controller.abort();
+  });
   replacementController.abort();
   await Promise.allSettled([...pending.slice(1), replacement]);
   assert.equal((await status(id)).state, "running");
@@ -978,7 +999,7 @@ test("invalid job actions are rejected without mutating jobs and retain schema-v
   const id = await launch({ task: "delay=10000 invalid action" });
   const outputSchema = tools.get("subagent_jobs").definition.outputSchema;
   for (const action of ["unexpected", null, undefined]) {
-    const params = { jobId: id };
+    const params: any = { jobId: id };
     if (action !== undefined) params.action = action;
     const result = await invoke("subagent_jobs", params);
     assert.equal(result.isError, true);
@@ -1098,7 +1119,7 @@ test("foreground still waits and does not create background jobs", async () => {
       "fg",
       { agent: "pinned", task: "delay=100 foreground" },
       undefined,
-      (update) => updates.push(update),
+      (update: any) => updates.push(update),
       ctx(),
     );
   assert.match(result.content[0].text, /result:/);
@@ -1131,14 +1152,14 @@ test("foreground results report cumulative SDK usage for every mode including fa
       ],
     },
   ]) {
-    const updates = [];
+    const updates: any = [];
     const result = await tools
       .get("subagent")
       .definition.execute(
         "usage",
         params,
         undefined,
-        (update) => updates.push(update),
+        (update: any) => updates.push(update),
         ctx(),
       );
     const tasks = result.details.results.length;
@@ -1153,7 +1174,7 @@ test("foreground results report cumulative SDK usage for every mode including fa
       total: 0,
     });
     assert.ok(
-      updates.every((update) => update.usage === undefined),
+      updates.every((update: any) => update.usage === undefined),
       "Progress is not a billable result",
     );
   }
@@ -1180,7 +1201,7 @@ test("nested tool usage counts once and does not change assistant context or tur
   assert.equal(result.details.results[0].usage.cost, 1);
   assert.equal(
     result.details.results[0].messages.filter(
-      (message) => message.role === "toolResult",
+      (message: any) => message.role === "toolResult",
     ).length,
     1,
     "an identical legacy copy is not retained a second time",
@@ -1195,7 +1216,7 @@ test("legacy tool-result deduplication is adjacent, exact, and backward-compatib
     const result = await invoke("subagent", { agent: "worker", task });
     assert.equal(
       result.details.results[0].messages.filter(
-        (message) => message.role === "toolResult",
+        (message: any) => message.role === "toolResult",
       ).length,
       1,
       task + " should retain the tool result once",
@@ -1206,7 +1227,7 @@ test("legacy tool-result deduplication is adjacent, exact, and backward-compatib
     task: "nested-usage-different-copy",
   });
   const toolResults = distinct.details.results[0].messages.filter(
-    (message) => message.role === "toolResult",
+    (message: any) => message.role === "toolResult",
   );
   assert.equal(
     toolResults.length,
@@ -1246,7 +1267,7 @@ test("successful edit and write calls report deduplicated, bounded paths relativ
   assert.equal(task.changedFilesOmitted, 1);
   const changedFilesLine = result.content[0].text
     .split("\n")
-    .find((line) => line.startsWith("Changed files:"));
+    .find((line: any) => line.startsWith("Changed files:"));
   assert.match(
     changedFilesLine,
     /Changed files: .*src[\\/]one\.ts.*src[\\/]two\.ts.*\(\+1 more\)/,
@@ -1322,7 +1343,7 @@ test("background job metadata reports cumulative chain usage without billing ins
   const listed = await invoke("subagent_jobs", { action: "list" });
   assert.equal(listed.usage, undefined);
   assert.deepEqual(
-    listed.structuredContent.jobs.find((job) => job.id === id).usage,
+    listed.structuredContent.jobs.find((job: any) => job.id === id).usage,
     waited.structuredContent.job.usage,
   );
   assert.equal(
@@ -1379,7 +1400,7 @@ test("overflow across a batch preserves captures without returning non-finite us
   assert.match(result.content[0].text, /cumulative.*usage/);
   assert.equal(result.details.results.length, 2);
   assert.ok(
-    result.details.results.every((task) =>
+    result.details.results.every((task: any) =>
       Number.isFinite(task.reportedUsage.input),
     ),
   );
@@ -1401,7 +1422,7 @@ test("cross-task token aggregation reports safe-integer overflow precisely", asy
   assert.equal(result.details.results.length, 2);
   assert.ok(
     result.details.results.every(
-      (task) =>
+      (task: any) =>
         task.reportedUsage.input === Number.MAX_SAFE_INTEGER &&
         task.reportedUsage.totalTokens === Number.MAX_SAFE_INTEGER,
     ),
@@ -1410,8 +1431,11 @@ test("cross-task token aggregation reports safe-integer overflow precisely", asy
 
 test("multi-step rendering omits unrepresentable usage totals", async () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
-  const render = (result, expanded) =>
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const render = (result: any, expanded: any) =>
     definition
       .renderResult(result, { expanded }, theme, {})
       .render(100)
@@ -1446,15 +1470,15 @@ test("multi-block diagnostic responses share the total model-facing text budget"
       : initial;
     assert.equal(result.isError, true);
     const text = result.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
+      .filter((part: any) => part.type === "text")
+      .map((part: any) => part.text)
       .join("");
     assert.ok(Buffer.byteLength(text) <= 50 * 1024);
     assert.match(text, /cumulative.*usage/);
     assert.equal(text.includes("�"), false);
     assert.ok(
       result.details.results.every(
-        (task) => task.messages.at(-1).content[0].text.length === 40000,
+        (task: any) => task.messages.at(-1).content[0].text.length === 40000,
       ),
     );
   }
@@ -1683,7 +1707,7 @@ test("batch preambles reach parallel and chain children without changing recorde
   });
   assert.notEqual(parallel.isError, true);
   assert.deepEqual(
-    parallel.details.results.map((result) => result.task),
+    parallel.details.results.map((result: any) => result.task),
     ["parallel one", "parallel two"],
   );
   assert.deepEqual(
@@ -1705,7 +1729,7 @@ test("batch preambles reach parallel and chain children without changing recorde
   assert.notEqual(chain.isError, true);
   const firstOutput = `result: ${preamble}\n\nfirst`;
   assert.deepEqual(
-    chain.details.results.map((result) => result.task),
+    chain.details.results.map((result: any) => result.task),
     ["first", `second ${firstOutput} ${firstOutput}`],
     "Chain steps record their expanded task without the preamble",
   );
@@ -1753,7 +1777,7 @@ test("parallel progress distinguishes running and queued tasks by display name",
     progress.content[0].text,
     /3\. `progress-3 \(worker\)` queued\n4\. `progress-4 \(worker\)` queued$/,
   );
-  assert.ok(progress.details.results.every((r) => r.exitCode === -1));
+  assert.ok(progress.details.results.every((r: any) => r.exitCode === -1));
   assert.equal((await finish(id, timeoutMs)).state, "completed");
 });
 
@@ -1854,7 +1878,7 @@ test("job listing renders untrusted labels literally and keeps raw metadata", as
     listed.content[0].text.includes("`[reviewer](https://example.com)\\u200b`"),
   );
   assert.equal(
-    listed.structuredContent.jobs.find((job) => job.id === id).label,
+    listed.structuredContent.jobs.find((job: any) => job.id === id).label,
     name,
   );
   await finish(id);
@@ -1886,7 +1910,7 @@ test("job listings bound escaped labels without hiding job IDs", async () => {
   for (const id of jobIds) {
     assert.ok(text.includes(id), `job ID ${id} must remain visible`);
     const label = listed.structuredContent.jobs.find(
-      (job) => job.id === id,
+      (job: any) => job.id === id,
     ).label;
     assert.ok(label.includes("`"), "structured metadata retains raw backticks");
     assert.equal(
@@ -1904,7 +1928,7 @@ test("pending background output bounds escaped labels to the error schema", asyn
     agentFile,
     `---\nname: ${JSON.stringify(agentName)}\ndescription: Backtick-name test\n---\nPrompt.\n`,
   );
-  let id;
+  let id: any;
   try {
     const started = await invoke("subagent", {
       background: true,
@@ -1948,7 +1972,7 @@ test("pending background output bounds escaped labels to the error schema", asyn
 test("all foreground and background invocations share a four-process budget", async () => {
   const releaseFile = join(sandbox, "process-budget.release");
   rmSync(releaseFile, { force: true });
-  const batch = (prefix) =>
+  const batch = (prefix: any) =>
     Array.from({ length: 6 }, (_, i) => ({
       agent: "worker",
       task: `process-budget-barrier:${releaseFile}|${prefix}-${i}`,
@@ -2043,7 +2067,7 @@ test("parallel concurrency can be lowered without changing result order", async 
     assert.equal(result.isError, false);
     assert.equal(result.details.concurrency, concurrency);
     assert.deepEqual(
-      result.details.results.map((r) => r.task),
+      result.details.results.map((r: any) => r.task),
       tasks.map((t) => t.task),
     );
     let active = 0,
@@ -2080,7 +2104,7 @@ test("invalid or inapplicable concurrency limits fail before launching children"
 
 test("PI_SUBAGENTS_MAX_PROCESSES sets the shared process limit and rejects invalid values", async () => {
   const previous = process.env.PI_SUBAGENTS_MAX_PROCESSES;
-  const reload = async (value) => {
+  const reload = async (value: any) => {
     await shutdown();
     process.env.PI_SUBAGENTS_MAX_PROCESSES = value;
     const loaded = await loadExtensions(
@@ -2088,7 +2112,7 @@ test("PI_SUBAGENTS_MAX_PROCESSES sets the shared process limit and rejects inval
       sandbox,
     );
     assert.deepEqual(loaded.errors, []);
-    loaded.runtime.sendMessage = (message, options) =>
+    loaded.runtime.sendMessage = (message: any, options: any) =>
       messages.push({ message, options });
     extension = loaded.extensions[0];
     tools = extension.tools;
@@ -2170,8 +2194,8 @@ test(
   "temporary prompt files and directories are private on POSIX",
   { skip: process.platform === "win32" },
   async (t) => {
-    let promptPath;
-    let releaseWrite, enteredWrite;
+    let promptPath: any;
+    let releaseWrite, enteredWrite: any;
     const gate = new Promise((resolve) => {
       releaseWrite = resolve;
     });
@@ -2179,13 +2203,19 @@ test(
       enteredWrite = resolve;
     });
     const originalWrite = fsPromises.writeFile;
-    const write = t.mock.method(fsPromises, "writeFile", async (...args) => {
-      const result = await originalWrite(...args);
-      promptPath = args[0];
-      enteredWrite();
-      await gate;
-      return result;
-    });
+    const write = t.mock.method(
+      fsPromises,
+      "writeFile",
+      async (...args: any[]) => {
+        const result = await (originalWrite as (...values: any[]) => any)(
+          ...args,
+        );
+        promptPath = args[0];
+        enteredWrite();
+        await gate;
+        return result;
+      },
+    );
     syncBuiltinESMExports();
     try {
       const id = await launch({ task: "private prompt permissions" });
@@ -2202,10 +2232,10 @@ test(
         0,
         "Temporary prompt file must not grant group or other access",
       );
-      releaseWrite();
+      releaseWrite!();
       assert.equal((await finish(id)).state, "completed");
     } finally {
-      releaseWrite();
+      releaseWrite!();
       write.mock.restore();
       syncBuiltinESMExports();
     }
@@ -2213,7 +2243,7 @@ test(
 );
 
 test("cancellation during prompt creation prevents spawning and cleans up the prompt", async (t) => {
-  let releaseWrite, enteredWrite;
+  let releaseWrite, enteredWrite: any;
   const gate = new Promise((resolve) => {
     releaseWrite = resolve;
   });
@@ -2222,21 +2252,25 @@ test("cancellation during prompt creation prevents spawning and cleans up the pr
   });
   const originalWrite = fsPromises.writeFile;
   const originalSpawn = childProcess.spawn;
-  const write = t.mock.method(fsPromises, "writeFile", async (...args) => {
-    enteredWrite();
-    await gate;
-    return originalWrite(...args);
-  });
-  const spawn = t.mock.method(childProcess, "spawn", (...args) =>
-    originalSpawn(...args),
+  const write = t.mock.method(
+    fsPromises,
+    "writeFile",
+    async (...args: any[]) => {
+      enteredWrite();
+      await gate;
+      return (originalWrite as (...values: any[]) => any)(...args);
+    },
+  );
+  const spawn = t.mock.method(childProcess, "spawn", (...args: any[]) =>
+    (originalSpawn as (...values: any[]) => any)(...args),
   );
   syncBuiltinESMExports();
   try {
     const id = await launch({ task: "canceled while writing prompt" });
     await entered;
-    const promptPath = write.mock.calls[0].arguments[0];
+    const promptPath = write.mock.calls[0]!.arguments[0];
     await invoke("subagent_jobs", { action: "cancel", jobId: id });
-    releaseWrite();
+    releaseWrite!();
     assert.equal((await finish(id)).state, "canceled");
     assert.equal(
       spawn.mock.callCount(),
@@ -2248,7 +2282,7 @@ test("cancellation during prompt creation prevents spawning and cleans up the pr
     const next = await launch({ task: "after prompt cancellation" });
     assert.equal((await finish(next)).state, "completed");
   } finally {
-    releaseWrite();
+    releaseWrite!();
     write.mock.restore();
     spawn.mock.restore();
     syncBuiltinESMExports();
@@ -2256,9 +2290,10 @@ test("cancellation during prompt creation prevents spawning and cleans up the pr
 });
 
 test("cancellation before spawn is retried and deadlines start after spawn", async (t) => {
-  const children = [];
+  const children: any = [];
   const spawn = t.mock.method(childProcess, "spawn", () => {
-    const child = new EventEmitter();
+    // A fake ChildProcess: the tests attach only the members the code under test reads.
+    const child: any = new EventEmitter();
     child.pid = undefined;
     child.killRequests = 0;
     child.stdin = new EventEmitter();
@@ -2286,7 +2321,7 @@ test("cancellation before spawn is retried and deadlines start after spawn", asy
       child.spawnAt = Date.now();
       child.emit("spawn");
     }, 60);
-    child.fallbackTimer = setTimeout(child.finish, 500);
+    child.fallbackTimer = setTimeout(child.finish as () => void, 500);
     children.push(child);
     return child;
   });
@@ -2300,11 +2335,11 @@ test("cancellation before spawn is retried and deadlines start after spawn", asy
       controller.signal,
     ).then(
       (result) => ({ result }),
-      (error) => ({ error }),
+      (error: unknown) => ({ error }),
     );
     await waitFor(() => children.length === 1);
     controller.abort();
-    const canceled = await canceledPending;
+    const canceled: any = await canceledPending;
     assert.equal(canceled.error, controller.signal.reason);
     assert.equal(
       children[0].killRequests,
@@ -2376,10 +2411,14 @@ test(
   async (t) => {
     const graceTimers = [];
     const originalSetTimeout = globalThis.setTimeout;
-    t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
-      if (delay === 1000) graceTimers.push(delay);
-      return originalSetTimeout(callback, delay, ...args);
-    });
+    t.mock.method(
+      globalThis,
+      "setTimeout",
+      (callback: any, delay: any, ...args: any[]) => {
+        if (delay === 1000) graceTimers.push(delay);
+        return originalSetTimeout(callback, delay, ...args);
+      },
+    );
 
     const canceled = await launch({ task: "delay=10000 windows cancel" });
     await waitFor(() => traces().some((t) => t.event === "start"));
@@ -2452,8 +2491,8 @@ test(
   "Windows Job Object supervision cleans descendants after cancellation and leader exit",
   { skip: process.platform !== "win32" },
   async () => {
-    const descendantPids = new Set();
-    const startedDescendant = (task) =>
+    const descendantPids = new Set<number>();
+    const startedDescendant = (task: any) =>
       traces().find(
         (entry) => entry.event === "grandchild" && entry.task === task,
       );
@@ -2610,7 +2649,7 @@ test(
         "a same-named executable in the child working directory must not shadow PATH",
       );
     } finally {
-      process.argv[1] = previousArgv;
+      process.argv[1] = previousArgv!;
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
       process.chdir(previousCwd);
@@ -2665,7 +2704,7 @@ test(
   { skip: process.platform !== "linux" },
   async () => {
     const id = await launch({ task: "delay=500 orphan grandchild-ignored" });
-    let descendant;
+    let descendant: any;
     try {
       await waitFor(() => traces().some((t) => t.event === "grandchild"));
       descendant = traces().find((t) => t.event === "grandchild").pid;
@@ -2714,7 +2753,7 @@ test(
       ctx(),
       controller.signal,
     );
-    let descendant;
+    let descendant: any;
     try {
       await waitFor(() => traces().some((t) => t.event === "grandchild"));
       descendant = traces().find((t) => t.event === "grandchild").pid;
@@ -2799,7 +2838,7 @@ test("stdout records and stderr are bounded while both streams continue draining
   assert.match(stderrJob.latest.content[0].text, /Capture notice/);
   let offset = 0,
     pagedStderr = "";
-  do {
+  for (;;) {
     const page = await invoke("subagent_jobs", {
       action: "output",
       jobId: stderrJob.id,
@@ -2815,7 +2854,7 @@ test("stdout records and stderr are bounded while both streams continue draining
     pagedStderr += output.text;
     if (output.nextOffset === null) break;
     offset = output.nextOffset;
-  } while (true);
+  }
   assert.equal(
     pagedStderr,
     result.stderr,
@@ -2826,9 +2865,11 @@ test("stdout records and stderr are bounded while both streams continue draining
 test("cumulative stdout overflow terminates the child, reports truncation, and releases its process slot", async (t) => {
   const originalSpawn = childProcess.spawn;
   let killRequests = 0;
-  const spawn = t.mock.method(childProcess, "spawn", (...args) => {
-    if (!args[1].includes("fake/pinned:high")) return originalSpawn(...args);
-    const child = new EventEmitter();
+  const spawn = t.mock.method(childProcess, "spawn", (...args: any[]) => {
+    if (!args[1].includes("fake/pinned:high"))
+      return (originalSpawn as (...values: any[]) => any)(...args);
+    // A fake ChildProcess: the tests attach only the members the code under test reads.
+    const child: any = new EventEmitter();
     let childKillRequests = 0;
     // Force the POSIX group-kill attempt to throw before touching any real PID; child.kill is stubbed below.
     child.pid = Symbol("synthetic child PID");
@@ -2922,9 +2963,11 @@ test("cumulative stdout overflow terminates the child, reports truncation, and r
 test("per-child JSONL record limit stops parsing, terminates the child, and releases its slot", async (t) => {
   const originalSpawn = childProcess.spawn;
   let killRequests = 0;
-  const spawn = t.mock.method(childProcess, "spawn", (...args) => {
-    if (!args[1].includes("fake/pinned:high")) return originalSpawn(...args);
-    const child = new EventEmitter();
+  const spawn = t.mock.method(childProcess, "spawn", (...args: any[]) => {
+    if (!args[1].includes("fake/pinned:high"))
+      return (originalSpawn as (...values: any[]) => any)(...args);
+    // A fake ChildProcess: the tests attach only the members the code under test reads.
+    const child: any = new EventEmitter();
     let childKillRequests = 0;
     child.pid = Symbol("synthetic child PID");
     child.kill = () => {
@@ -3012,7 +3055,10 @@ test("bounded history keeps the final answer and usage from evicted messages", a
     job.latest.content[0].text,
     /messages omitted from captured history/,
   );
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   for (const mode of ["single", "chain", "parallel"])
     for (const expanded of [false, true]) {
       const rendered = tools
@@ -3040,7 +3086,7 @@ test("a completed assistant answer evicted by trailing messages fails instead of
   assert.equal(task.exitCode, 1);
   assert.equal(task.capture.finalAssistantMessageDropped, true);
   assert.equal(
-    task.messages.some((message) => message.role === "assistant"),
+    task.messages.some((message: any) => message.role === "assistant"),
     false,
   );
   assert.match(
@@ -3249,8 +3295,8 @@ test("maximum-length valid agent names do not overflow system-prompt filenames",
 });
 
 test("failed prompt writes remove their temporary directory and release the slot", async (t) => {
-  let promptPath;
-  const write = t.mock.method(fsPromises, "writeFile", async (file) => {
+  let promptPath: any;
+  const write = t.mock.method(fsPromises, "writeFile", async (file: any) => {
     promptPath = file;
     throw new Error("fixture prompt write failure");
   });
@@ -3274,14 +3320,18 @@ test("failed prompt writes remove their temporary directory and release the slot
 
 test("setup failures return task-level results and preserve independent or earlier work", async (t) => {
   const originalWrite = fsPromises.writeFile;
-  const write = t.mock.method(fsPromises, "writeFile", async (...args) => {
-    if (String(args[1]).includes("Pinned instructions.")) {
-      throw Object.assign(new Error("private prompt payload"), {
-        code: "EACCES",
-      });
-    }
-    return originalWrite(...args);
-  });
+  const write = t.mock.method(
+    fsPromises,
+    "writeFile",
+    async (...args: any[]) => {
+      if (String(args[1]).includes("Pinned instructions.")) {
+        throw Object.assign(new Error("private prompt payload"), {
+          code: "EACCES",
+        });
+      }
+      return (originalWrite as (...values: any[]) => any)(...args);
+    },
+  );
   try {
     for (const params of [
       { agent: "pinned", task: "setup single" },
@@ -3304,7 +3354,7 @@ test("setup failures return task-level results and preserve independent or earli
       const result = await invoke("subagent", params);
       assert.equal(result.isError, true);
       const failed = result.details.results.find(
-        (task) => task.agent === "pinned",
+        (task: any) => task.agent === "pinned",
       );
       assert.equal(failed.exitCode, 1);
       assert.equal(failed.usage.turns, 0);
@@ -3323,8 +3373,8 @@ test("setup failures return task-level results and preserve independent or earli
       assert.equal(result.usage.input, params.tasks ? 4 : params.chain ? 2 : 0);
       assert.ok(
         result.details.results
-          .filter((task) => task.agent === "worker")
-          .every((task) => task.exitCode === 0),
+          .filter((task: any) => task.agent === "worker")
+          .every((task: any) => task.exitCode === 0),
       );
     }
     assert.equal(
@@ -3343,12 +3393,12 @@ test("setup failures return task-level results and preserve independent or earli
 
 test("synchronous spawn failures remain inspectable and do not discard sibling results", async (t) => {
   const originalSpawn = childProcess.spawn;
-  const spawn = t.mock.method(childProcess, "spawn", (...args) => {
+  const spawn = t.mock.method(childProcess, "spawn", (...args: any[]) => {
     if (args[1].includes("fake/pinned:high"))
       throw Object.assign(new Error("private spawn payload"), {
         code: "ERR_INVALID_ARG_VALUE",
       });
-    return originalSpawn(...args);
+    return (originalSpawn as (...values: any[]) => any)(...args);
   });
   syncBuiltinESMExports();
   try {
@@ -3384,9 +3434,11 @@ test("synchronous spawn failures remain inspectable and do not discard sibling r
 
 test("asynchronous spawn failures expose only a safe setup diagnostic", async (t) => {
   const originalSpawn = childProcess.spawn;
-  const spawn = t.mock.method(childProcess, "spawn", (...args) => {
-    if (!args[1].includes("fake/pinned:high")) return originalSpawn(...args);
-    const child = new EventEmitter();
+  const spawn = t.mock.method(childProcess, "spawn", (...args: any[]) => {
+    if (!args[1].includes("fake/pinned:high"))
+      return (originalSpawn as (...values: any[]) => any)(...args);
+    // A fake ChildProcess: the tests attach only the members the code under test reads.
+    const child: any = new EventEmitter();
     child.pid = undefined;
     child.stdin = new EventEmitter();
     child.stdin.end = () => {};
@@ -3473,9 +3525,9 @@ test("malformed child events fail cleanly without crashing or retaining slots", 
         /outside the finite JavaScript range/,
       );
       assert.equal(
-        job.latest.details.results[0].messages.some((message) =>
+        job.latest.details.results[0].messages.some((message: any) =>
           message.content.some(
-            (part) => part.type === "toolCall" && part.id === "huge",
+            (part: any) => part.type === "toolCall" && part.id === "huge",
           ),
         ),
         false,
@@ -3496,7 +3548,7 @@ test("malformed child events fail cleanly without crashing or retaining slots", 
       );
       assert.equal(
         job.latest.details.results[0].messages.some(
-          (message) => message.role === "user",
+          (message: any) => message.role === "user",
         ),
         false,
         "Malformed user content must be rejected before it enters captured history",
@@ -3562,7 +3614,7 @@ test("Pi and extension-defined AgentMessage roles are ignored around child resul
     "Trailing context messages must not erase the completed assistant turn",
   );
   assert.deepEqual(
-    result.messages.map((message) => message.role),
+    result.messages.map((message: any) => message.role),
     ["assistant", "toolResult", "assistant"],
   );
   assert.equal(
@@ -3581,7 +3633,7 @@ test("tool-result-end rejects a well-formed message with the wrong role", async 
   );
   assert.equal(
     job.latest.details.results[0].messages.some(
-      (message) => message.content.length === 0,
+      (message: any) => message.content.length === 0,
     ),
     false,
     "the invalid event must not be retained as an assistant message",
@@ -3596,7 +3648,10 @@ test("deep JSON cannot overflow renderer or session serialization stacks", async
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /nesting/);
   assert.doesNotThrow(() => JSON.stringify(result));
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   assert.doesNotThrow(() =>
     tools
       .get("subagent")
@@ -3712,7 +3767,7 @@ test("public tool schemas and handlers reject unknown top-level and nested param
       },
       /chain step/,
     ],
-  ];
+  ] as const;
   for (const [params, diagnostic] of cases) {
     assert.equal(Value.Check(subagentSchema, params), false);
     const result = await invoke("subagent", params);
@@ -3751,7 +3806,10 @@ test("public tool schemas and handlers reject unknown top-level and nested param
 
 test("renderers tolerate partial calls and invalid tool argument types", async () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   for (const args of [
     { chain: [{}] },
     { tasks: [{}] },
@@ -3878,14 +3936,21 @@ test("renderers tolerate partial calls and invalid tool argument types", async (
 
 test("chain call previews bound placeholder cleanup to a short task prefix", () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const task = `{previous} ${"x".repeat(2 * 1024 * 1024)}`;
   const originalReplace = String.prototype.replace;
-  const replaceInputLengths = [];
+  const replaceInputLengths: any = [];
   String.prototype.replace = function (search, replacement) {
     if (search instanceof RegExp && search.source.includes("steps"))
       replaceInputLengths.push(this.length);
-    return originalReplace.call(this, search, replacement);
+    return (originalReplace as (...values: any[]) => any).call(
+      this,
+      search,
+      replacement,
+    );
   };
   let preview;
   try {
@@ -3901,7 +3966,7 @@ test("chain call previews bound placeholder cleanup to a short task prefix", () 
     "chain task previews still remove context placeholders",
   );
   assert.ok(
-    replaceInputLengths.every((length) => length <= 1024),
+    replaceInputLengths.every((length: any) => length <= 1024),
     "placeholder cleanup scans only a bounded task prefix",
   );
   assert.ok(
@@ -3912,7 +3977,10 @@ test("chain call previews bound placeholder cleanup to a short task prefix", () 
 
 test("fallback tool-call previews bound nested arguments before JSON serialization", async () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const result = await invoke("subagent", {
     agent: "worker",
     task: "preview arguments",
@@ -3957,7 +4025,11 @@ test("fallback tool-call previews bound nested arguments before JSON serializati
   JSON.stringify = function (value, ...parameters) {
     if (value?.previewMarker === "bounded-preview-marker")
       serializedArgs = value;
-    return originalStringify.call(this, value, ...parameters);
+    return (originalStringify as (...values: any[]) => any).call(
+      this,
+      value,
+      ...parameters,
+    );
   };
   try {
     definition
@@ -3971,9 +4043,9 @@ test("fallback tool-call previews bound nested arguments before JSON serializati
     args,
     "the original captured arguments are not serialized for display",
   );
-  assert.ok(serializedArgs.text.length <= 128);
-  assert.ok(serializedArgs.nested.long.length <= 128);
-  assert.match(serializedArgs.nested.items, /items/);
+  assert.ok(serializedArgs!.text.length <= 128);
+  assert.ok(serializedArgs!.nested.long.length <= 128);
+  assert.match(serializedArgs!.nested.items, /items/);
   assert.ok(
     Buffer.byteLength(originalStringify(serializedArgs)) < 4096,
     "the preview serialization stays small regardless of the captured argument size",
@@ -3987,12 +4059,15 @@ test("fallback tool-call previews bound nested arguments before JSON serializati
 
 test("subagent renderers escape untrusted terminal controls without changing captured output", async () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const esc = String.fromCharCode(27);
   const c1Csi = String.fromCharCode(0x9b);
   const bell = String.fromCharCode(7);
   const hostile = `terminal ${esc}]52;c;pi-subagents-test${bell} ${esc}[2J${c1Csi}2J ${terminalDisplayUnicode.text}\nnext line`;
-  const render = (result, expanded) =>
+  const render = (result: any, expanded: any) =>
     definition
       .renderResult(result, { expanded }, theme, {})
       .render(100)
@@ -4079,7 +4154,10 @@ test("subagent renderers escape untrusted terminal controls without changing cap
 test("subagent_jobs renderers escape terminal controls without changing job output", async () => {
   initTheme("dark", false);
   const definition = tools.get("subagent_jobs").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const esc = String.fromCharCode(27);
   const c1Csi = String.fromCharCode(0x9b);
   const hostile = `terminal ${esc}]52;c;pi-subagents-test${String.fromCharCode(7)} ${esc}[2J${c1Csi}2J ${terminalDisplayUnicode.text}\nnext line`;
@@ -4156,7 +4234,10 @@ test("subagent_jobs renderers escape terminal controls without changing job outp
 test("terminal display escaping bounds expansion for control- and format-heavy tool output", () => {
   initTheme("dark", false);
   const definition = tools.get("subagent_jobs").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const esc = String.fromCharCode(27);
   const languageTag = terminalDisplayUnicode.hidden[3];
   const hostile = `${esc}[2J${languageTag}`.repeat(40_000);
@@ -4564,9 +4645,9 @@ test("unsetEnv filters inherited variables additively for agents, calls, entries
     task: "unset-env single",
     unsetEnv: ["PI_SUBAGENTS_TEST_CALL_ENV"],
   });
-  const child = (task) =>
+  const child = (task: any) =>
     traces().find((entry) => entry.event === "start" && entry.task === task);
-  const presence = (task) => child(task).envPresence;
+  const presence = (task: any) => child(task).envPresence;
   assert.equal(single.details.results[0].exitCode, 0);
   assert.deepEqual(presence("unset-env single"), {
     PI_SUBAGENTS_TEST_AGENT_ENV: false,
@@ -4609,7 +4690,7 @@ test("unsetEnv filters inherited variables additively for agents, calls, entries
     ],
   });
   assert.equal(
-    parallel.details.results.every((result) => result.exitCode === 0),
+    parallel.details.results.every((result: any) => result.exitCode === 0),
     true,
   );
   assert.deepEqual(presence("unset-env parallel entry"), {
@@ -4637,7 +4718,7 @@ test("unsetEnv filters inherited variables additively for agents, calls, entries
     ],
   });
   assert.equal(
-    chain.details.results.every((result) => result.exitCode === 0),
+    chain.details.results.every((result: any) => result.exitCode === 0),
     true,
   );
   assert.equal(
@@ -4681,7 +4762,7 @@ test("unsetEnv filters inherited variables additively for agents, calls, entries
 
   const listing = await invoke("subagent_agents", {});
   assert.deepEqual(
-    listing.details.agents.find((agent) => agent.name === "env-default")
+    listing.details.agents.find((agent: any) => agent.name === "env-default")
       .unsetEnv,
     ["PI_SUBAGENTS_TEST_AGENT_ENV", "PI_SUBAGENTS_TEST_CASE_ENV"],
   );
@@ -4871,7 +4952,7 @@ test("agent working-directory defaults resolve from the parent and yield to disp
   try {
     const listing = await invoke("subagent_agents", {});
     const configured = listing.details.agents.find(
-      (agent) => agent.name === "cwd-default",
+      (agent: any) => agent.name === "cwd-default",
     );
     assert.equal(configured.cwd, "agent-work");
     assert.match(listing.content[0].text, /cwd=.*agent-work/);
@@ -5197,10 +5278,12 @@ test("agent listing is read-only, scoped, and reports invalid files without expo
     assert.match(result.content[0].text, /worker.*Test worker/);
     assert.match(result.content[0].text, /broken.md/);
     assert.deepEqual(
-      result.details.agents.map((a) => a.name),
+      result.details.agents.map((a: any) => a.name),
       ["env-default", "pinned", "worker"],
     );
-    assert.ok(result.details.agents.every((a) => a.systemPrompt === undefined));
+    assert.ok(
+      result.details.agents.every((a: any) => a.systemPrompt === undefined),
+    );
     assert.equal(result.details.diagnostics.length, 1);
     assert.deepEqual(result.structuredContent, result.details);
     const project = await invoke(
@@ -5209,7 +5292,7 @@ test("agent listing is read-only, scoped, and reports invalid files without expo
       { ...ctx(), cwd: join(sandbox, "project") },
     );
     assert.deepEqual(
-      project.details.agents.map((a) => a.name),
+      project.details.agents.map((a: any) => a.name),
       ["project"],
     );
     assert.equal(traces().length, 0);
@@ -5259,10 +5342,12 @@ test("agent listing paginates large inventories with bounded text and metadata",
     );
     assert.ok(Buffer.byteLength(first.content[0].text) <= 50 * 1024);
     assert.ok(
-      first.details.agents.every((agent) => agent.systemPrompt === undefined),
+      first.details.agents.every(
+        (agent: any) => agent.systemPrompt === undefined,
+      ),
     );
     const longEntry = first.details.agents.find(
-      (agent) => agent.name === "zz-page-000",
+      (agent: any) => agent.name === "zz-page-000",
     );
     assert.equal(
       longEntry.cwd,
@@ -5292,7 +5377,7 @@ test("agent listing paginates large inventories with bounded text and metadata",
       nextOffset = page.details.nextOffset;
     }
     const names = pages.flatMap((page) =>
-      page.agents.map((agent) => agent.name),
+      page.agents.map((agent: any) => agent.name),
     );
     assert.deepEqual(names, [...names].sort());
     assert.equal(new Set(names).size, names.length, "pages must not overlap");
@@ -5402,7 +5487,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       "/work/personal-runtime",
       456000,
     ],
-  ];
+  ] as const;
   const userFiles = definitions.map(
     ([
       filename,
@@ -5481,7 +5566,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
 
     const nameMatch = await invoke("subagent_agents", { query: "LOOKUP-DB" });
     assert.deepEqual(
-      nameMatch.details.agents.map((agent) => agent.name),
+      nameMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-db"],
     );
 
@@ -5489,7 +5574,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       query: "SOURCE-LABEL",
     });
     assert.deepEqual(
-      filenameMatch.details.agents.map((agent) => agent.name),
+      filenameMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-filename-only"],
     );
     assert.equal(
@@ -5511,7 +5596,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
     });
     assert.equal(Value.Check(schema, tagMatch.structuredContent), true);
     assert.deepEqual(
-      tagMatch.details.agents.map((agent) => agent.name),
+      tagMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-oauth"],
     );
     assert.deepEqual(tagMatch.details.agents[0].tags, [
@@ -5534,7 +5619,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
     });
     assert.equal(documentationFirst.details.totalAgents, 2);
     assert.deepEqual(
-      documentationFirst.details.agents.map((agent) => agent.name),
+      documentationFirst.details.agents.map((agent: any) => agent.name),
       ["lookup-docs"],
     );
     assert.equal(documentationFirst.details.nextOffset, 1);
@@ -5548,7 +5633,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       limit: 1,
     });
     assert.deepEqual(
-      documentationSecond.details.agents.map((agent) => agent.name),
+      documentationSecond.details.agents.map((agent: any) => agent.name),
       ["lookup-oauth"],
     );
     assert.equal(documentationSecond.details.totalAgents, 2);
@@ -5581,7 +5666,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
     });
     assert.equal(matchingTagsFirst.details.totalAgents, 2);
     assert.deepEqual(
-      matchingTagsFirst.details.agents.map((agent) => agent.name),
+      matchingTagsFirst.details.agents.map((agent: any) => agent.name),
       ["lookup-docs"],
     );
     assert.equal(matchingTagsFirst.details.nextOffset, 1);
@@ -5595,7 +5680,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       limit: 1,
     });
     assert.deepEqual(
-      matchingTagsSecond.details.agents.map((agent) => agent.name),
+      matchingTagsSecond.details.agents.map((agent: any) => agent.name),
       ["lookup-oauth"],
     );
     assert.equal(matchingTagsSecond.details.totalAgents, 2);
@@ -5604,7 +5689,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       tags: ["incident-response", "security"],
     });
     assert.deepEqual(
-      tagIntersection.details.agents.map((agent) => agent.name),
+      tagIntersection.details.agents.map((agent: any) => agent.name),
       ["lookup-oauth"],
     );
     assert.equal(
@@ -5618,7 +5703,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       query: "CUSTOM-SHELL",
     });
     assert.deepEqual(
-      configuredToolMatch.details.agents.map((agent) => agent.name),
+      configuredToolMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-override", "lookup-tool-agent"],
     );
     assert.deepEqual(configuredToolMatch.details.agents[1].tools, [
@@ -5634,7 +5719,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       { ...ctx(), cwd: join(sandbox, "project") },
     );
     assert.deepEqual(
-      scopedToolMatch.details.agents.map((agent) => agent.name),
+      scopedToolMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-tool-agent"],
       "a project override with a different configured tool list replaces the personal definition before search",
     );
@@ -5644,13 +5729,13 @@ test("agent listing searches identity, capabilities, source filenames, and confi
     });
     assert.equal(Value.Check(schema, modelMatch.structuredContent), true);
     assert.deepEqual(
-      modelMatch.details.agents.map((agent) => agent.name),
+      modelMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-model"],
     );
     assert.equal(modelMatch.details.agents[0].model, "vendor/custom-Reasoner");
     const thinkingMatch = await invoke("subagent_agents", { query: "XHIGH" });
     assert.deepEqual(
-      thinkingMatch.details.agents.map((agent) => agent.name),
+      thinkingMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-model"],
     );
     assert.equal(thinkingMatch.details.agents[0].thinking, "xhigh");
@@ -5680,14 +5765,14 @@ test("agent listing searches identity, capabilities, source filenames, and confi
     assert.deepEqual(
       (
         await invoke("subagent_agents", { query: "vendor/personal-secret" })
-      ).details.agents.map((agent) => agent.name),
+      ).details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     const unsetEnvMatch = await invoke("subagent_agents", {
       query: "aws_secret_access_key",
     });
     assert.deepEqual(
-      unsetEnvMatch.details.agents.map((agent) => agent.name),
+      unsetEnvMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.deepEqual(unsetEnvMatch.details.agents[0].unsetEnv, [
@@ -5697,13 +5782,13 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       query: "PERSONAL-RUNTIME",
     });
     assert.deepEqual(
-      cwdMatch.details.agents.map((agent) => agent.name),
+      cwdMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.equal(cwdMatch.details.agents[0].cwd, "/work/personal-runtime");
     const timeoutMatch = await invoke("subagent_agents", { query: "456000" });
     assert.deepEqual(
-      timeoutMatch.details.agents.map((agent) => agent.name),
+      timeoutMatch.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.equal(timeoutMatch.details.agents[0].timeoutMs, 456000);
@@ -5743,7 +5828,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       projectContext,
     );
     assert.deepEqual(
-      exactProjectTag.details.agents.map((agent) => agent.name),
+      exactProjectTag.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     const projectTag = await invoke(
@@ -5755,7 +5840,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       projectContext,
     );
     assert.deepEqual(
-      projectTag.details.agents.map((agent) => agent.name),
+      projectTag.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.deepEqual(
@@ -5787,7 +5872,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
           },
           projectContext,
         )
-      ).details.agents.map((agent) => agent.name),
+      ).details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
 
@@ -5813,7 +5898,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       projectContext,
     );
     assert.deepEqual(
-      projectModel.details.agents.map((agent) => agent.name),
+      projectModel.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.equal(projectModel.details.agents[0].model, "vendor/project-model");
@@ -5826,7 +5911,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       projectContext,
     );
     assert.deepEqual(
-      projectThinking.details.agents.map((agent) => agent.name),
+      projectThinking.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
       "a project thinking setting is searchable and replaces the shadowed personal setting",
     );
@@ -5852,7 +5937,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       projectContext,
     );
     assert.deepEqual(
-      projectUnsetEnv.details.agents.map((agent) => agent.name),
+      projectUnsetEnv.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.deepEqual(
@@ -5882,7 +5967,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       projectContext,
     );
     assert.deepEqual(
-      projectCwd.details.agents.map((agent) => agent.name),
+      projectCwd.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.equal(projectCwd.details.agents[0].cwd, "/work/project-runtime");
@@ -5908,7 +5993,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       projectContext,
     );
     assert.deepEqual(
-      projectTimeout.details.agents.map((agent) => agent.name),
+      projectTimeout.details.agents.map((agent: any) => agent.name),
       ["lookup-override"],
     );
     assert.equal(
@@ -5921,7 +6006,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       query: "cafe\u0301 tool",
     });
     assert.deepEqual(
-      decomposedQuery.details.agents.map((agent) => agent.name),
+      decomposedQuery.details.agents.map((agent: any) => agent.name),
       ["lookup-cafe-composed"],
       "decomposed query text should match canonically equivalent composed metadata",
     );
@@ -5930,7 +6015,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       query: "café ass",
     });
     assert.deepEqual(
-      composedQuery.details.agents.map((agent) => agent.name),
+      composedQuery.details.agents.map((agent: any) => agent.name),
       ["lookup-cafe-decomposed"],
       "composed query text should match canonically equivalent decomposed metadata",
     );
@@ -5939,7 +6024,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
       query: "lookup-cafe\u0301-name",
     });
     assert.deepEqual(
-      nameQuery.details.agents.map((agent) => agent.name),
+      nameQuery.details.agents.map((agent: any) => agent.name),
       ["lookup-café-name"],
       "decomposed query text should also match canonically equivalent agent names",
     );
@@ -5951,7 +6036,7 @@ test("agent listing searches identity, capabilities, source filenames, and confi
     );
     assert.equal(scoped.details.totalAgents, 2);
     assert.deepEqual(
-      scoped.details.agents.map((agent) => agent.name),
+      scoped.details.agents.map((agent: any) => agent.name),
       ["lookup-db", "lookup-override"],
     );
     assert.equal(
@@ -5986,16 +6071,18 @@ test("agent listing searches identity, capabilities, source filenames, and confi
 });
 
 test("agentTags dispatch selects uniquely in single, parallel, and chain modes before launch", async () => {
-  const definitions = [
-    ["dispatch-security.md", "dispatch-security", ["security"]],
-    ["dispatch-review.md", "dispatch-review", ["code-review"]],
-    ["dispatch-both.md", "dispatch-both", ["security", "code-review"]],
+  const definitions = (
     [
-      "dispatch-triage.md",
-      "dispatch-triage",
-      ["security", "incident-response"],
-    ],
-  ].map(([filename, name, tags]) => {
+      ["dispatch-security.md", "dispatch-security", ["security"]],
+      ["dispatch-review.md", "dispatch-review", ["code-review"]],
+      ["dispatch-both.md", "dispatch-both", ["security", "code-review"]],
+      [
+        "dispatch-triage.md",
+        "dispatch-triage",
+        ["security", "incident-response"],
+      ],
+    ] as const
+  ).map(([filename, name, tags]) => {
     const file = join(sandbox, "agent/agents", filename);
     writeFileSync(
       file,
@@ -6175,7 +6262,7 @@ test("agentTags dispatch selects uniquely in single, parallel, and chain modes b
     });
     assert.equal(parallel.isError, false);
     assert.deepEqual(
-      parallel.details.results.map((result) => result.agent),
+      parallel.details.results.map((result: any) => result.agent),
       ["dispatch-both", "worker"],
     );
 
@@ -6194,7 +6281,7 @@ test("agentTags dispatch selects uniquely in single, parallel, and chain modes b
     });
     assert.equal(chain.isError, undefined);
     assert.deepEqual(
-      chain.details.results.map((result) => result.agent),
+      chain.details.results.map((result: any) => result.agent),
       ["dispatch-both", "worker"],
     );
     assert.match(chain.details.results[1].task, /chain tag selector/);
@@ -6231,7 +6318,7 @@ test("agentTags dispatch selects uniquely in single, parallel, and chain modes b
       ...projectContext,
       hasUI: true,
       ui: {
-        confirm: async (_title, body) => {
+        confirm: async (_title: any, body: any) => {
           approval = body;
           return true;
         },
@@ -6300,7 +6387,10 @@ test("subagent display names are distinct from selectors in single, parallel, an
   );
 
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const single = await invoke("subagent", {
     agent: "worker",
     name: "reviewer",
@@ -6336,7 +6426,7 @@ test("subagent display names are distinct from selectors in single, parallel, an
   });
   assert.equal(parallel.isError, false);
   assert.deepEqual(
-    parallel.details.results.map((result) => result.agent),
+    parallel.details.results.map((result: any) => result.agent),
     ["worker", "worker"],
   );
   assert.equal(parallel.details.results[0].name, "reviewer");
@@ -6361,7 +6451,7 @@ test("subagent display names are distinct from selectors in single, parallel, an
   });
   assert.equal(chain.isError, undefined);
   assert.deepEqual(
-    chain.details.results.map((result) => [result.name, result.agent]),
+    chain.details.results.map((result: any) => [result.name, result.agent]),
     [
       ["review-step", "worker"],
       ["verify-step", "worker"],
@@ -6458,7 +6548,7 @@ test("background display names remain stable through progress, job inspection, w
       : undefined;
   });
   const progressNames = progress.latest.details.results.map(
-    (result) => result.name,
+    (result: any) => result.name,
   );
   assert.match(progressNames[0], /^worker [a-z]+ [a-z]+$/);
   assert.match(progressNames[1], /^worker [a-z]+ [a-z]+$/);
@@ -6484,7 +6574,7 @@ test("background display names remain stable through progress, job inspection, w
       : undefined;
   });
   const competingNames = competingProgress.latest.details.results.map(
-    (result) => result.name,
+    (result: any) => result.name,
   );
   assert.equal(
     new Set([...progressNames, ...competingNames]).size,
@@ -6493,7 +6583,9 @@ test("background display names remain stable through progress, job inspection, w
   );
 
   const listed = await invoke("subagent_jobs", { action: "list" });
-  const listedJob = listed.structuredContent.jobs.find((job) => job.id === id);
+  const listedJob = listed.structuredContent.jobs.find(
+    (job: any) => job.id === id,
+  );
   assert.equal(listedJob.label, progress.label);
   const waited = await invoke("subagent_jobs", {
     action: "wait",
@@ -6502,7 +6594,7 @@ test("background display names remain stable through progress, job inspection, w
   });
   assert.equal(waited.structuredContent.job.label, progress.label);
   assert.deepEqual(
-    waited.details.latest.details.results.map((result) => result.name),
+    waited.details.latest.details.results.map((result: any) => result.name),
     progressNames,
   );
 
@@ -6526,7 +6618,7 @@ test("background display names remain stable through progress, job inspection, w
 test("foreground generated names refresh after project-agent approval", async (t) => {
   const randomInt = t.mock.method(crypto, "randomInt", () => 0);
   syncBuiltinESMExports();
-  const approvals = [];
+  const approvals: any = [];
   let foreground;
   let backgroundId;
   const projectContext = {
@@ -6572,7 +6664,7 @@ test("foreground generated names refresh after project-agent approval", async (t
     assert.equal(result.details.results[0].name, "project amber beaver");
     assert.notEqual(result.details.results[0].name, competing.label);
   } finally {
-    approvals.forEach((resolve) => resolve(true));
+    approvals.forEach((resolve: any) => resolve(true));
     if (foreground) await Promise.allSettled([foreground]);
     if (backgroundId) await finish(backgroundId);
     randomInt.mock.restore();
@@ -6583,8 +6675,8 @@ test("foreground generated names refresh after project-agent approval", async (t
 test("background generated names are reallocated after concurrent project-agent approval", async (t) => {
   const randomInt = t.mock.method(crypto, "randomInt", () => 0);
   syncBuiltinESMExports();
-  const approvals = [];
-  const jobIds = [];
+  const approvals: any = [];
+  const jobIds: any = [];
   const launches = [];
   const context = {
     ...ctx(),
@@ -6593,7 +6685,7 @@ test("background generated names are reallocated after concurrent project-agent 
     isProjectTrusted: () => false,
     ui: { confirm: () => new Promise((resolve) => approvals.push(resolve)) },
   };
-  const request = (task) =>
+  const request = (task: any) =>
     invoke(
       "subagent",
       {
@@ -6613,7 +6705,7 @@ test("background generated names are reallocated after concurrent project-agent 
     launches.push(request("delay=3000 concurrent approval one"));
     launches.push(request("delay=3000 concurrent approval two"));
     await waitFor(() => approvals.length === 2);
-    approvals.forEach((resolve) => resolve(true));
+    approvals.forEach((resolve: any) => resolve(true));
     const results = await Promise.all(launches);
     assert.ok(results.every((result) => result.isError !== true));
     const [first, second] = await Promise.all(jobIds.map(status));
@@ -6624,9 +6716,9 @@ test("background generated names are reallocated after concurrent project-agent 
       "the second approval must avoid the first active job label",
     );
   } finally {
-    approvals.forEach((resolve) => resolve(true));
+    approvals.forEach((resolve: any) => resolve(true));
     await Promise.allSettled(launches);
-    await Promise.all(jobIds.map((id) => finish(id)));
+    await Promise.all(jobIds.map((id: any) => finish(id)));
     randomInt.mock.restore();
     syncBuiltinESMExports();
   }
@@ -6864,13 +6956,13 @@ test("agent timeout defaults apply in every dispatch mode and yield to call over
   try {
     const listing = await invoke("subagent_agents", {});
     const configured = listing.details.agents.find(
-      (agent) => agent.name === "timeout-default",
+      (agent: any) => agent.name === "timeout-default",
     );
     assert.equal(configured.timeoutMs, 250);
     assert.match(listing.content[0].text, /timeoutMs=250/);
     assert.ok(
       listing.details.diagnostics.some(
-        (diagnostic) =>
+        (diagnostic: any) =>
           diagnostic.filePath === invalidFile &&
           /timeoutMs must be an integer/.test(diagnostic.message),
       ),
@@ -7104,7 +7196,7 @@ test("bounded agent-listing text normalizes lone surrogates on the fast path", (
     ["before\uD800after", "before\uFFFDafter"],
     ["\uD800\uDC00", "𐀀"],
   ]) {
-    assert.equal(truncateAgentListingText(value, 512), expected);
+    assert.equal(truncateAgentListingText(value!, 512), expected);
   }
 });
 
@@ -7112,7 +7204,7 @@ test("structured agent listing strings are UTF-8 bounded and mark truncation", a
   for (const [limit, label] of [
     [MAX_AGENT_LISTING_PATH_BYTES, "path"],
     [MAX_AGENT_LISTING_DIAGNOSTIC_MESSAGE_BYTES, "diagnostic"],
-  ]) {
+  ] as const) {
     const value = "🙂".repeat(limit);
     const bounded = truncateAgentListingText(value, limit);
     assert.ok(
@@ -7176,13 +7268,13 @@ test("agent listings omit oversized descriptions from structured metadata", asyn
     const listed = await invoke("subagent_agents", {});
     assert.equal(
       listed.details.agents.some(
-        (agent) => agent.name === "oversized-description",
+        (agent: any) => agent.name === "oversized-description",
       ),
       false,
     );
     assert.ok(
       listed.details.diagnostics.some(
-        (diagnostic) =>
+        (diagnostic: any) =>
           diagnostic.filePath === file &&
           diagnostic.message ===
             `description must be well-formed Unicode and at most ${MAX_AGENT_DESCRIPTION_BYTES} UTF-8 bytes.`,
@@ -7217,12 +7309,15 @@ test("agent listing output schema enforces metadata bounds and exact fields", as
   const schema = tools.get("subagent_agents").definition.outputSchema;
   assert.equal(Value.Check(schema, listing), true);
 
-  const assertRejected = (mutate, message) => {
+  const assertRejected = (
+    mutate: (candidate: any) => void,
+    message?: string,
+  ) => {
     const candidate = structuredClone(listing);
     mutate(candidate);
     assert.equal(Value.Check(schema, candidate), false, message);
   };
-  const agent = (candidate) => candidate.agents[0];
+  const agent = (candidate: any) => candidate.agents[0];
   assertRejected((candidate) => {
     agent(candidate).name = " ".repeat(MAX_AGENT_NAME_BYTES);
   }, "blank names must be rejected");
@@ -7434,12 +7529,12 @@ test("ambiguous and modifier agent tool entries are rejected before child proces
     const listed = await invoke("subagent_agents", {});
     for (const { name, value } of invalid) {
       assert.equal(
-        listed.details.agents.some((agent) => agent.name === name),
+        listed.details.agents.some((agent: any) => agent.name === name),
         false,
       );
       assert.ok(
         listed.details.diagnostics.some(
-          (diagnostic) =>
+          (diagnostic: any) =>
             diagnostic.message ===
             "tools entries must not contain commas, control characters, or start with '+' or '-'.",
         ),
@@ -7469,11 +7564,13 @@ test("oversized agent tool lists are diagnosed and never reach child processes",
   try {
     const listed = await invoke("subagent_agents", {});
     assert.equal(
-      listed.details.agents.some((agent) => agent.name === "oversized-tools"),
+      listed.details.agents.some(
+        (agent: any) => agent.name === "oversized-tools",
+      ),
       false,
     );
     assert.ok(
-      listed.details.diagnostics.some((diagnostic) =>
+      listed.details.diagnostics.some((diagnostic: any) =>
         /tools must be/.test(diagnostic.message),
       ),
     );
@@ -7543,7 +7640,7 @@ test("project agent metadata is escaped in listings and trust confirmations", as
   const hostileCwd = `configured${String.fromCharCode(10)}${escape}[31m${String.fromCodePoint(0x202e)}`;
   const metadataFile = join(projectDir, "metadata.md");
   const hostilePathFile = join(projectDir, `path-${escape}.md`);
-  const yamlAgent = (name, description, suffix = "") =>
+  const yamlAgent = (name: any, description: any, suffix = "") =>
     [
       "---",
       `name: ${JSON.stringify(name)}`,
@@ -7596,13 +7693,13 @@ test("project agent metadata is escaped in listings and trust confirmations", as
       assert.equal(
         text.includes(character),
         false,
-        `default-ignorable ${character.codePointAt(0).toString(16)} must be visible`,
+        `default-ignorable ${character.codePointAt(0)!.toString(16)} must be visible`,
       );
     }
     assert.equal(
       text
         .split(String.fromCharCode(10))
-        .some((line) => line.startsWith("### forged heading")),
+        .some((line: any) => line.startsWith("### forged heading")),
       false,
     );
     assert.ok(text.includes("u001b"));
@@ -7649,34 +7746,37 @@ test("project agent metadata is escaped in listings and trust confirmations", as
     );
     assert.ok(text.includes("u000a"));
     assert.equal(
-      listed.details.agents.find((agent) => agent.name === hostileName).name,
+      listed.details.agents.find((agent: any) => agent.name === hostileName)
+        .name,
       hostileName,
       "structured metadata preserves the original name",
     );
     assert.equal(
-      listed.details.agents.find((agent) => agent.name === hostileName)
+      listed.details.agents.find((agent: any) => agent.name === hostileName)
         .description,
       hostileDescription,
       "structured metadata preserves original descriptions",
     );
     assert.deepEqual(
-      listed.details.agents.find((agent) => agent.name === hostileName).tools,
+      listed.details.agents.find((agent: any) => agent.name === hostileName)
+        .tools,
       ["read", "custom-safe"],
     );
     assert.equal(
-      listed.details.agents.find((agent) => agent.name === hostileName).cwd,
+      listed.details.agents.find((agent: any) => agent.name === hostileName)
+        .cwd,
       hostileCwd,
     );
     if (canUseControlFilename) {
       assert.ok(
         listed.details.agents.some(
-          (agent) => agent.filePath === hostilePathFile,
+          (agent: any) => agent.filePath === hostilePathFile,
         ),
       );
       assert.equal(text.includes(hostilePathFile), false);
       const pathLine = text
         .split(String.fromCharCode(10))
-        .find((line) => line.includes("u001b") && line.includes("md"));
+        .find((line: any) => line.includes("u001b") && line.includes("md"));
       assert.ok(pathLine.includes("path-"));
       assert.ok(pathLine.includes("\\u001b"));
       assert.ok(pathLine.includes(".md"));
@@ -7689,7 +7789,7 @@ test("project agent metadata is escaped in listings and trust confirmations", as
       hasUI: true,
       isProjectTrusted: () => false,
       ui: {
-        confirm: async (_title, body) => {
+        confirm: async (_title: any, body: any) => {
           confirmation = body;
           return false;
         },
@@ -7749,7 +7849,7 @@ test("orphaned script joiners are visible in project-agent listings and approval
   const joiners = [
     [0x200c, "ZWNJ"],
     [0x200d, "ZWJ"],
-  ];
+  ] as const;
   const files = [];
   try {
     for (const [codePoint, label] of joiners) {
@@ -7781,7 +7881,7 @@ test("orphaned script joiners are visible in project-agent listings and approval
       );
       assert.ok(listingText.includes(`u${codePoint.toString(16)}`));
       const listedAgent = listed.details.agents.find(
-        (agent) => agent.name === name,
+        (agent: any) => agent.name === name,
       );
       assert.equal(
         listedAgent.name,
@@ -7800,7 +7900,7 @@ test("orphaned script joiners are visible in project-agent listings and approval
         hasUI: true,
         isProjectTrusted: () => false,
         ui: {
-          confirm: async (_title, body) => {
+          confirm: async (_title: any, body: any) => {
             confirmation = body;
             return false;
           },
@@ -7857,13 +7957,13 @@ test("project-agent approvals show effective model, thinking, tools, and timeout
     hasUI: true,
     isProjectTrusted: () => false,
     ui: {
-      confirm: async (_title, body) => {
+      confirm: async (_title: any, body: any) => {
         confirmation = body;
         return false;
       },
     },
   };
-  const requestApproval = async (params) => {
+  const requestApproval = async (params: any) => {
     const result = await invoke(
       "subagent",
       { agentScope: "project", ...params },
@@ -7986,7 +8086,7 @@ test("project-agent approval shows complete settings and refuses oversized summa
     hasUI: true,
     isProjectTrusted: () => false,
     ui: {
-      confirm: async (_title, body) => {
+      confirm: async (_title: any, body: any) => {
         approvals++;
         confirmation = body;
         return false;
@@ -8024,7 +8124,7 @@ test("project-agent approval shows complete settings and refuses oversized summa
       "show the full effective working directory",
     );
     assert.ok(
-      confirmation.includes(filteredVariables.at(-1)),
+      confirmation.includes(filteredVariables.at(-1)!),
       "show the complete bounded environment-removal list",
     );
     assert.ok(
@@ -8161,12 +8261,12 @@ test("project agent path escape diagnostics satisfy the listing output schema", 
       { ...ctx(), cwd: join(sandbox, "project") },
     );
     assert.deepEqual(
-      result.details.agents.map((a) => a.name),
+      result.details.agents.map((a: any) => a.name),
       ["project"],
     );
     assert.ok(
       result.details.diagnostics.some(
-        (d) =>
+        (d: any) =>
           d.filePath === link && /outside the project root/i.test(d.message),
       ),
     );
@@ -8179,7 +8279,7 @@ test("project agent path escape diagnostics satisfy the listing output schema", 
       true,
     );
     assert.equal(
-      result.structuredContent.agents.some((a) => a.name === "escaped"),
+      result.structuredContent.agents.some((a: any) => a.name === "escaped"),
       false,
     );
     assert.equal(traces().length, 0);
@@ -8207,15 +8307,16 @@ test("agent thinking overrides inheritance and empty tools disable the selection
     assert.equal(child.noTools, true);
     const listing = await invoke("subagent_agents", {});
     const listed = listing.structuredContent.agents.find(
-      (agent) => agent.name === "limited",
+      (agent: any) => agent.name === "limited",
     );
     assert.equal(listed.thinking, "off");
     assert.match(listing.content[0].text, /thinking=off/);
     const listingSchema = tools.get("subagent_agents").definition.outputSchema;
     assert.equal(Value.Check(listingSchema, listing.structuredContent), true);
     const invalidListing = structuredClone(listing.structuredContent);
-    invalidListing.agents.find((agent) => agent.name === "limited").thinking =
-      "unsupported";
+    invalidListing.agents.find(
+      (agent: any) => agent.name === "limited",
+    ).thinking = "unsupported";
     assert.equal(
       Value.Check(listingSchema, invalidListing),
       false,
@@ -8394,7 +8495,7 @@ test("invalid per-call tool overrides fail preflight and the schema bounds tool 
         (_, index) => `tool-${index}`,
       ),
     ],
-  ];
+  ] as const;
   const schema = tools.get("subagent").definition.parameters;
   assert.equal(
     Value.Check(schema, {
@@ -8424,7 +8525,7 @@ test("invalid per-call tool overrides fail preflight and the schema bounds tool 
     Value.Check(schema, {
       agent: "pinned",
       task: "valid",
-      tools: invalid.at(-1)[1],
+      tools: invalid.at(-1)![1],
     }),
     false,
   );
@@ -8795,7 +8896,7 @@ test("project-agent approval cannot be bypassed by a model-controlled parameter"
     hasUI: true,
     isProjectTrusted: () => false,
     ui: {
-      confirm: async (_title, body) => {
+      confirm: async (_title: any, body: any) => {
         approvals++;
         confirmation = body;
         return true;
@@ -9044,7 +9145,7 @@ test("final output includes all text blocks and chain substitution preserves dol
 });
 
 test("named chain outputs reuse earlier full captures alongside previous output in one pass", async () => {
-  const updates = [];
+  const updates: any = [];
   const result = await tools.get("subagent").definition.execute(
     "named",
     {
@@ -9059,12 +9160,12 @@ test("named chain outputs reuse earlier full captures alongside previous output 
       ],
     },
     undefined,
-    (update) => updates.push(update),
+    (update: any) => updates.push(update),
     ctx(),
   );
   assert.notEqual(result.isError, true);
   assert.deepEqual(
-    result.details.results.map((step) => step.stepId),
+    result.details.results.map((step: any) => step.stepId),
     ["initial", "middle", "final"],
   );
   const tasks = traces()
@@ -9076,8 +9177,8 @@ test("named chain outputs reuse earlier full captures alongside previous output 
     `earlier=first block\n\nsecond block; recent=${dollars}; named=${dollars}`,
   );
   assert.ok(
-    updates.some((update) =>
-      update.details.results.some((step) => step.stepId === "middle"),
+    updates.some((update: any) =>
+      update.details.results.some((step: any) => step.stepId === "middle"),
     ),
   );
 });
@@ -9359,18 +9460,22 @@ test("a chain stops when substitution creates a blank task without consuming a s
 
 test("chain rendering uses model failure status even on zero exit, and shows pending steps", async () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
-  const render = (result, expanded) =>
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const render = (result: any, expanded: any) =>
     definition
       .renderResult(result, { expanded }, theme, {})
       .render(100)
       .join("\n");
-  const updates = [];
+  const updates: any = [];
   const result = await definition.execute(
     "chain-failure",
     { chain: [{ agent: "worker", task: "zero-exit fail" }] },
     undefined,
-    (partial) => updates.push([render(partial, false), render(partial, true)]),
+    (partial: any) =>
+      updates.push([render(partial, false), render(partial, true)]),
     ctx(),
   );
   assert.equal(result.isError, true);
@@ -9383,12 +9488,15 @@ test("chain rendering uses model failure status even on zero exit, and shows pen
 
 test("all render modes show model, process, and protocol failure diagnoses", async () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   for (const [task, diagnosis] of [
     ["crash", /fixture crashed/],
     ["zero-exit fail", /fixture failure/],
     ["stdout-flood", /oversized record discarded/],
-  ]) {
+  ] as const) {
     for (const params of [
       { agent: "worker", task },
       { chain: [{ agent: "worker", task }] },
@@ -9410,8 +9518,11 @@ test("all render modes show model, process, and protocol failure diagnoses", asy
 
 test("write-call previews bound line counting for large file contents", () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
-  const renderWrite = (content) =>
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+  const renderWrite = (content: any) =>
     definition
       .renderResult(
         {
@@ -9488,7 +9599,10 @@ test("write-call previews bound line counting for large file contents", () => {
 
 test("collapsed rendering bounds long lines, error messages, and tool paths", async () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   for (const task of ["large", "large-error fail", "long-path"]) {
     const result = await invoke("subagent", { agent: "worker", task });
     const preview = definition
@@ -9508,7 +9622,10 @@ test("collapsed rendering bounds long lines, error messages, and tool paths", as
 
 test("collapsed single-task rendering does not scan or escape the full captured output", () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const output = "x".repeat(2 * 1024 * 1024);
   const result = {
     content: [],
@@ -9543,14 +9660,18 @@ test("collapsed single-task rendering does not scan or escape the full captured 
       ],
     },
   };
-  const splitLengths = [];
-  const escapedLengths = [];
+  const splitLengths: any = [];
+  const escapedLengths: any = [];
   const originalSplit = String.prototype.split;
   const originalReplace = String.prototype.replace;
   String.prototype.split = function (separator, limit) {
     if (separator === "\n" && limit === 4)
       splitLengths.push(String(this).length);
-    return originalSplit.call(this, separator, limit);
+    return (originalSplit as (...values: any[]) => any).call(
+      this,
+      separator,
+      limit,
+    );
   };
   String.prototype.replace = function (search, replacement) {
     if (
@@ -9559,7 +9680,11 @@ test("collapsed single-task rendering does not scan or escape the full captured 
     ) {
       escapedLengths.push(String(this).length);
     }
-    return originalReplace.call(this, search, replacement);
+    return (originalReplace as (...values: any[]) => any).call(
+      this,
+      search,
+      replacement,
+    );
   };
   try {
     definition.renderResult(result, { expanded: false }, theme, {});
@@ -9572,7 +9697,7 @@ test("collapsed single-task rendering does not scan or escape the full captured 
     "collapsed text still creates a line-bounded preview",
   );
   assert.ok(
-    splitLengths.every((length) => length <= 1024),
+    splitLengths.every((length: any) => length <= 1024),
     "line splitting is limited to the display prefix",
   );
   assert.ok(
@@ -9580,14 +9705,17 @@ test("collapsed single-task rendering does not scan or escape the full captured 
     "the bounded preview still escapes invisible characters",
   );
   assert.ok(
-    escapedLengths.every((length) => length <= 1024),
+    escapedLengths.every((length: any) => length <= 1024),
     "Unicode display escaping never scans the full capture",
   );
 });
 
 test("collapsed failure previews bound text before terminal escaping", () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const failure = "x".repeat(2 * 1024 * 1024);
   const result = {
     content: [],
@@ -9618,7 +9746,7 @@ test("collapsed failure previews bound text before terminal escaping", () => {
     },
   };
   const originalReplace = String.prototype.replace;
-  const escapedLengths = [];
+  const escapedLengths: any = [];
   String.prototype.replace = function (search, replacement) {
     if (
       search instanceof RegExp &&
@@ -9626,7 +9754,11 @@ test("collapsed failure previews bound text before terminal escaping", () => {
     ) {
       escapedLengths.push(String(this).length);
     }
-    return originalReplace.call(this, search, replacement);
+    return (originalReplace as (...values: any[]) => any).call(
+      this,
+      search,
+      replacement,
+    );
   };
   let preview;
   try {
@@ -9643,12 +9775,12 @@ test("collapsed failure previews bound text before terminal escaping", () => {
     "error previews still sanitize terminal-sensitive text",
   );
   assert.ok(
-    escapedLengths.every((length) => length <= 1024),
+    escapedLengths.every((length: any) => length <= 1024),
     "large error strings are bounded before display escaping",
   );
   assert.match(preview, /Preview truncated/);
   assert.equal(
-    result.details.results[0].errorMessage,
+    result.details.results[0]!.errorMessage,
     failure,
     "rendering must not modify captured error details",
   );
@@ -9656,7 +9788,10 @@ test("collapsed failure previews bound text before terminal escaping", () => {
 
 test("collapsed rendering retains only the displayed suffix of large message histories", () => {
   const definition = tools.get("subagent").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   const items = Array.from({ length: 1000 }, (_, index) => ({
     type: "text",
     text: `display-item-${index}`,
@@ -9667,7 +9802,7 @@ test("collapsed rendering retains only the displayed suffix of large message his
     ["single", 10],
     ["chain", 5],
     ["parallel", 5],
-  ]) {
+  ] as const) {
     const result = {
       content: [],
       details: {
@@ -9802,7 +9937,7 @@ test("finished registry accounting includes model metadata after its source mess
     const job = await status(id);
     return (
       job.latest?.details?.results.some(
-        (task) =>
+        (task: any) =>
           task.model?.length === modelBytes &&
           task.capture?.messagesDropped > 0 &&
           task.capture.retainedMessageBytes < 1024 * 1024,
@@ -9841,7 +9976,7 @@ test("parallel and chain histories share a bounded aggregate capture budget", as
     })),
   });
   const parallelBytes = parallel.details.results.reduce(
-    (sum, result) => sum + result.capture.retainedMessageBytes,
+    (sum: any, result: any) => sum + result.capture.retainedMessageBytes,
     0,
   );
   assert.ok(
@@ -9850,12 +9985,12 @@ test("parallel and chain histories share a bounded aggregate capture budget", as
   );
   assert.ok(
     parallel.details.results.every(
-      (result) => result.capture.retainedMessageBytes <= budget / 8,
+      (result: any) => result.capture.retainedMessageBytes <= budget / 8,
     ),
   );
   assert.ok(
     parallel.details.results.every(
-      (result) => result.capture.messagesDropped >= 2,
+      (result: any) => result.capture.messagesDropped >= 2,
     ),
   );
 
@@ -9868,7 +10003,7 @@ test("parallel and chain histories share a bounded aggregate capture budget", as
   });
   assert.equal(chain.details.results.length, 8);
   const chainBytes = chain.details.results.reduce(
-    (sum, result) => sum + result.capture.retainedMessageBytes,
+    (sum: any, result: any) => sum + result.capture.retainedMessageBytes,
     0,
   );
   assert.ok(chainBytes <= budget, `Chain history retained ${chainBytes} bytes`);
@@ -9896,7 +10031,7 @@ test("parallel and chain histories share a bounded aggregate capture budget", as
   );
   assert.ok(expanded.details.results.length < 32);
   const expandedBytes = expanded.details.results.reduce(
-    (sum, result) => sum + Buffer.byteLength(result.task),
+    (sum: any, result: any) => sum + Buffer.byteLength(result.task),
     0,
   );
   assert.ok(
@@ -9963,8 +10098,8 @@ test("single and chain responses cap text without truncating captured data or ch
 
 test("truncating oversized model text encodes only the bounded prefix", async () => {
   const originalFrom = Buffer.from;
-  const encodedLengths = [];
-  Buffer.from = (value, ...args) => {
+  const encodedLengths: any = [];
+  Buffer.from = (value: any, ...args: any[]) => {
     if (typeof value === "string") encodedLengths.push(value.length);
     return originalFrom(value, ...args);
   };
@@ -9982,7 +10117,7 @@ test("truncating oversized model text encodes only the bounded prefix", async ()
   assert.match(result.content[0].text, /Output truncated/);
   assert.ok(encodedLengths.length > 0);
   assert.ok(
-    encodedLengths.every((length) => length <= 50 * 1024),
+    encodedLengths.every((length: any) => length <= 50 * 1024),
     `Oversized output should not be fully encoded: ${Math.max(...encodedLengths)} UTF-16 code units`,
   );
 });
@@ -10000,7 +10135,7 @@ test("parallel responses share a total text budget and keep every captured resul
   assert.equal(result.details.results.length, 8);
   assert.ok(
     result.details.results.every(
-      (r) => r.messages.at(-1).content[0].text.length === 40000,
+      (r: any) => r.messages.at(-1).content[0].text.length === 40000,
     ),
   );
   assert.equal([...result.content[0].text.matchAll(/^### \[/gm)].length, 8);
@@ -10016,18 +10151,20 @@ test("parallel responses share a total text budget and keep every captured resul
 });
 
 test("streaming text uses the same budget as the completed result", async () => {
-  const updates = [];
+  const updates: any = [];
   const definition = tools.get("subagent").definition;
   await definition.execute(
     "bounded-stream",
     { agent: "worker", task: "large" },
     undefined,
-    (partial) => updates.push(partial),
+    (partial: any) => updates.push(partial),
     ctx(),
   );
   assert.ok(updates.length > 0);
   assert.ok(
-    updates.every((p) => Buffer.byteLength(p.content[0].text) <= 50 * 1024),
+    updates.every(
+      (p: any) => Buffer.byteLength(p.content[0].text) <= 50 * 1024,
+    ),
   );
   assert.match(updates.at(-1).content[0].text, /Output truncated/);
   assert.equal(
@@ -10041,7 +10178,7 @@ test("job output pages retrieve text beyond the truncated completion summary", a
   await finish(id);
   let offset = 0,
     output = "";
-  do {
+  for (;;) {
     const result = await invoke("subagent_jobs", {
       action: "output",
       jobId: id,
@@ -10054,7 +10191,7 @@ test("job output pages retrieve text beyond the truncated completion summary", a
     output += page.text;
     if (page.nextOffset === null) break;
     offset = page.nextOffset;
-  } while (true);
+  }
   assert.equal(output, "é".repeat(40000));
 });
 
@@ -10167,93 +10304,93 @@ test("background job response schema enforces runtime collection and page limits
   const invalid = [
     [
       "too many retained job records",
-      (candidate) => candidate.jobs.push(metadata),
+      (candidate: any) => candidate.jobs.push(metadata),
     ],
     [
       "overlong job label",
-      (candidate) => {
+      (candidate: any) => {
         candidate.job.label += "x";
       },
     ],
     [
       "overlong diagnostic",
-      (candidate) => {
+      (candidate: any) => {
         candidate.job.error += "x";
       },
     ],
     [
       "too many results",
-      (candidate) => {
+      (candidate: any) => {
         candidate.job.resultCount++;
       },
     ],
     [
       "oversized display name",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.name += "x";
       },
     ],
     [
       "oversized agent name",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.agent += "x";
       },
     ],
     [
       "out-of-range task index",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.taskIndex++;
       },
     ],
     [
       "overlong chain step ID",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.stepId += "x";
       },
     ],
     [
       "invalid chain step ID format",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.stepId = "step name";
       },
     ],
     [
       "oversized output page",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.text += "x";
       },
     ],
     [
       "unsafe byte offset",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.offset++;
       },
     ],
     [
       "unsafe total byte count",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.totalBytes++;
       },
     ],
     [
       "unsafe next offset",
-      (candidate) => {
+      (candidate: any) => {
         candidate.output.nextOffset++;
       },
     ],
     [
       "too many cleared records",
-      (candidate) => {
+      (candidate: any) => {
         candidate.cleared++;
       },
     ],
     [
       "oversized response error",
-      (candidate) => {
+      (candidate: any) => {
         candidate.error += "x";
       },
     ],
-  ];
+  ] as const;
   for (const [message, mutate] of invalid) {
     const candidate = structuredClone(response);
     mutate(candidate);
@@ -10325,7 +10462,7 @@ test("invalid UTF-8 child records fail safely and preserve later valid messages"
     lastStopReason: "stop",
   });
   assert.deepEqual(
-    task.messages.map((message) => message.role),
+    task.messages.map((message: any) => message.role),
     ["assistant", "assistant"],
   );
   assert.equal(
@@ -10380,7 +10517,7 @@ test("failed protocol jobs expose safe context and paginated unverified partial 
     lastStopReason: "stop",
   });
   assert.deepEqual(
-    task.messages.map((message) => message.role),
+    task.messages.map((message: any) => message.role),
     ["assistant", "toolResult", "assistant"],
   );
   assert.equal(
@@ -10460,7 +10597,7 @@ test("background output can page captured stderr without changing the default re
     controlPage,
     invisiblePage;
   const zeroWidthSpace = terminalDisplayUnicode.hidden[0];
-  do {
+  for (;;) {
     const page = await invoke("subagent_jobs", {
       action: "output",
       jobId: id,
@@ -10484,7 +10621,7 @@ test("background output can page captured stderr without changing the default re
     stderr += output.text;
     if (output.nextOffset === null) break;
     offset = output.nextOffset;
-  } while (true);
+  }
 
   const esc = String.fromCharCode(27),
     bell = String.fromCharCode(7),
@@ -10500,7 +10637,10 @@ test("background output can page captured stderr without changing the default re
     "The hostile stderr controls were present in a paginated response",
   );
   const definition = tools.get("subagent_jobs").definition;
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
   initTheme("dark", false);
   const rendered = definition
     .renderResult(controlPage, { expanded: true }, theme, { isError: false })

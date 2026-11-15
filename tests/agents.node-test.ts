@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { jiti } from "./pi-runtime.mjs";
+import { jiti } from "./pi-runtime.ts";
 
 const {
   discoverAgents,
@@ -30,18 +30,19 @@ const {
   MAX_MODEL_SELECTOR_BYTES,
   MAX_TIMEOUT_MS,
   MAX_WORKING_DIRECTORY_LENGTH,
-} = await jiti.import("../src/agents.ts");
+} = await jiti.import<typeof import("../src/agents.ts")>("../src/agents.ts");
 const sandbox = mkdtempSync(join(tmpdir(), "pi-agents-test-"));
 const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 process.env.PI_CODING_AGENT_DIR = join(sandbox, "user");
 const userDir = join(sandbox, "user/agents");
 const projectDir = join(sandbox, "project/.pi/agents");
 const cwd = join(sandbox, "project/nested");
-const agent = (dir, file, yaml) =>
+const agent = (dir: any, file: any, yaml: any) => {
   writeFileSync(
     join(dir, `${file}.md`),
     `---\n${yaml}\n---\nInstructions for ${file}.\n`,
   );
+};
 // Discovery children load the extension through jiti, which takes several seconds
 // on a busy machine. The limit only has to catch discovery that blocks.
 const DISCOVERY_CHILD_TIMEOUT_MS = 30_000;
@@ -144,7 +145,7 @@ test(
     execFileSync("mkfifo", [fifo]);
     symlinkSync(fifo, join(projectDir, "linked-pipe.md"));
     const script =
-      `import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};\n` +
+      `import { jiti } from ${JSON.stringify(new URL("./pi-runtime.ts", import.meta.url).href)};\n` +
       `const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../src/agents.ts", import.meta.url).href)});\n` +
       `process.stdout.write(JSON.stringify(discoverAgents(process.env.AGENT_TEST_CWD, 'project')));`;
     const child = spawnSync(
@@ -178,10 +179,10 @@ test("small agent files use size-proportional read buffers", () => {
   const contents =
     "---\nname: small\ndescription: Small definition\n---\nPrompt.\n";
   writeFileSync(join(userDir, "small.md"), contents);
-  const allocations = [];
+  const allocations: any = [];
   const originalAllocUnsafe = Buffer.allocUnsafe;
   Buffer.allocUnsafe = function (size, ...args) {
-    allocations.push(Number(size));
+    allocations.push(size);
     return originalAllocUnsafe.call(Buffer, size, ...args);
   };
   let result;
@@ -200,7 +201,7 @@ test("small agent files use size-proportional read buffers", () => {
     "allocate only the file size plus a growth-detection byte",
   );
   assert.equal(
-    allocations.some((size) => size >= 512 * 1024),
+    allocations.some((size: any) => size >= 512 * 1024),
     false,
     "small definitions must not allocate the 512 KiB per-file ceiling",
   );
@@ -216,7 +217,7 @@ test("oversized agent files are skipped without retaining or echoing prompt cont
   const result = discoverAgents(cwd, "project");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /512 KiB size limit/);
+  assert.match(result.diagnostics[0]!.message, /512 KiB size limit/);
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
@@ -231,7 +232,7 @@ test("agent directory scanning is bounded even with many unrelated entries", () 
   const result = discoverAgents(cwd, "user");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /4096-entry scan limit/);
+  assert.match(result.diagnostics[0]!.message, /4096-entry scan limit/);
 });
 
 test("agent file-count overflow fails closed before loading partial definitions", () => {
@@ -246,8 +247,8 @@ test("agent file-count overflow fails closed before loading partial definitions"
   const result = discoverAgents(cwd, "user");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /256-definition limit/);
-  assert.match(result.diagnostics[0].message, /no definitions .* loaded/);
+  assert.match(result.diagnostics[0]!.message, /256-definition limit/);
+  assert.match(result.diagnostics[0]!.message, /no definitions .* loaded/);
 });
 
 test("agent directory content is capped in filename order", () => {
@@ -268,7 +269,7 @@ test("agent directory content is capped in filename order", () => {
     Array.from({ length: 8 }, (_, i) => `worker-${i}`),
   );
   assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /4 MiB content limit/);
+  assert.match(result.diagnostics[0]!.message, /4 MiB content limit/);
   assert.ok(
     result.agents.every((a) => Buffer.byteLength(a.systemPrompt) < fileBytes),
   );
@@ -285,7 +286,7 @@ test("agent diagnostics are bounded with one omission notice", () => {
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 64);
   assert.equal(
-    result.diagnostics.at(-1).message,
+    result.diagnostics.at(-1)!.message,
     "Further agent diagnostics omitted.",
   );
 });
@@ -331,8 +332,8 @@ test("agent descriptions are bounded by UTF-8 bytes and oversized values are not
     result.agents.map((a) => a.name),
     ["a-unicode-limit", "valid"],
   );
-  assert.equal(result.agents[0].description, multibyteAtLimit);
-  assert.equal(result.agents[1].description, atLimit);
+  assert.equal(result.agents[0]!.description, multibyteAtLimit);
+  assert.equal(result.agents[1]!.description, atLimit);
   assert.equal(result.diagnostics.length, 2);
   assert.ok(
     result.diagnostics.every(
@@ -426,7 +427,7 @@ test("malformed YAML diagnostics never echo private frontmatter content", () => 
   const result = discoverAgents(cwd, "user");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].message, "Invalid YAML frontmatter.");
+  assert.equal(result.diagnostics[0]!.message, "Invalid YAML frontmatter.");
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
@@ -454,8 +455,8 @@ test("project agent discovery rejects excessive YAML aliases before approval", (
   const result = discoverAgents(cwd, "project");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].source, "project");
-  assert.equal(result.diagnostics[0].message, "Invalid YAML frontmatter.");
+  assert.equal(result.diagnostics[0]!.source, "project");
+  assert.equal(result.diagnostics[0]!.message, "Invalid YAML frontmatter.");
 });
 
 test("agent definitions with invalid UTF-8 are rejected without exposing prompt bytes", () => {
@@ -478,7 +479,7 @@ test("agent definitions with invalid UTF-8 are rejected without exposing prompt 
   );
   assert.equal(result.diagnostics.length, 1);
   assert.equal(
-    result.diagnostics[0].message,
+    result.diagnostics[0]!.message,
     "Agent definition is not valid UTF-8.",
   );
   assert.equal(JSON.stringify(result).includes(privatePrompt), false);
@@ -551,7 +552,7 @@ test("agent filename precedence and name ordering are locale-independent", () =>
     ["a", "aa", "worker", "z", "á"],
   );
   assert.equal(
-    result.agents.find((a) => a.name === "worker").description,
+    result.agents.find((a) => a.name === "worker")!.description,
     "Underscore filename",
   );
 });
@@ -573,13 +574,13 @@ test("agent tags are bounded portable slugs normalized for discovery", () => {
     "tags are lowercase and duplicates are removed in order",
   );
   assert.equal(
-    parseAgentTags(["x".repeat(MAX_AGENT_TAG_BYTES)])[0].length,
+    parseAgentTags(["x".repeat(MAX_AGENT_TAG_BYTES)])![0]!.length,
     MAX_AGENT_TAG_BYTES,
   );
   assert.equal(
     parseAgentTags(
       Array.from({ length: MAX_AGENT_TAG_COUNT }, (_, index) => `tag-${index}`),
-    ).length,
+    )!.length,
     MAX_AGENT_TAG_COUNT,
   );
 
@@ -629,7 +630,7 @@ test("agent tags are bounded portable slugs normalized for discovery", () => {
     [["tagged", ["security-audit", "docs_v2"]]],
   );
   assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /tags entries must be/);
+  assert.match(result.diagnostics[0]!.message, /tags entries must be/);
   assert.equal(
     JSON.stringify(result).includes("private/secret"),
     false,
@@ -650,7 +651,7 @@ test("agent unsetEnv configuration accepts bounded portable variable names and r
     "exact duplicate names are removed while order is preserved",
   );
   assert.equal(
-    parseAgentUnsetEnv(["x".repeat(MAX_AGENT_UNSET_ENV_BYTES)])[0].length,
+    parseAgentUnsetEnv(["x".repeat(MAX_AGENT_UNSET_ENV_BYTES)])![0]!.length,
     MAX_AGENT_UNSET_ENV_BYTES,
   );
   assert.equal(
@@ -659,7 +660,7 @@ test("agent unsetEnv configuration accepts bounded portable variable names and r
         { length: MAX_AGENT_UNSET_ENV_COUNT },
         (_, index) => `ENV_${index}`,
       ),
-    ).length,
+    )!.length,
     MAX_AGENT_UNSET_ENV_COUNT,
   );
   for (const value of [
@@ -712,7 +713,7 @@ test("model selectors are byte-bounded before becoming child arguments", () => {
     result.agents.map((a) => a.name),
     ["valid"],
   );
-  assert.equal(result.agents[0].model, atLimit);
+  assert.equal(result.agents[0]!.model, atLimit);
   assert.equal(result.diagnostics.length, 3);
   assert.ok(
     result.diagnostics.every(
@@ -800,10 +801,10 @@ test("agent tool allowlists reject ambiguous names and modifiers and are bounded
     result.agents.map((a) => a.name),
     ["valid-array-tools", "valid-tools"],
   );
-  assert.deepEqual(result.agents[0].tools, ["read", "bash"]);
-  assert.deepEqual(result.agents[1].tools, [atLimit]);
+  assert.deepEqual(result.agents[0]!.tools, ["read", "bash"]);
+  assert.deepEqual(result.agents[1]!.tools, [atLimit]);
   assert.equal(result.diagnostics.length, 10);
-  assert.ok(result.diagnostics.every((d) => /tools/.test(d.message)));
+  assert.ok(result.diagnostics.every((d) => d.message.includes("tools")));
   assert.equal(
     JSON.stringify(result).includes("x".repeat(MAX_AGENT_TOOL_LIST_BYTES + 1)),
     false,
@@ -900,11 +901,11 @@ test("agent working-directory defaults are non-empty, well-formed, and bounded",
     result.agents.map((entry) => entry.name),
     ["valid-cwd"],
   );
-  assert.equal(result.agents[0].cwd, atLimit);
+  assert.equal(result.agents[0]!.cwd, atLimit);
   assert.equal(result.diagnostics.length, invalid.length);
   assert.ok(
     result.diagnostics.every((diagnostic) =>
-      /cwd must be a non-empty path/.test(diagnostic.message),
+      diagnostic.message.includes("cwd must be a non-empty path"),
     ),
   );
   assert.equal(JSON.stringify(result).includes("Invalid cwd"), false);
@@ -927,14 +928,14 @@ test("normalizes config, preserves explicit empty tools, and supports thinking",
     agents.map((a) => a.name),
     ["a", "b", "z"],
   );
-  assert.deepEqual(agents[0].tools, ["read", "bash"]);
-  assert.equal(agents[0].model, "fake/model");
-  assert.equal(agents[0].thinking, "max");
-  assert.equal(agents[1].tools, undefined);
-  assert.deepEqual(agents[2].tools, []);
-  assert.equal(agents[2].thinking, "off");
-  assert.equal(agents[2].model, undefined);
-  assert.equal(agents[2].description, "Worker Z");
+  assert.deepEqual(agents[0]!.tools, ["read", "bash"]);
+  assert.equal(agents[0]!.model, "fake/model");
+  assert.equal(agents[0]!.thinking, "max");
+  assert.equal(agents[1]!.tools, undefined);
+  assert.deepEqual(agents[2]!.tools, []);
+  assert.equal(agents[2]!.thinking, "off");
+  assert.equal(agents[2]!.model, undefined);
+  assert.equal(agents[2]!.description, "Worker Z");
   assert.deepEqual(diagnostics, []);
 });
 
@@ -943,14 +944,14 @@ test("duplicate names within a directory report both paths without changing prec
   agent(userDir, "z-worker", 'name: " worker "\ndescription: Last');
   const result = discoverAgents(cwd, "user");
   assert.equal(result.agents.length, 1);
-  assert.equal(result.agents[0].description, "Last");
+  assert.equal(result.agents[0]!.description, "Last");
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].filePath, join(userDir, "z-worker.md"));
-  assert.match(result.diagnostics[0].message, /Duplicate/);
+  assert.equal(result.diagnostics[0]!.filePath, join(userDir, "z-worker.md"));
+  assert.match(result.diagnostics[0]!.message, /Duplicate/);
   assert.ok(
-    result.diagnostics[0].message.includes(join(userDir, "a-worker.md")),
+    result.diagnostics[0]!.message.includes(join(userDir, "a-worker.md")),
   );
-  assert.equal(result.diagnostics[0].message.includes("Instructions"), false);
+  assert.equal(result.diagnostics[0]!.message.includes("Instructions"), false);
 });
 
 test("malformed duplicates do not override valid definitions and cross-scope overrides are intentional", () => {
@@ -962,23 +963,23 @@ test("malformed duplicates do not override valid definitions and cross-scope ove
   );
   agent(projectDir, "worker", "name: worker\ndescription: Project");
   const result = discoverAgents(cwd, "both");
-  assert.equal(result.agents[0].description, "Project");
+  assert.equal(result.agents[0]!.description, "Project");
   assert.equal(result.diagnostics.length, 1);
-  assert.match(result.diagnostics[0].message, /tools/);
-  assert.equal(discoverAgents(cwd, "user").agents[0].description, "Personal");
+  assert.match(result.diagnostics[0]!.message, /tools/);
+  assert.equal(discoverAgents(cwd, "user").agents[0]!.description, "Personal");
 });
 
 test("scope and project precedence work from nested or relative directories", () => {
   agent(userDir, "worker", "name: worker\ndescription: Personal");
   agent(projectDir, "worker", "name: worker\ndescription: Project");
   agent(projectDir, "reviewer", "name: reviewer\ndescription: Review");
-  assert.equal(discoverAgents(cwd, "user").agents[0].source, "user");
+  assert.equal(discoverAgents(cwd, "user").agents[0]!.source, "user");
   const both = discoverAgents(relative(process.cwd(), cwd), "both");
   assert.deepEqual(
     both.agents.map((a) => a.name),
     ["reviewer", "worker"],
   );
-  assert.equal(both.agents[1].source, "project");
+  assert.equal(both.agents[1]!.source, "project");
   assert.equal(both.projectAgentsDir, projectDir);
   assert.ok(
     discoverAgents(cwd, "project").agents.every((a) => a.source === "project"),
@@ -999,7 +1000,7 @@ test("project agent file symlinks stay within the project trust boundary", (t) =
   try {
     symlinkSync(internal, join(projectDir, "linked-internal.md"));
     symlinkSync(external, join(projectDir, "linked-external.md"));
-  } catch (error) {
+  } catch (error: any) {
     // Creating file symlinks on Windows requires Developer Mode or the
     // SeCreateSymbolicLinkPrivilege right. Keep the rest of the suite usable
     // when neither is available, but do not hide unrelated setup failures.
@@ -1021,15 +1022,15 @@ test("project agent file symlinks stay within the project trust boundary", (t) =
     ["internal"],
   );
   assert.equal(
-    result.agents[0].filePath,
+    result.agents[0]!.filePath,
     join(projectDir, "linked-internal.md"),
   );
   assert.equal(result.diagnostics.length, 1);
   assert.equal(
-    result.diagnostics[0].filePath,
+    result.diagnostics[0]!.filePath,
     join(projectDir, "linked-external.md"),
   );
-  assert.match(result.diagnostics[0].message, /outside the project root/i);
+  assert.match(result.diagnostics[0]!.message, /outside the project root/i);
 });
 
 test("project agent hard links are rejected while personal hard links remain supported", () => {
@@ -1044,7 +1045,7 @@ test("project agent hard links are rejected while personal hard links remain sup
   assert.deepEqual(project.agents, []);
   assert.equal(project.diagnostics.length, 1);
   assert.match(
-    project.diagnostics[0].message,
+    project.diagnostics[0]!.message,
     /hard-linked project agent definitions are not supported/i,
   );
 
@@ -1053,7 +1054,7 @@ test("project agent hard links are rejected while personal hard links remain sup
     user.agents.map((entry) => entry.name),
     ["linked"],
   );
-  assert.equal(user.agents[0].systemPrompt, "Linked prompt.");
+  assert.equal(user.agents[0]!.systemPrompt, "Linked prompt.");
   assert.deepEqual(user.diagnostics, []);
 });
 
@@ -1073,7 +1074,7 @@ test("project agent link counts are rechecked after reading", () => {
   const script = `
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
-    import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};
+    import { jiti } from ${JSON.stringify(new URL("./pi-runtime.ts", import.meta.url).href)};
     const { discoverAgents } = await jiti.import(${JSON.stringify(new URL("../src/agents.ts", import.meta.url).href)});
     const originalReadSync = fs.readSync;
     let linkCreated = false;
@@ -1123,7 +1124,7 @@ test("project agent link counts are rechecked after reading", () => {
 
 test("project agent reads reject directory swaps during path revalidation and open", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-agent-race-"));
-  const makeCase = (name) => {
+  const makeCase = (name: any) => {
     const projectRoot = join(root, name);
     const projectDir = join(projectRoot, ".pi/agents");
     const cwd = join(projectRoot, "nested");
@@ -1151,7 +1152,7 @@ test("project agent reads reject directory swaps during path revalidation and op
   const script = `
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
-    import { jiti } from ${JSON.stringify(new URL("./pi-runtime.mjs", import.meta.url).href)};
+    import { jiti } from ${JSON.stringify(new URL("./pi-runtime.ts", import.meta.url).href)};
     const cases = ${JSON.stringify(cases)};
     let revalidationSwap = false;
     let openSwap = false;
@@ -1250,6 +1251,6 @@ test("project agents directories that resolve outside the project are ignored", 
   const result = discoverAgents(cwd, "project");
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 1);
-  assert.equal(result.diagnostics[0].filePath, projectDir);
-  assert.match(result.diagnostics[0].message, /outside the project root/i);
+  assert.equal(result.diagnostics[0]!.filePath, projectDir);
+  assert.match(result.diagnostics[0]!.message, /outside the project root/i);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { jiti } from "./pi-runtime.mjs";
+import { jiti } from "./pi-runtime.ts";
 const {
   BoundedByteStream,
   JsonLineCapture,
@@ -8,10 +8,10 @@ const {
   MessageCapture,
   MAX_CHILD_JSON_RECORDS,
   MAX_CHILD_STDOUT_BYTES,
-} = await jiti.import("../src/capture.ts");
+} = await jiti.import<typeof import("../src/capture.ts")>("../src/capture.ts");
 
 test("cumulative byte streams accept the exact limit, then notify once and drain without parsing", () => {
-  const chunks = [];
+  const chunks: any = [];
   let overflow = 0;
   const stream = new BoundedByteStream(
     5,
@@ -33,7 +33,7 @@ test("cumulative byte streams accept the exact limit, then notify once and drain
 });
 
 test("a chunk crossing the byte budget preserves exactly the remaining prefix", () => {
-  const chunks = [];
+  const chunks: any = [];
   let overflow = 0;
   const stream = new BoundedByteStream(
     5,
@@ -50,7 +50,7 @@ test("a chunk crossing the byte budget preserves exactly the remaining prefix", 
 });
 
 test("JSON capture handles chunk boundaries, CRLF, Unicode separators, and final records", () => {
-  const lines = [];
+  const lines: any = [];
   const reader = new JsonLineCapture(
     (line) => lines.push(line),
     () => assert.fail("overflow"),
@@ -65,7 +65,7 @@ test("JSON capture handles chunk boundaries, CRLF, Unicode separators, and final
 });
 
 test("JSON record-count limit stops parsing excess blank lines in the same chunk", () => {
-  const lines = [];
+  const lines: any = [];
   let exceeded = 0;
   const reader = new JsonLineCapture(
     (line) => lines.push(line),
@@ -83,7 +83,7 @@ test("JSON record-count limit stops parsing excess blank lines in the same chunk
 });
 
 test("JSON record-count limit includes final unterminated records", () => {
-  const lines = [];
+  const lines: any = [];
   let exceeded = 0;
   const reader = new JsonLineCapture(
     (line) => lines.push(line),
@@ -100,7 +100,7 @@ test("JSON record-count limit includes final unterminated records", () => {
 });
 
 test("byte JSON capture rejects malformed and truncated UTF-8 records, then recovers", () => {
-  const lines = [];
+  const lines: any = [];
   let invalid = 0;
   let overflow = 0;
   const reader = new JsonLineCapture(
@@ -125,7 +125,7 @@ test("byte JSON capture rejects malformed and truncated UTF-8 records, then reco
 test("byte JSON capture reuses its bounded tail buffer across small records", () => {
   const count = 1000;
   const chunk = Buffer.from('{"x":1}\n'.repeat(count));
-  const lines = [];
+  const lines: any = [];
   const originalAllocUnsafe = Buffer.allocUnsafe;
   let tailAllocations = 0;
   Buffer.allocUnsafe = (size) => {
@@ -154,7 +154,7 @@ test("byte JSON capture reuses its bounded tail buffer across small records", ()
 });
 
 test("oversized JSON records are discarded until LF without losing following records", () => {
-  const lines = [];
+  const lines: any = [];
   let overflow = 0;
   const reader = new JsonLineCapture(
     (line) => lines.push(line),
@@ -172,22 +172,23 @@ test("oversized JSON records are discarded until LF without losing following rec
 
 test("an oversized record is rejected before slicing its fragment and capture recovers at LF", () => {
   const text = "x".repeat(1024 * 1024) + "\nvalid\n";
-  const slicedLengths = [];
+  const slicedLengths: any = [];
   const chunk = new String(text);
   const originalSlice = chunk.slice;
   chunk.slice = function (start, end) {
-    slicedLengths.push(end === undefined ? this.length - start : end - start);
+    slicedLengths.push(end === undefined ? this.length - start! : end - start!);
     return originalSlice.call(this, start, end);
   };
 
-  const lines = [];
+  const lines: any = [];
   let overflow = 0;
   const reader = new JsonLineCapture(
     (line) => lines.push(line),
     () => overflow++,
     8,
   );
-  reader.append(chunk);
+  // A String object, so the test can observe slice calls.
+  reader.append(chunk as unknown as string);
   assert.equal(overflow, 1);
   assert.deepEqual(lines, ["valid"]);
   assert.deepEqual(
@@ -210,7 +211,7 @@ test("an oversized unterminated record is not parsed at end of stream", () => {
 });
 
 test("oversized JSON fragments skip needless UTF-8 scans but still count multibyte bytes exactly", () => {
-  const lines = [];
+  const lines: any = [];
   let overflow = 0;
   const reader = new JsonLineCapture(
     (line) => lines.push(line),
@@ -218,7 +219,7 @@ test("oversized JSON fragments skip needless UTF-8 scans but still count multiby
     8,
   );
   const originalByteLength = Buffer.byteLength;
-  const measuredLengths = [];
+  const measuredLengths: any = [];
   Buffer.byteLength = (value, ...args) => {
     if (typeof value === "string") measuredLengths.push(value.length);
     return originalByteLength(value, ...args);
@@ -236,7 +237,7 @@ test("oversized JSON fragments skip needless UTF-8 scans but still count multiby
   assert.equal(overflow, 2);
   assert.deepEqual(lines, ["valid"]);
   assert.ok(
-    measuredLengths.every((length) => length <= 8),
+    measuredLengths.every((length: any) => length <= 8),
     "guaranteed oversized fragments should not be byte-scanned",
   );
 });
@@ -258,9 +259,9 @@ test("stderr truncation scans and encodes only a bounded prefix of an oversized 
   const input = "x".repeat(8 * 1024 * 1024);
   const originalFrom = Buffer.from;
   const originalByteLength = Buffer.byteLength;
-  const encodedLengths = [];
-  const measuredLengths = [];
-  Buffer.from = (value, ...args) => {
+  const encodedLengths: any = [];
+  const measuredLengths: any = [];
+  Buffer.from = (value: any, ...args: any[]) => {
     if (typeof value === "string") encodedLengths.push(value.length);
     return originalFrom(value, ...args);
   };
@@ -272,11 +273,11 @@ test("stderr truncation scans and encodes only a bounded prefix of an oversized 
     capture.append(input);
     assert.equal(capture.truncated, true);
     assert.ok(
-      encodedLengths.every((length) => length <= 66),
+      encodedLengths.every((length: any) => length <= 66),
       "truncation should not encode the discarded tail",
     );
     assert.ok(
-      measuredLengths.every((length) => length <= 64),
+      measuredLengths.every((length: any) => length <= 64),
       "truncation should not scan the discarded tail",
     );
     assert.ok(Buffer.byteLength(capture.text) <= 64);
@@ -292,10 +293,10 @@ test("truncated stderr output is formatted once despite repeated reads", () => {
   capture.append("more output");
   const originalFrom = Buffer.from;
   let conversions = 0;
-  Buffer.from = (...args) => {
+  Buffer.from = ((...args: any[]) => {
     conversions++;
-    return originalFrom(...args);
-  };
+    return (originalFrom as (...values: any[]) => Buffer)(...args);
+  }) as typeof Buffer.from;
   try {
     const text = capture.text;
     const formattedConversions = conversions;

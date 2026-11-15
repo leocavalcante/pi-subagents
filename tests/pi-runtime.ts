@@ -6,7 +6,8 @@ import { createJiti } from "jiti";
 
 // Standalone Pi installations contain an executable, not the Node SDK.
 // Use the pinned development SDK when PI_PACKAGE_DIR points to one of those.
-const loaderPath = (root) => join(root, "dist/core/extensions/loader.js");
+const loaderPath = (root: string) =>
+  join(root, "dist/core/extensions/loader.js");
 let piRoot = process.env.PI_PACKAGE_DIR;
 if (!piRoot || !existsSync(loaderPath(piRoot))) {
   try {
@@ -25,6 +26,7 @@ if (!piRoot || !existsSync(loaderPath(piRoot))) {
 // Tests need no persistent transform cache, including Pi's own jiti loader.
 process.env.JITI_FS_CACHE = "false";
 export const jiti = createJiti(import.meta.url, { fsCache: false });
-export const { loadExtensions } = await import(
-  pathToFileURL(loaderPath(piRoot))
-);
+/** Pi's extension loader, from the SDK the tests run against. Untyped: it is not a public export. */
+export const { loadExtensions } = (await import(
+  pathToFileURL(loaderPath(piRoot)).href
+)) as { loadExtensions: (...args: any[]) => Promise<any> };

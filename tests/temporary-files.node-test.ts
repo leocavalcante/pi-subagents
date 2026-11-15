@@ -6,13 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { jiti } from "./pi-runtime.mjs";
+import { jiti } from "./pi-runtime.ts";
 
 const {
   cleanupTemporaryDirectories,
   removeTemporaryDirectory,
   trackTemporaryDirectory,
-} = await jiti.import("../src/temporary-files.ts");
+} = await jiti.import<typeof import("../src/temporary-files.ts")>(
+  "../src/temporary-files.ts",
+);
 
 test("temporary directories remain registered for process-exit cleanup after removal fails", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "pi-subagents-cleanup-test-"));
@@ -29,7 +31,7 @@ test("temporary directories remain registered for process-exit cleanup after rem
   try {
     await removeTemporaryDirectory(directory);
     assert.equal(removal.mock.callCount(), 1);
-    assert.deepEqual(removal.mock.calls[0].arguments[1], {
+    assert.deepEqual(removal.mock.calls[0]!.arguments[1], {
       recursive: true,
       force: true,
       maxRetries: 5,
