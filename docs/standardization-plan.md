@@ -12,13 +12,12 @@ pi-subagents goes last because it has the largest test migration. It runs real P
 - Step 2 merged as #403 after the trusted publisher moved to `cd.yaml`, and released **0.3.0** (#393). The README installs the unpinned package and tells users with pinned installs how to switch.
 - Steps 3–5 merged as #404 (Prettier), #405 (`.git-blame-ignore-revs`), and #406 (typescript-eslint).
 - Step 6 merged as #409 and released **0.3.1**.
-- Step 7 is half done: #408 moved the seven logic suites to TypeScript on Bun.
+- Step 7 is done: #408 moved the seven logic suites to TypeScript on Bun, and this change moves the process and file-system suites to TypeScript on Node.js.
 - Step 8 merged as #407 (`noUncheckedIndexedAccess`, exact runtime reads).
 - Step 9 merged as #410 and shipped in 0.3.2 with a root `index.ts` re-export, which #414 then removed.
 - npm: the trusted publisher is `cd.yaml` with environment `npm`, `0.0.0-stage` is deprecated, and publishing requires 2FA and disallows tokens.
 - Consistency pass across the four extensions: #412 shared the repository files, and #413 (0.3.2) linked the other extensions from the README, with the package metadata matching the GitHub topics.
 - **Remaining:**
-  - Convert the process and file-system suites to TypeScript `*.node-test.ts`, then drop the `.mjs` pattern.
   - Add `pi.image` and upload the social preview by hand.
 
 ## Target identity

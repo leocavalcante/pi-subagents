@@ -28,7 +28,7 @@ pi-subagents: delegate tasks to isolated Pi subagents: single, parallel, chained
 - `src/extension.ts` registers `subagent_agents`, `subagent_jobs`, and `subagent`; Pi loads it through `package.json` `pi.extensions`.
 - The other `src/` modules implement agent discovery and listing, job/process management, output capture and paging, JSON protocol validation, usage accounting, chain substitution, Unicode handling, progress throttling, abort handling, and temporary-file cleanup: `agents.ts`, `agent-listing.ts`, `jobs.ts`, `capture.ts`, `protocol.ts`, `paging.ts`, `usage.ts`, `chain.ts`, `unicode.ts`, `progress.ts`, `abort.ts`, `temporary-files.ts`, and `windows-supervisor-invocation.ts`.
 - `src/windows-supervisor.cs` contains Windows child-process supervision.
-- `tests/*.test.ts` is the Bun lane. `tests/*.node-test.{ts,mjs}` is the Node.js lane; subprocess and file-system behavior belongs there.
+- `tests/*.test.ts` is the Bun lane. `tests/*.node-test.ts` is the Node.js lane; subprocess and file-system behavior belongs there. `tests/fixtures/*.mjs` are standalone programs the suites spawn.
 - `.github/scripts/` contains CI and package-check scripts. `docs/` contains maintainer documentation and the extension standard.
 
 ### Boundaries to preserve

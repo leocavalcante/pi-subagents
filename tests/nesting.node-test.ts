@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadExtensions } from "./pi-runtime.mjs";
+import { loadExtensions } from "./pi-runtime.ts";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const sandbox = realpathSync(
@@ -47,14 +47,14 @@ const traces = () =>
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-const shutdown = async (extension) => {
+const shutdown = async (extension: any) => {
   for (const handler of extension.handlers.get("session_shutdown") ?? []) {
     await handler({ type: "session_shutdown", reason: "reload" }, ctx());
   }
 };
 
 after(() => {
-  process.argv[1] = oldArgv;
+  process.argv[1] = oldArgv!;
   if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
   if (oldTrace === undefined) delete process.env.SUBAGENT_TEST_TRACE;
@@ -72,7 +72,7 @@ test("nested delegation propagates depth and blocks process trees past the limit
   );
   assert.deepEqual(loaded.errors, []);
   const extension = loaded.extensions[0];
-  const invoke = (params) =>
+  const invoke = (params: any) =>
     extension.tools
       .get("subagent")
       .definition.execute("nesting-test", params, undefined, undefined, ctx());

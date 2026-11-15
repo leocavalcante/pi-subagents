@@ -44,7 +44,6 @@ test("reusable pager encodes once and serves late sequential pages without prefi
   const size = 8 * 1024 * 1024;
   const original = "x".repeat(size);
   // Keep the original function object so the test can restore it.
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- restored as-is in finally.
   const originalFrom = Buffer.from;
   const encoded: number[] = [];
   // Count encodings by wrapping Buffer.from; call the original exactly as before.

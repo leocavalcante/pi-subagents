@@ -148,7 +148,6 @@ test("malformed long JSON number candidates are scanned in linear work", () => {
     "1".repeat(digitCount) + "e+",
   ];
   // Keep the original method so the test can restore it.
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- restored as-is in finally.
   const originalCharCodeAt = String.prototype.charCodeAt;
 
   for (const input of inputs) {

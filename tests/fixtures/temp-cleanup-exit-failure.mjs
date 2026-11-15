@@ -3,7 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import fs, { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { jiti } from "../pi-runtime.mjs";
+import { jiti } from "../pi-runtime.ts";
 
 const { cleanupTemporaryDirectories, trackTemporaryDirectory } =
   await jiti.import("../src/temporary-files.ts");
