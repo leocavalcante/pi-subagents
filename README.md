@@ -6,6 +6,8 @@ Delegate tasks to isolated Pi subagents: single, parallel, chained, or in the ba
 
 Ask two agents to inspect authentication and tests in parallel; they return separate findings. A final chain step can compare both reports in another Pi process without filling your current conversation with their work.
 
+![pi-subagents preview: two parallel subagents report separate findings, then a chain step compares them](https://raw.githubusercontent.com/leocavalcante/pi-subagents/main/.github/media/preview.png)
+
 ## Contents
 
 - [Installation](#installation)
