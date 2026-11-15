@@ -84,6 +84,7 @@
   "pi": {
     "extensions": [
       "./src/extension.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/leocavalcante/pi-subagents/main/.github/media/preview.png"
   }
 }
