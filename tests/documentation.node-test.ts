@@ -295,7 +295,7 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
     "bun run check",
     "bun run test",
     "bun run check:package",
-    "bun audit --audit-level=high",
+    "bun audit --audit-level=high --ignore=GHSA-fc5q-39xc-vjpf",
   ]) {
     assert.ok(verify.includes(command), `verify must run ${command}`);
   }
@@ -304,7 +304,9 @@ test("CI covers the new Bun toolchain, Node.js lanes, Pi compatibility, and pack
   );
   assert.ok(
     ci.jobs.static.steps.some(
-      (step: any) => step.run === "bun audit --audit-level=high",
+      (step: any) =>
+        step.run ===
+        "bun audit --audit-level=high --ignore=GHSA-fc5q-39xc-vjpf",
     ),
   );
   assert.ok(

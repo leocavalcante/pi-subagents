@@ -8,7 +8,7 @@ Use [Bun](https://bun.sh/docs/installation) 1.4.4 for dependencies and scripts, 
 
 ```sh
 bun install --frozen-lockfile
-bun audit --audit-level=high
+bun audit --audit-level=high --ignore=GHSA-fc5q-39xc-vjpf
 bun run lint
 bun run check
 bun run test
@@ -17,6 +17,8 @@ bun run test
 `bun run lint` runs Prettier and ESLint (typescript-eslint `strictTypeChecked`), and `bun run format` applies their fixes. Disable a rule only on the line that needs it, with a reason. Tests may relax the empty-function, empty-block, constant-condition, and dynamic-delete rules, because test doubles and subprocess fixtures need no-op callbacks, cleanup catches, worker loops, and computed environment keys. `bun run verify` runs every gate CI runs, in order, and stops at the first failure.
 
 Logic tests that start no processes run on Bun: run one file with `bun test tests/paging.test.ts`. To run one Node.js test file, use Node directly, for example, `node --import jiti/register --test --test-concurrency=1 tests/extension.node-test.ts`. To select test names, add `--test-name-pattern='agentTags dispatch'` before the file path. Set `PI_PACKAGE_DIR` to an npm Pi package directory to test against another SDK version. Standalone binary directories fall back to the local development SDK. The tests use fake child processes and make no model calls. They cover agent discovery and configuration, dispatch, output limits, rendering, process budgets, deadlines, cancellation and shutdown, including POSIX descendants and SIGKILL escalation. Windows-only integration tests also verify Job Object containment on cancellation, deadlines, and normal leader exit, with descendants that do not inherit the output pipes, and that bare Pi executable names resolve through PATH instead of being shadowed by the task working directory; they are skipped on non-Windows hosts. Because containment depends on Win32 suspended-process creation and Job Objects, source compilation alone does not validate this behavior—rely on Windows CI. GitHub Actions runs both test lanes on Linux, macOS, and Windows with Node.js 24. A separate Ubuntu Node.js lane runs the Node.js tests on 22.19.0, 22, 24, and 26. The `pi-min` job reads the minimum from `engines.pi` (currently Pi 1.0.4), and another Ubuntu job tests Pi 1.1.0; both pair Pi 1.0.4 and 1.1.0 with Pi Codemode 1.1.0 because those Pi versions import an export removed in Codemode 1.2.0 ([upstream report](https://github.com/earendil-works/pi/issues/10865)). A weekly canary checks the latest Pi. This exercises POSIX process-group cleanup on both Linux and macOS; `/proc`-based descendant-reaping checks remain Linux-only. CI runs the high-severity Bun audit.
+
+The audit ignores [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf), a picomatch ReDoS with no patched release. Only development tooling, such as semantic-release and typescript-eslint, uses picomatch; the published package has no dependencies. Remove the ignore from `verify`, CI, the commands above, and `tests/documentation.node-test.ts` once a fixed version ships.
 
 ### GitHub Actions workflow changes
 
