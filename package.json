@@ -50,11 +50,11 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.6.0",
     "@eslint/js": "10.0.1",
     "@semantic-release/commit-analyzer": "13.0.1",
     "@semantic-release/exec": "7.1.0",
-    "@semantic-release/github": "12.0.10",
+    "@semantic-release/github": "12.0.11",
     "@semantic-release/npm": "13.2.0",
     "@types/bun": "1.4.4",
     "@types/node": "22.20.5",
